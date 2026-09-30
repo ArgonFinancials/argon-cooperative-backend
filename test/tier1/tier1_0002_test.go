@@ -1,0 +1,926 @@
+//go:build tier1
+
+// Package tier1 holds the acceptance tests for migration 0002. They are Tier 1
+// (ledger posting, signatory quorum) and were written BEFORE the migration, to
+// be reviewed by a human before any of it is implemented.
+//
+// Every test asserts a SPECIFIC refusal: SQLSTATE plus constraint (or column)
+// name. A refusal for any other reason is "WRONG REFUSAL", not a pass. A
+// failure while building a test's own fixtures is reported as "FIXTURE:" so
+// the mutation run can tell a broken test from a red one.
+//
+// Run through test/tier1/mutate.sh (or `make tier1`). See test/tier1/README.md.
+package tier1
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var db *pgxpool.Pool
+
+func TestMain(m *testing.M) { os.Exit(run(m)) }
+
+func run(m *testing.M) int {
+	ctx := context.Background()
+	admin, mig, schema := os.Getenv("ARGON_TEST_ADMIN_URL"), os.Getenv("ARGON_TEST_MIGRATOR_URL"), os.Getenv("ARGON_TEST_SCHEMA")
+	if admin == "" || mig == "" || schema == "" {
+		// Not t.Skip: a skipped Tier 1 suite reads as a green one.
+		fmt.Fprintln(os.Stderr, "tier1: set ARGON_TEST_ADMIN_URL, ARGON_TEST_MIGRATOR_URL, ARGON_TEST_SCHEMA (see test/tier1/README.md)")
+		return 2
+	}
+
+	name := fmt.Sprintf("argon_verify_t%d", time.Now().UnixNano())
+	ac, err := pgx.Connect(ctx, admin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tier1: admin connect:", err)
+		return 2
+	}
+	defer ac.Close(ctx)
+	for _, q := range []string{
+		`CREATE DATABASE ` + name + ` OWNER argon_owner`,
+		`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
+		`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
+	} {
+		if _, err := ac.Exec(ctx, q); err != nil {
+			fmt.Fprintln(os.Stderr, "tier1:", q, err)
+			return 2
+		}
+	}
+	defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
+
+	cfg, err := pgxpool.ParseConfig(mig)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tier1: migrator url:", err)
+		return 2
+	}
+	cfg.ConnConfig.Database = name
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	db, err = pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tier1: pool:", err)
+		return 2
+	}
+	defer db.Close()
+
+	// Schema: 0001, then the 0002 interface (or 0002 itself), then at most one
+	// mutant. Applied as argon_migrator, so objects are owned by argon_owner.
+	for _, f := range strings.Split(schema, ",") {
+		f = strings.TrimSpace(f)
+		sql, err := os.ReadFile(f)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tier1:", err)
+			return 2
+		}
+		c, err := db.Acquire(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tier1:", err)
+			return 2
+		}
+		_, err = c.Conn().PgConn().Exec(ctx, string(sql)).ReadAll()
+		c.Release()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tier1: applying %s: %v\n", f, err)
+			return 2
+		}
+	}
+	return m.Run()
+}
+
+// ---- harness ----------------------------------------------------------------
+
+func bg() context.Context { return context.Background() }
+
+// tx runs fn in one transaction and commits it. The first error — from a
+// statement, or from COMMIT, where deferred constraints fire — is returned.
+// Tests do not care WHEN a rule fires, only that it does.
+func tx(fn func(pgx.Tx) error) error {
+	x, err := db.Begin(bg())
+	if err != nil {
+		return err
+	}
+	defer x.Rollback(bg())
+	if err := fn(x); err != nil {
+		return err
+	}
+	return x.Commit(bg())
+}
+
+func one(sql string, args ...any) error {
+	return tx(func(x pgx.Tx) error { _, err := x.Exec(bg(), sql, args...); return err })
+}
+
+type want struct {
+	codes      []string // acceptable SQLSTATEs
+	constraint string   // required ConstraintName, if set
+	column     string   // required ColumnName, if set
+}
+
+func (w want) String() string {
+	return fmt.Sprintf("%v constraint=%q column=%q", w.codes, w.constraint, w.column)
+}
+
+func (w want) match(pe *pgconn.PgError) bool {
+	ok := false
+	for _, c := range w.codes {
+		ok = ok || pe.Code == c
+	}
+	return ok && (w.constraint == "" || pe.ConstraintName == w.constraint) &&
+		(w.column == "" || pe.ColumnName == w.column)
+}
+
+// refused passes only if err is a database error matching one of ws.
+func refused(t *testing.T, err error, what string, ws ...want) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("ACCEPTED — should have been refused: %s", what)
+	}
+	var pe *pgconn.PgError
+	if !errors.As(err, &pe) {
+		t.Fatalf("WRONG REFUSAL — %s: not a database error: %v", what, err)
+	}
+	for _, w := range ws {
+		if w.match(pe) {
+			return
+		}
+	}
+	t.Fatalf("WRONG REFUSAL — %s:\n  got  %s constraint=%q column=%q: %s\n  want one of %v",
+		what, pe.Code, pe.ConstraintName, pe.ColumnName, pe.Message, ws)
+}
+
+func accepted(t *testing.T, err error, what string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("REFUSED — should have committed: %s: %v", what, err)
+	}
+}
+
+// fixture marks setup the test depends on. Its failure means the TEST is
+// broken for this schema, not that the schema is.
+func fixture(t *testing.T, err error, what string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("FIXTURE: %s: %v", what, err)
+	}
+}
+
+func nz(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// ---- fixtures ---------------------------------------------------------------
+
+var seq atomic.Int64
+
+type soc struct {
+	t                            *testing.T
+	id, branch, bank, savings    string
+	actor                        string
+}
+
+// newSociety gives each test its own society, so tests share a database but
+// never each other's rows.
+func newSociety(t *testing.T) *soc {
+	t.Helper()
+	s := &soc{t: t}
+	code := fmt.Sprintf("T%d-%d", time.Now().UnixNano()%1e9, seq.Add(1))
+	fixture(t, tx(func(x pgx.Tx) error {
+		steps := []struct {
+			q    string
+			args []any
+			dst  *string
+		}{
+			{`INSERT INTO societies (code, registered_name, registration_number, state_directorate)
+			  VALUES ($1, 'Test Cooperative', 'T/1', 'Lagos') RETURNING id`, []any{code}, &s.id},
+			{`INSERT INTO branches (society_id, code, name) VALUES ($1, 'HQ', 'HQ') RETURNING id`, nil, &s.branch},
+			{`INSERT INTO accounts (society_id, code, name, kind) VALUES ($1, '1000', 'Bank', 'asset') RETURNING id`, nil, &s.bank},
+			{`INSERT INTO accounts (society_id, code, name, kind) VALUES ($1, '2000', 'Member savings', 'liability') RETURNING id`, nil, &s.savings},
+			{`INSERT INTO users (full_name) VALUES ('Treasurer (actor)') RETURNING id`, []any{}, &s.actor},
+		}
+		for _, st := range steps {
+			args := st.args
+			if args == nil {
+				args = []any{s.id}
+			}
+			if err := x.QueryRow(bg(), st.q, args...).Scan(st.dst); err != nil {
+				return fmt.Errorf("%s: %w", strings.Fields(st.q)[2], err)
+			}
+		}
+		return nil
+	}), "society")
+	return s
+}
+
+func (s *soc) user(name string) string {
+	var id string
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ($1) RETURNING id`, name).Scan(&id), "user")
+	return id
+}
+
+// member creates a member record, linked to a person (user) or not ("").
+func (s *soc) member(user string) string {
+	var id string
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
+		VALUES ($1, $2, $3, 'Member', '+234000', 'cash', '2020-01-01', $4) RETURNING id`,
+		s.id, s.branch, fmt.Sprintf("M-%d", seq.Add(1)), nz(user)).Scan(&id), "member")
+	return id
+}
+
+func (s *soc) appoint(member, post string, signatory bool, from, until string) error {
+	return one(`INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from, held_until)
+		VALUES ($1, $2, $3, $4, $5, $6)`, s.id, member, post, signatory, from, nz(until))
+}
+
+// signatory is a member record for user holding a CURRENT signing post. Every
+// signature that should be accepted comes from one: 0002 refuses a signer who
+// holds none (S1).
+func (s *soc) signatory(user, post string) string {
+	m := s.member(user)
+	fixture(s.t, s.appoint(m, post, true, "2020-01-01", ""), "current "+post+" signatory appointment")
+	return m
+}
+
+func (s *soc) request() string {
+	var id string
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, kind, amount_kobo, required, expires_at)
+		VALUES ($1, $2, 'withdrawal_out', 50000000, 2, now() + interval '1 day') RETURNING id`,
+		s.id, fmt.Sprintf("APR-%d", seq.Add(1))).Scan(&id), "approval request (2-of-3)")
+	return id
+}
+
+func (s *soc) sign(req, member, post string) error {
+	return one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($1, $2, $3)`, req, member, post)
+}
+
+type entry struct {
+	kind, valueDate, postedAt, reverses, adjusts, reason, society, actor, batch string
+	unknownDate                                                                bool
+}
+
+func (s *soc) insertEntry(x pgx.Tx, e entry) (string, error) {
+	kind, society, actor := e.kind, e.society, e.actor
+	if kind == "" {
+		kind = "contribution_in"
+	}
+	if society == "" {
+		society = s.id
+	}
+	if actor == "" {
+		actor = s.actor
+	}
+	var vd any = "2026-03-02"
+	if e.valueDate != "" {
+		vd = e.valueDate
+	}
+	if e.unknownDate {
+		vd = nil
+	}
+	var id string
+	err := x.QueryRow(bg(), `INSERT INTO ledger_entries
+		  (society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason)
+		VALUES ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9) RETURNING id`,
+		society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason)).Scan(&id)
+	return id, err
+}
+
+type line struct {
+	acct   string
+	kobo   int64
+	member string
+	role   string
+}
+
+func (s *soc) insertLines(x pgx.Tx, entryID string, ls ...line) error {
+	for _, l := range ls {
+		role := l.role
+		if role == "" {
+			role = "principal"
+		}
+		if _, err := x.Exec(bg(), `INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id)
+			VALUES ($1, $2, $3, $4, $5)`, entryID, l.acct, l.kobo, role, nz(l.member)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *soc) balanced() []line {
+	return []line{{acct: s.bank, kobo: 10000}, {acct: s.savings, kobo: -10000}}
+}
+
+// postEntry writes an entry and its lines in one transaction.
+func (s *soc) postEntry(e entry, ls ...line) (string, error) {
+	var id string
+	err := tx(func(x pgx.Tx) (err error) {
+		if id, err = s.insertEntry(x, e); err != nil {
+			return err
+		}
+		return s.insertLines(x, id, ls...)
+	})
+	return id, err
+}
+
+// posted is a committed, balanced entry the test builds on.
+func (s *soc) posted(e entry) string {
+	id, err := s.postEntry(e, s.balanced()...)
+	fixture(s.t, err, "posted entry")
+	return id
+}
+
+func (s *soc) period(from, to string) string {
+	var id string
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO accounting_periods (society_id, starts_on, ends_on) VALUES ($1, $2, $3) RETURNING id`,
+		s.id, from, to).Scan(&id), "period "+from)
+	return id
+}
+
+func (s *soc) close(period string) {
+	fixture(s.t, one(`UPDATE accounting_periods SET closed_at = now(), closed_by = $1 WHERE id = $2`, s.actor, period), "close period")
+}
+
+const noSuchRow = "00000000-0000-4000-8000-00000000dead"
+
+// =============================================================================
+// G1 — A POSTED ENTRY MUST NOT GROW (LEDGER_CONTRACT.md §2)
+//
+// The danger is that a BALANCED addition is invisible: the entry still sums to
+// zero and the existing balance trigger passes it. An unbalanced addition
+// proves nothing here — 0001 already refuses that.
+// =============================================================================
+
+var wEntryOpen = want{codes: []string{"23514"}, constraint: "ledger_lines_entry_open"}
+
+func TestG1_BalancedPairOnPostedEntryIsRefused(t *testing.T) {
+	s := newSociety(t)
+	e := s.posted(entry{})
+	err := tx(func(x pgx.Tx) error {
+		return s.insertLines(x, e,
+			line{acct: s.bank, kobo: 500, role: "argon_margin"},
+			line{acct: s.savings, kobo: -500, role: "argon_margin"})
+	})
+	refused(t, err, "a balanced +500/−500 pair added in a later transaction to an already-posted entry", wEntryOpen)
+}
+
+// posted_at is a fact about when the SERVER wrote the row. A caller has no
+// standing to assert it — accepting one lets the caller choose the immutability
+// window (an entry dated 2099 stays open until 2099). Refused outright, in
+// either direction.
+var wPostedAtIsNow = want{codes: []string{"23514"}, constraint: "ledger_entries_posted_at_is_now"}
+
+func TestG1_CallerCannotSupplyFuturePostedAt(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{postedAt: "2099-01-01T00:00:00Z"}, s.balanced()...)
+	refused(t, err, "an entry whose caller supplied posted_at = 2099", wPostedAtIsNow)
+}
+
+func TestG1_CallerCannotSupplyPastPostedAt(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{postedAt: "2020-01-01T00:00:00Z"}, s.balanced()...)
+	refused(t, err, "an entry whose caller supplied posted_at = 2020", wPostedAtIsNow)
+}
+
+// now() is the START of the current transaction. A transaction that began
+// BEFORE an entry was committed has an earlier now() than that entry's
+// posted_at — so "posted_at < now()" reads the entry as still open, and the
+// older transaction can append to it. Server-generated posted_at does not close
+// this; it is a race, not a forgery.
+func TestG1_OlderTransactionCannotAppendToNewerEntry(t *testing.T) {
+	s := newSociety(t)
+	old, err := db.Begin(bg())
+	fixture(t, err, "begin the older transaction")
+	defer old.Rollback(bg())
+	_, err = old.Exec(bg(), `SELECT now()`)
+	fixture(t, err, "older transaction running")
+	time.Sleep(20 * time.Millisecond)
+	e := s.posted(entry{}) // committed by another connection, after `old` began
+	err = s.insertLines(old, e, line{acct: s.bank, kobo: 500}, line{acct: s.savings, kobo: -500})
+	if err == nil {
+		err = old.Commit(bg())
+	}
+	refused(t, err, "a transaction that began before the entry was posted appends a balanced pair to it", wEntryOpen)
+}
+
+func TestG1_Control_BatchOfEntriesInOneTransaction(t *testing.T) {
+	s := newSociety(t)
+	err := tx(func(x pgx.Tx) error {
+		a, err := s.insertEntry(x, entry{})
+		if err != nil {
+			return err
+		}
+		b, err := s.insertEntry(x, entry{})
+		if err != nil {
+			return err
+		}
+		// Lines for the FIRST entry after the second exists: postAll writes a
+		// whole import in one transaction, in whatever order it builds it.
+		if err := s.insertLines(x, a, s.balanced()...); err != nil {
+			return err
+		}
+		return s.insertLines(x, b, s.balanced()...)
+	})
+	accepted(t, err, "two entries and their lines, interleaved, in one transaction (postAll)")
+}
+
+func TestG1_Control_EntryCreatedInsideSavepoint(t *testing.T) {
+	s := newSociety(t)
+	err := tx(func(x pgx.Tx) error {
+		if _, err := x.Exec(bg(), `SAVEPOINT sp`); err != nil {
+			return err
+		}
+		id, err := s.insertEntry(x, entry{})
+		if err != nil {
+			return err
+		}
+		if _, err := x.Exec(bg(), `RELEASE SAVEPOINT sp`); err != nil {
+			return err
+		}
+		return s.insertLines(x, id, s.balanced()...)
+	})
+	accepted(t, err, "entry created inside a savepoint, lines added after RELEASE, one transaction")
+}
+
+// =============================================================================
+// U — SIGNATURES ARE KEYED ON THE PERSON (PRD 8.4)
+//
+// The failure this exists for is an ACCIDENT, not fraud: the import creates a
+// duplicate member record for one person, and that person then satisfies a
+// 2-of-3 alone by signing once as each record.
+// =============================================================================
+
+var wOnePerUser = want{codes: []string{"23505"}, constraint: "signatory_approvals_one_per_user"}
+
+func TestU1_OnePersonTwoMemberRecordsCannotSignTwice(t *testing.T) {
+	s := newSociety(t)
+	person := s.user("Adaeze Okafor")
+	a := s.signatory(person, "treasurer") // the real record, holding the post
+	b := s.member(person)                 // the migration duplicate
+	req := s.request()
+	fixture(t, s.sign(req, a, "treasurer"), "first signature, as member record A")
+	refused(t, s.sign(req, b, "chairman"),
+		"the same person signing the same 2-of-3 request again, as their duplicate member record B", wOnePerUser)
+}
+
+func TestU1_Control_DifferentPeopleSignSameRequest(t *testing.T) {
+	s := newSociety(t)
+	a, b := s.signatory(s.user("Treasurer"), "treasurer"), s.signatory(s.user("Chairman"), "chairman")
+	req := s.request()
+	fixture(t, s.sign(req, a, "treasurer"), "first signature")
+	accepted(t, s.sign(req, b, "chairman"), "a second, different person signs the same request")
+}
+
+func TestU1_Control_SamePersonSignsDifferentRequests(t *testing.T) {
+	s := newSociety(t)
+	a := s.signatory(s.user("Treasurer"), "treasurer")
+	r1, r2 := s.request(), s.request()
+	fixture(t, s.sign(r1, a, "treasurer"), "signature on request 1")
+	accepted(t, s.sign(r2, a, "treasurer"), "the same person signs a different request")
+}
+
+func TestU2_SuppliedUserMustBeTheMembersUser(t *testing.T) {
+	s := newSociety(t)
+	p, q := s.user("P"), s.user("Q")
+	a := s.signatory(p, "treasurer")
+	req := s.request()
+	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, user_id) VALUES ($1, $2, 'treasurer', $3)`, req, a, q),
+		"a signature by P's member record recorded as user Q",
+		want{codes: []string{"23514"}, constraint: "signatory_user_is_member_user"})
+}
+
+func TestU2_Control_SuppliedMatchingUserIsAccepted(t *testing.T) {
+	s := newSociety(t)
+	p := s.user("P")
+	a := s.signatory(p, "treasurer")
+	req := s.request()
+	accepted(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, user_id) VALUES ($1, $2, 'treasurer', $3)`, req, a, p),
+		"a signature whose supplied user matches the member record's user")
+}
+
+func TestU3_MemberWithoutUserCannotSign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member("") // e.g. a cash member who has never logged in
+	fixture(t, s.appoint(a, "treasurer", true, "2020-01-01", ""), "treasurer appointment on the unlinked record")
+	req := s.request()
+	refused(t, s.sign(req, a, "treasurer"), "a signature by a member record linked to no person",
+		want{codes: []string{"23502"}, column: "user_id"},
+		want{codes: []string{"23514"}, constraint: "signatory_has_user"})
+}
+
+// §4: who signed is frozen at signing. Relinking a member record afterwards
+// must not re-attribute the signature. (Refusing the relink also satisfies
+// this; the assertion is on the signature either way.)
+func TestU4_SignatureUserIsFrozenAtSigning(t *testing.T) {
+	s := newSociety(t)
+	p, q := s.user("P"), s.user("Q")
+	a := s.signatory(p, "treasurer")
+	req := s.request()
+	fixture(t, s.sign(req, a, "treasurer"), "signature by P")
+	if err := one(`UPDATE members SET user_id = $1 WHERE id = $2`, q, a); err != nil {
+		t.Logf("relink refused (%v)", err)
+	}
+	var got *string
+	fixture(t, db.QueryRow(bg(), `SELECT user_id::text FROM signatory_approvals WHERE request_id = $1 AND member_id = $2`, req, a).Scan(&got), "read signature")
+	if got == nil || *got != p {
+		g := "NULL"
+		if got != nil {
+			g = *got
+		}
+		t.Fatalf("ACCEPTED — the signature now reads as user %s; it was signed by %s. Attribution must be frozen at signing (§4)", g, p)
+	}
+}
+
+func TestU5_EntryActorMustBeAUser(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{actor: noSuchRow}, s.balanced()...)
+	refused(t, err, "an entry whose actor_user_id is no user",
+		want{codes: []string{"23503"}, constraint: "ledger_entries_actor_user_id_fkey"})
+}
+
+// =============================================================================
+// G3 + G4 — THE INTERNAL AUDITOR IS READ-ONLY, BY EVERY ROUTE
+//
+// 0001's CHECK stops one route (an auditor appointment marked signatory). G3:
+// the auditor signs anyway. G4: the auditor also holds a signing post. Both
+// must hold for the PERSON, not just the member record.
+// =============================================================================
+
+var wNotAuditor = want{codes: []string{"23514"}, constraint: "signatory_not_auditor"}
+var wAuditorNoPost = want{codes: []string{"23514", "23P01"}, constraint: "auditor_holds_no_signing_post"}
+
+func TestG3_AuditorCannotSignUnderAuditorLabel(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Auditor"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment")
+	refused(t, s.sign(s.request(), a, "internal_auditor"), "the current internal auditor signs as internal_auditor", wNotAuditor)
+}
+
+func TestG3_AuditorCannotSignUnderAnotherLabel(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Auditor"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment")
+	refused(t, s.sign(s.request(), a, "treasurer"), "the current internal auditor signs, labelled as treasurer", wNotAuditor)
+}
+
+func TestG3_AuditorCannotSignThroughSecondMemberRecord(t *testing.T) {
+	s := newSociety(t)
+	person := s.user("Auditor")
+	a, b := s.member(person), s.member(person)
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment on record A")
+	refused(t, s.sign(s.request(), b, "treasurer"), "the current internal auditor signs through their other member record B", wNotAuditor)
+}
+
+func TestG3_Control_FormerAuditorMaySign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Former auditor"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", "2020-12-31"), "auditor appointment that ended in 2020")
+	fixture(t, s.appoint(a, "treasurer", true, "2021-01-01", ""), "treasurer from 2021")
+	accepted(t, s.sign(s.request(), a, "treasurer"), "someone whose auditor term ended years ago signs")
+}
+
+func TestG4_AuditorThenSignatorySameMember(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("P"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment")
+	refused(t, s.appoint(a, "treasurer", true, "2020-06-01", ""), "the current auditor is also appointed signatory treasurer", wAuditorNoPost)
+}
+
+func TestG4_SignatoryThenAuditorSameMember(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("P"))
+	fixture(t, s.appoint(a, "treasurer", true, "2020-01-01", ""), "treasurer appointment")
+	refused(t, s.appoint(a, "internal_auditor", false, "2020-06-01", ""), "the current signatory treasurer is also appointed auditor", wAuditorNoPost)
+}
+
+func TestG4_AuditorAndSignatoryAcrossTwoMemberRecords(t *testing.T) {
+	s := newSociety(t)
+	person := s.user("P")
+	a, b := s.member(person), s.member(person)
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment on record A")
+	refused(t, s.appoint(b, "treasurer", true, "2020-06-01", ""), "the same person is signatory treasurer through member record B", wAuditorNoPost)
+}
+
+func TestG4_ExtendingAuditorTermIntoSignatoryTerm(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("P"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", "2020-12-31"), "auditor term, 2020")
+	fixture(t, s.appoint(a, "treasurer", true, "2021-01-01", ""), "treasurer term from 2021")
+	refused(t, one(`UPDATE appointments SET held_until = NULL WHERE member_id = $1 AND post = 'internal_auditor'`, a),
+		"re-opening the ended auditor term so it overlaps the treasurer term", wAuditorNoPost)
+}
+
+// Two member records of different people; one holds a signing post, the other
+// is auditor. Relinking the auditor's record to the signatory's user makes one
+// PERSON both — without touching an appointment.
+func TestG4_RelinkingRecordCannotMakeAuditorASignatory(t *testing.T) {
+	s := newSociety(t)
+	p := s.user("P")
+	s.signatory(p, "treasurer")
+	b := s.member(s.user("Q"))
+	fixture(t, s.appoint(b, "internal_auditor", false, "2020-01-01", ""), "auditor appointment on Q's record")
+	refused(t, one(`UPDATE members SET user_id = $1 WHERE id = $2`, p, b),
+		"relinking the auditor's member record to the person who is signatory treasurer", wAuditorNoPost)
+}
+
+func TestG4_Control_ConsecutiveTerms(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("P"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", "2020-12-31"), "auditor term, 2020")
+	accepted(t, s.appoint(a, "treasurer", true, "2021-01-01", ""), "treasurer term starting after the auditor term ended")
+}
+
+func TestG4_Control_AuditorMayHoldNonSigningPost(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("P"))
+	fixture(t, s.appoint(a, "internal_auditor", false, "2020-01-01", ""), "auditor appointment")
+	accepted(t, s.appoint(a, "secretary", false, "2020-06-01", ""), "the auditor also holds a NON-signing post")
+}
+
+// =============================================================================
+// S — ONLY A CURRENT SIGNATORY SIGNS (PRD 8.4), POINT IN TIME
+//
+// Without this, blocking the auditor (G3) is the ONLY thing between any user
+// and a 3-of-4. "Current" is judged at the moment the server records the
+// signature, and that moment is not the caller's to state.
+// =============================================================================
+
+var wHoldsSigningPost = want{codes: []string{"23514"}, constraint: "signatory_holds_signing_post"}
+var wSignedAtIsNow = want{codes: []string{"23514"}, constraint: "signatory_approvals_signed_at_is_now"}
+
+func TestS1_UserWithNoAppointmentCannotSign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Ordinary member"))
+	refused(t, s.sign(s.request(), a, "treasurer"), "a signature from a person holding no appointment at all", wHoldsSigningPost)
+}
+
+func TestS1_NonSigningPostCannotSign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Secretary"))
+	fixture(t, s.appoint(a, "secretary", false, "2020-01-01", ""), "non-signing secretary appointment")
+	refused(t, s.sign(s.request(), a, "secretary"), "a signature from a person whose only post is non-signing", wHoldsSigningPost)
+}
+
+func TestS2_EndedAppointmentCannotSign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Former treasurer"))
+	fixture(t, s.appoint(a, "treasurer", true, "2020-01-01", "2020-12-31"), "treasurer term that ended in 2020")
+	refused(t, s.sign(s.request(), a, "treasurer"), "a signature from a treasurer whose term ended before signing", wHoldsSigningPost)
+}
+
+func TestS2_NotYetStartedAppointmentCannotSign(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Incoming treasurer"))
+	fixture(t, s.appoint(a, "treasurer", true, "2099-01-01", ""), "treasurer term starting in 2099")
+	refused(t, s.sign(s.request(), a, "treasurer"), "a signature from a treasurer whose term has not begun", wHoldsSigningPost)
+}
+
+func TestS3_CallerCannotSupplySignedAt(t *testing.T) {
+	s := newSociety(t)
+	a := s.signatory(s.user("Treasurer"), "treasurer")
+	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, signed_at) VALUES ($1, $2, 'treasurer', '2026-01-15')`, s.request(), a),
+		"a current signatory's signature with a caller-supplied signed_at", wSignedAtIsNow)
+}
+
+// The attack the rule above exists for: an ex-treasurer back-dates the
+// signature into their old term.
+func TestS3_EndedSignatoryCannotBackdateIntoTheirTerm(t *testing.T) {
+	s := newSociety(t)
+	a := s.member(s.user("Former treasurer"))
+	fixture(t, s.appoint(a, "treasurer", true, "2020-01-01", "2020-12-31"), "treasurer term that ended in 2020")
+	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, signed_at) VALUES ($1, $2, 'treasurer', '2020-06-01')`, s.request(), a),
+		"an ex-treasurer's signature back-dated to June 2020, inside their old term", wSignedAtIsNow, wHoldsSigningPost)
+}
+
+func TestS_Control_CurrentSignatorySigns(t *testing.T) {
+	s := newSociety(t)
+	a := s.signatory(s.user("Treasurer"), "treasurer")
+	accepted(t, s.sign(s.request(), a, "treasurer"), "the current treasurer signs")
+}
+
+// =============================================================================
+// V — AN UNKNOWN AS-AT DATE IS NULL, NEVER TODAY (§7b)
+//
+// value_date is the ONLY record of the as-at date. ledger_batches.as_of was a
+// second record of the same fact and is dropped (V4), not constrained to agree.
+// =============================================================================
+
+func (s *soc) openingBatch() string {
+	var id string
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo)
+		VALUES ($1, $2, $3, 1, 10000) RETURNING id`, s.id, fmt.Sprintf("sha256:%d", seq.Add(1)), s.actor).Scan(&id), "opening-balance batch")
+	return id
+}
+
+func TestV4_BatchesCarryNoAsOfColumn(t *testing.T) {
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'ledger_batches' AND column_name = 'as_of'`).Scan(&n), "information_schema")
+	if n != 0 {
+		t.Fatalf("ACCEPTED — ledger_batches.as_of still exists: a second record of the as-at date that value_date already holds")
+	}
+}
+
+func TestV1_OpeningBalanceWithUnknownAsOfCommits(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{kind: "opening_balance", batch: s.openingBatch(), unknownDate: true}, s.balanced()...)
+	accepted(t, err, "an opening balance whose society records carry no as-at date (value_date NULL)")
+}
+
+func TestV2_UnknownValueDateStaysNull(t *testing.T) {
+	s := newSociety(t)
+	id, err := s.postEntry(entry{kind: "opening_balance", batch: s.openingBatch(), unknownDate: true}, s.balanced()...)
+	accepted(t, err, "opening balance with unknown as-at date")
+	var vd *string
+	fixture(t, db.QueryRow(bg(), `SELECT value_date::text FROM ledger_entries WHERE id = $1`, id).Scan(&vd), "read value_date")
+	if vd != nil {
+		t.Fatalf("ACCEPTED — value_date became %s. An unknown as-at date was replaced with an invented one (§7b)", *vd)
+	}
+}
+
+func TestV3_OnlyOpeningBalanceMayHaveUnknownDate(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{kind: "contribution_in", unknownDate: true}, s.balanced()...)
+	refused(t, err, "a contribution with no value_date",
+		want{codes: []string{"23514"}, constraint: "value_date_known_unless_opening_balance"},
+		want{codes: []string{"23502"}, column: "value_date"})
+}
+
+func TestV_Control_OpeningBalanceWithKnownAsOf(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{kind: "opening_balance", batch: s.openingBatch(), valueDate: "2019-12-31"}, s.balanced()...)
+	accepted(t, err, "an opening balance with a known as-at date")
+}
+
+// =============================================================================
+// M — A MEMBER'S BALANCE IS A FACT ABOUT LINES
+// =============================================================================
+
+func TestM1_EntriesCarryNoMemberColumn(t *testing.T) {
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'ledger_entries' AND column_name = 'member_id'`).Scan(&n), "information_schema")
+	if n != 0 {
+		t.Fatalf("ACCEPTED — ledger_entries.member_id still exists: a second record of which member a line belongs to")
+	}
+}
+
+func TestM2_MemberToMemberTransferInOneEntry(t *testing.T) {
+	s := newSociety(t)
+	x, y := s.member(""), s.member("")
+	_, err := s.postEntry(entry{kind: "transfer_out"},
+		line{acct: s.savings, kobo: 5000, member: x},
+		line{acct: s.savings, kobo: -5000, member: y})
+	accepted(t, err, "one entry moving ₦50 from member X's savings to member Y's")
+	for m, wantSum := range map[string]int64{x: 5000, y: -5000} {
+		var got int64
+		fixture(t, db.QueryRow(bg(), `SELECT coalesce(sum(amount_kobo), 0) FROM ledger_lines WHERE member_id = $1`, m).Scan(&got), "member sum")
+		if got != wantSum {
+			t.Fatalf("member statement for %s sums to %d kobo, want %d", m, got, wantSum)
+		}
+	}
+}
+
+func TestM3_LineMemberMustExist(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{}, line{acct: s.bank, kobo: 10000}, line{acct: s.savings, kobo: -10000, member: noSuchRow})
+	refused(t, err, "a savings line posted to a member that does not exist",
+		want{codes: []string{"23503"}, constraint: "ledger_lines_member_id_fkey"})
+}
+
+func TestM4_LineMemberMustBelongToEntrysSociety(t *testing.T) {
+	s, other := newSociety(t), newSociety(t)
+	stranger := other.member("")
+	_, err := s.postEntry(entry{}, line{acct: s.bank, kobo: 10000}, line{acct: s.savings, kobo: -10000, member: stranger})
+	refused(t, err, "a line in society A's entry posted to a member of society B",
+		want{codes: []string{"23514"}, constraint: "ledger_line_member_in_society"})
+}
+
+func TestM_Control_LinesWithoutMember(t *testing.T) {
+	s := newSociety(t)
+	x := s.member("")
+	_, err := s.postEntry(entry{}, line{acct: s.bank, kobo: 10000}, line{acct: s.savings, kobo: -10000, member: x})
+	accepted(t, err, "a contribution: the bank line belongs to no member, the savings line to member X")
+}
+
+// =============================================================================
+// P — A CLOSED PERIOD IS READ-ONLY (§5)
+// =============================================================================
+
+var wPeriodClosed = want{codes: []string{"23514"}, constraint: "entry_not_in_closed_period"}
+var wCloseFinal = want{codes: []string{"23514"}, constraint: "period_close_is_final"}
+
+func TestP1_PostingIntoClosedPeriodIsRefused(t *testing.T) {
+	s := newSociety(t)
+	jan := s.period("2026-01-01", "2026-01-31")
+	s.posted(entry{valueDate: "2026-01-10"})
+	s.close(jan)
+	// Posted today, dated inside January: the date that matters is value_date.
+	_, err := s.postEntry(entry{valueDate: "2026-01-20"}, s.balanced()...)
+	refused(t, err, "an entry dated 20 January after January was closed", wPeriodClosed)
+}
+
+func TestP2_Control_PostingIntoOpenPeriod(t *testing.T) {
+	s := newSociety(t)
+	s.close(s.period("2026-01-01", "2026-01-31"))
+	s.period("2026-02-01", "2026-02-28")
+	_, err := s.postEntry(entry{valueDate: "2026-02-10"}, s.balanced()...)
+	accepted(t, err, "an entry dated in open February while January is closed")
+}
+
+func TestP3_ClosedPeriodCannotBeReopened(t *testing.T) {
+	s := newSociety(t)
+	jan := s.period("2026-01-01", "2026-01-31")
+	s.close(jan)
+	refused(t, one(`UPDATE accounting_periods SET closed_at = NULL WHERE id = $1`, jan),
+		"re-opening a closed period (reopen, post, re-close would make close decorative)", wCloseFinal)
+}
+
+func TestP3_ClosedPeriodBoundariesCannotMove(t *testing.T) {
+	s := newSociety(t)
+	jan := s.period("2026-01-01", "2026-01-31")
+	s.close(jan)
+	refused(t, one(`UPDATE accounting_periods SET ends_on = '2026-01-15' WHERE id = $1`, jan),
+		"shrinking a closed period so 16–31 January fall outside it", wCloseFinal)
+}
+
+// DELIBERATELY NOT TESTED: "a close is refused if its trial balance does not
+// sum to zero" (§5). Every entry is already forced to balance at commit (0001,
+// ledger_entry_balances), so an unbalanced trial balance cannot be constructed
+// to test against. Such a test could never fail, and a permanently green test
+// reads as evidence that it proves something. Do not add one. If the balance
+// trigger is ever weakened, test THAT — see deploy/70-verify-tier1.sh, C3.
+
+func TestP4_PeriodsInOneSocietyCannotOverlap(t *testing.T) {
+	s := newSociety(t)
+	s.period("2026-01-01", "2026-01-31")
+	refused(t, one(`INSERT INTO accounting_periods (society_id, starts_on, ends_on) VALUES ($1, '2026-01-15', '2026-02-15')`, s.id),
+		"a period overlapping another in the same society (a date both open and closed)",
+		want{codes: []string{"23P01", "23514"}, constraint: "accounting_periods_no_overlap"})
+}
+
+func TestP4_Control_SameDatesInAnotherSociety(t *testing.T) {
+	s, other := newSociety(t), newSociety(t)
+	// Dates no other test uses: tests share a database, and an over-strict
+	// (cross-society) rule must be caught on the statement below, not tripped
+	// by another test's periods while building this fixture.
+	s.period("2031-05-01", "2031-05-31")
+	accepted(t, one(`INSERT INTO accounting_periods (society_id, starts_on, ends_on) VALUES ($1, '2031-05-01', '2031-05-31')`, other.id),
+		"the same dates as a period in a different society")
+}
+
+// =============================================================================
+// A — AN ADJUSTMENT REFERENCES WHAT IT CORRECTS (§2, §5)
+// =============================================================================
+
+const aReason = "Correction to a January contribution found after close"
+
+func TestA1_AdjustmentOfClosedPeriodEntryPostsInOpenPeriod(t *testing.T) {
+	s := newSociety(t)
+	jan := s.period("2026-01-01", "2026-01-31")
+	orig := s.posted(entry{valueDate: "2026-01-10"})
+	s.close(jan)
+	s.period("2026-02-01", "2026-02-28")
+	_, err := s.postEntry(entry{valueDate: "2026-02-05", adjusts: orig, reason: aReason}, s.balanced()...)
+	accepted(t, err, "an adjusting entry in open February referencing an entry in closed January (the §5 case)")
+}
+
+func TestA2_AdjustmentMustStateReason(t *testing.T) {
+	s := newSociety(t)
+	orig := s.posted(entry{})
+	_, err := s.postEntry(entry{adjusts: orig}, s.balanced()...)
+	refused(t, err, "an adjustment with no reason", want{codes: []string{"23514"}, constraint: "adjustment_states_reason"})
+}
+
+func TestA3_AdjustmentMustReferenceARealEntry(t *testing.T) {
+	s := newSociety(t)
+	_, err := s.postEntry(entry{adjusts: noSuchRow, reason: aReason}, s.balanced()...)
+	refused(t, err, "an adjustment of an entry that does not exist",
+		want{codes: []string{"23503"}, constraint: "ledger_entries_adjusts_id_fkey"})
+}
+
+func TestA4_CorrectionIsReversalOrAdjustmentNotBoth(t *testing.T) {
+	s := newSociety(t)
+	orig := s.posted(entry{})
+	_, err := s.postEntry(entry{reverses: orig, adjusts: orig, reason: aReason}, s.balanced()...)
+	refused(t, err, "an entry that is both a reversal and an adjustment",
+		want{codes: []string{"23514"}, constraint: "correction_is_reversal_or_adjustment"})
+}
+
+func TestA5_AdjustmentMustBeInSameSociety(t *testing.T) {
+	s, other := newSociety(t), newSociety(t)
+	theirs := other.posted(entry{})
+	_, err := s.postEntry(entry{adjusts: theirs, reason: aReason}, s.balanced()...)
+	refused(t, err, "society A adjusting society B's entry",
+		want{codes: []string{"23514"}, constraint: "correction_same_society"})
+}

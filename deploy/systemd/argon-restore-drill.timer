@@ -1,0 +1,9 @@
+[Unit]
+Description=Argon weekly restore drill (Sunday 03:00 WAT)
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

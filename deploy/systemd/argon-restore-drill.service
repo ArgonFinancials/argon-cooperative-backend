@@ -1,0 +1,13 @@
+[Unit]
+Description=Argon restore drill: restore the latest backup into a scratch DB, verify, probe Tier 1, drop
+After=postgresql@16-main.service
+Requires=postgresql@16-main.service
+
+[Service]
+Type=oneshot
+Environment=ARGON_ENV=/etc/argon/deploy.env
+ExecStart=/usr/bin/bash /opt/argon/deploy/60-restore.sh --drill
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=768M
+PrivateTmp=yes

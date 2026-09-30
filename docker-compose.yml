@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # Superuser only. The app connects as argon_app — see deploy/20-roles.sh.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/env/local.env}
+      POSTGRES_DB: postgres
+    # Loopback only. A bare "5432:5432" publishes on every interface, and
+    # Docker's iptables rules bypass ufw. The host port comes from PGPORT in
+    # deploy/env/local.env (5433 by default) so it never collides with a native
+    # Postgres already on 5432.
+    ports: ["127.0.0.1:${PGPORT:?set PGPORT in deploy/env/local.env}:5432"]
+    volumes: ["argon-pg16:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  argon-pg16:

@@ -1,0 +1,9 @@
+# Scripts, SQL and units run on Linux. A CRLF checkout on Windows, copied to
+# the host, fails with `$'\r': command not found` — pin them to LF everywhere.
+*        text=auto
+*.sh     text eol=lf
+*.sql    text eol=lf
+*.service text eol=lf
+*.timer  text eol=lf
+*.env.example text eol=lf
+Makefile text eol=lf

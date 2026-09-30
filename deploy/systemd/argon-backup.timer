@@ -1,0 +1,10 @@
+[Unit]
+Description=Argon nightly backup (01:30 WAT)
+
+[Timer]
+OnCalendar=*-*-* 00:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

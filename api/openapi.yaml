@@ -1,0 +1,155 @@
+openapi: 3.1.0
+info:
+  title: Argon Cooperative Platform API
+  version: 0.1.0
+  description: |
+    Authored here; vendored by the frontend repository as a pinned, committed
+    copy. The frontend generates its TypeScript client from that copy and CI
+    fails on any diff, so it cannot go stale.
+
+    MONEY IS A STRING ON THE WIRE, never a JSON number. A JSON number is an
+    IEEE-754 double, so a number would silently violate "never a float, at any
+    layer" at the one layer nobody inspects. Every money field is
+    `type: string, pattern: ^-?[0-9]+$`, in kobo.
+
+    Every enum below names the decision it came from. The semantics were settled
+    in the design package; this file is where they are read, not where they are
+    decided.
+
+components:
+  schemas:
+    Kobo:
+      type: string
+      pattern: '^-?[0-9]+$'
+      description: |
+        An amount in kobo. ₦1 = 100 kobo. A STRING because a JSON number is a
+        float. Positive is a debit, negative a credit.
+      examples: ["48000000", "-2500000"]
+
+    MovementKind:
+      type: string
+      description: |
+        Every movement of money in the product. Mirrors the movement_kind enum
+        in the database and the MovementKind union in the frontend; all three
+        are generated from this.
+
+        opening_balance and payroll_remittance carry NO CHARGE. opening_balance
+        is free deliberately, not by oversight: charging on a migration takes a
+        cut of money that was in the society's books before Argon existed. It is
+        also not a contribution — a member's statement must not say they
+        contributed on the day the software changed.
+      enum:
+        - contribution_in
+        - withdrawal_out
+        - loan_disbursement
+        - loan_repayment
+        - transfer_out
+        - payroll_remittance
+        - project_funding
+        - opening_balance
+
+    MoneyState:
+      type: string
+      description: |
+        The nine money states. ONE definition, consumed by every surface. Two
+        independent definitions of one state was the most expensive defect in
+        design review, which is why this is generated rather than written twice.
+
+        Presentation — colour, dot shape, weight — stays in the frontend. This
+        enum carries the states themselves and nothing else.
+      enum:
+        - draft
+        - pending
+        - awaiting
+        - inflight
+        - settled
+        - reversed
+        - conflict
+        - synced
+        - queried
+
+    ChargeRole:
+      type: string
+      description: |
+        The partner charge and the Argon margin are recorded SEPARATELY. Summed
+        into one total the pass-through-versus-margin distinction is
+        unrecoverable from history, and transaction charges are the only revenue
+        line in the product. D-03, D-07.
+      enum: [principal, partner_charge, argon_margin]
+
+    PostedRecord:
+      type: object
+      required: [reference, rows, totalKobo, postedAt, alreadyPosted]
+      properties:
+        reference:
+          type: string
+          description: The client-minted idempotency key. The server never generates one.
+        rows: { type: integer }
+        totalKobo: { $ref: '#/components/schemas/Kobo' }
+        asOf:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            The society's own as-at date. NEVER the posting date. A member whose
+            savings accrued over seven years must not have a ledger that begins
+            on the day the software changed.
+        postedAt: { type: string, format: date-time }
+        alreadyPosted:
+          type: boolean
+          description: |
+            True when this reference had already been committed and nothing was
+            written. The rest of this object still describes what the FIRST
+            commit did — an admin who committed under the wrong as-at date has
+            to be told which date the balances actually carry, and a bare
+            acknowledgement cannot say.
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness and database reachability
+      responses:
+        '200': { description: ok }
+        '503': { description: database unreachable }
+
+  /ledger/batches:
+    post:
+      summary: Post a whole batch atomically
+      description: |
+        ONE TRANSACTIONAL CALL. Either every line is written or none is; there
+        is no partial outcome.
+
+        Idempotency-Key is minted CLIENT-SIDE from a SHA-256 of the uploaded
+        file's content, so a retry of one upload carries the same key and a
+        corrected file carries its own.
+
+        A failed call writes nothing AND does not mark the reference committed,
+        so a retry after failure can succeed.
+
+        The frontend does not queue writes offline — a non-GET with no network
+        is rejected outright with the reason on screen. So this endpoint will
+        never receive a replayed stale write from a device that was offline for
+        a day. The idempotency key is for retries within a request.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '201':
+          description: Committed. Nothing had been posted under this reference before.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostedRecord' }
+        '200':
+          description: |
+            Already committed. NOTHING WAS WRITTEN. The body describes what the
+            first commit did.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostedRecord' }
+        '422':
+          description: |
+            Refused. An entry that does not balance, a member already carrying
+            an opening balance, or a total that does not match what was
+            confirmed. Nothing is written.

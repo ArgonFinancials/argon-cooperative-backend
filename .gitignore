@@ -1,0 +1,7 @@
+.env
+/bin
+/tmp
+*.test
+deploy/env/*.env
+/.backups
+*.pem

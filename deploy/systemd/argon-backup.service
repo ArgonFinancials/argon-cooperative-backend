@@ -1,0 +1,13 @@
+[Unit]
+Description=Argon nightly backup to S3
+After=postgresql@16-main.service
+Requires=postgresql@16-main.service
+
+[Service]
+Type=oneshot
+Environment=ARGON_ENV=/etc/argon/deploy.env
+ExecStart=/usr/bin/bash /opt/argon/deploy/50-backup.sh --label nightly
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+PrivateTmp=yes
