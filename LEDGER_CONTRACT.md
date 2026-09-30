@@ -10,6 +10,32 @@ something, it says so and the obligation moves to you.
 
 **Money is in kobo. ₦1 = 100 kobo. Never a float, anywhere, at any layer.**
 
+## 0. Money on the wire (decided 2026-09-30)
+
+**One shape, both directions:** an amount is a **decimal kobo string, signed.
+Positive is a debit, negative a credit.** `"2500000"`, `"-2491250"`. Never a
+JSON number, and never a pair of fields.
+
+- **Signed, not split `debitKobo`/`creditKobo`.** With a signed amount,
+  "balanced" is a sum to zero, and a sum cannot be got wrong by filling in the
+  wrong field. Split fields also need a rule for when both are populated; a
+  signed integer cannot be in that state. The database stores signed kobo in
+  one column for the same reason, and two shapes for one fact across the API
+  boundary is the two-sources defect where it is hardest to see.
+- **A string, not a number.** A JSON number is an IEEE-754 double. It would
+  break the no-float rule at the one layer nobody inspects, and it would never
+  visibly fail.
+- **Parsed at the port boundary, on both sides.** A bare JSON number is
+  **rejected, not coerced**. The backend's `money.Kobo` already does this.
+- **A movement's AMOUNT is not a line's signed value.** Anything that takes
+  "how much" (the guard, the charge rule) takes a non-negative magnitude, and
+  refuses a negative rather than treating it as small. A reversal's charge
+  line is a negative *line*, computed from the original's charge, not from
+  `chargeFor(−amount)`.
+
+This contract is what the frontend changes to. The frontend's split shape came
+from its demo store, not from a decision.
+
 ---
 
 ## 1. `postAll` is one transactional call
