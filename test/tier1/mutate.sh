@@ -1,19 +1,36 @@
 #!/usr/bin/env bash
-# Mutation run for the 0002 acceptance tests.
+# Mutation run for a Tier 1 acceptance suite.
 #
-# Each schema is 0001 + 0002_interface.sql (+ one mutant). Every mutant is a
-# DELIBERATELY WRONG implementation; the table below states which tests it
-# must turn RED. The run fails if:
-#   - a targeted test PASSES against the broken schema  (the test tests nothing)
-#   - a targeted test fails in its own FIXTURE          (red for the wrong reason)
-#   - any control fails against M0                      (the control is broken)
-#   - some test is targeted by no mutant                (unproven)
+#   mutate.sh [0002|0003] [--only GLOB] [--partial] [--svc]
 #
-# What this cannot prove: that each test goes GREEN against a correct 0002.
-# That half needs the migration, which is written after review.
+# Each suite (suite_<n>.sh) names its tests, its no-rules baseline "M0", its
+# mutants (DELIBERATELY WRONG implementations, one file each) and which tests
+# each must turn RED. The run fails if:
+#   - a targeted test PASSES against the broken schema/service (tests nothing)
+#   - a targeted test fails in its own FIXTURE           (red for the wrong reason)
+#   - a control fails against M0                         (the control is broken)
+#   - a test is targeted by no mutant                    (unproven)
+#
+# --only GLOB   run only the mutants whose name matches (a batch)
+# --partial     report untargeted tests as NOT YET COVERED instead of failing;
+#               a partial run never prints the all-clear
+# --svc         also run the service breaks (SVC_TARGET_OF)
+#
+# GREEN (every test passes against the real migrations) runs only once the
+# migration the suite is for exists. Until then the run says so, rather than
+# counting an absent half as a pass.
 source "$(dirname "$0")/../../deploy/lib.sh"
 [[ $TARGET == docker ]] || die "run the mutation suite against local docker only"
 require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD
+
+SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
+while (($#)); do case $1 in
+  0002|0003) SUITE=$1; shift ;;
+  --only) ONLY=$2; shift 2 ;;
+  --partial) PARTIAL=1; shift ;;
+  --svc) SVC=1; shift ;;
+  *) die "unknown arg $1" ;;
+esac; done
 
 export PYTHONIOENCODING=utf-8   # test messages contain −, ₦, §
 # Paths handed to the test binary must be native: on Windows, C:/..., not /c/...
@@ -23,65 +40,32 @@ BIN="$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && 
 REPO_DIR="$(native "$REPO_DIR")"
 export ARGON_TEST_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
 export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
-BASE="$REPO_DIR/migrations/0001_init.up.sql,$HERE/0002_interface.sql"
 
-# mutant => tests it must turn red (regex alternation on test names)
-declare -A TARGET_OF=(
-  [M0]='TestG1_BalancedPair|TestG1_CallerCannot|TestG1_OlderTransaction|TestS1_|TestS2_|TestS3_|TestV4_|TestG4_Relinking|TestU1_OnePerson|TestU2_SuppliedUserMust|TestU3_|TestU4_|TestU5_|TestG3_AuditorCannot.*|TestG4_(AuditorThen|SignatoryThen|AuditorAndSignatory|Extending)|TestV1_|TestV2_|TestM1_|TestM3_|TestM4_|TestP1_|TestP3_.*|TestP4_PeriodsInOne|TestA2_|TestA3_|TestA4_|TestA5_'
-  [g1_posted_at_server_only]='TestG1_OlderTransactionCannotAppendToNewerEntry'
-  [s_any_appointment]='TestS1_NonSigningPostCannotSign'
-  [s_ignores_term]='TestS2_'
-  [s_trusts_signed_at]='TestS3_'
-  [s_chairman_only]='TestS_Control_CurrentSignatorySigns'
-  [v_batch_as_of_kept]='TestV4_BatchesCarryNoAsOfColumn'
-  [g1_xmin_ignores_savepoints]='TestG1_Control_EntryCreatedInsideSavepoint'
-  [g1_latest_entry_only]='TestG1_Control_BatchOfEntriesInOneTransaction'
-  [u_keyed_on_member]='TestU1_OnePersonTwoMemberRecordsCannotSignTwice'
-  [u_trusts_supplied_user]='TestU1_OnePerson|TestU2_SuppliedUserMust|TestU3_|TestU4_'
-  [u_one_signature_per_request]='TestU1_Control_DifferentPeopleSignSameRequest'
-  [u_one_signature_per_person_ever]='TestU1_Control_SamePersonSignsDifferentRequests'
-  [u_rejects_supplied_user]='TestU2_Control_SuppliedMatchingUserIsAccepted'
-  [u_synced_not_frozen]='TestU4_SignatureUserIsFrozenAtSigning'
-  [g3_label_only]='TestG3_AuditorCannotSignUnderAnotherLabel|TestG3_AuditorCannotSignThroughSecondMemberRecord'
-  [g3_member_level]='TestG3_AuditorCannotSignThroughSecondMemberRecord'
-  [g3_ignores_term]='TestG3_Control_FormerAuditorMaySign'
-  [g4_member_level]='TestG4_AuditorAndSignatoryAcrossTwoMemberRecords'
-  [g4_signatory_insert_only]='TestG4_SignatoryThenAuditorSameMember|TestG4_ExtendingAuditorTermIntoSignatoryTerm'
-  [g4_ignores_term]='TestG4_Control_ConsecutiveTerms'
-  [g4_any_post]='TestG4_Control_AuditorMayHoldNonSigningPost'
-  [v_filled_with_posting_date]='TestV2_UnknownValueDateStaysNull'
-  [v_null_for_any_kind]='TestV3_OnlyOpeningBalanceMayHaveUnknownDate'
-  [v_opening_balance_always_null]='TestV_Control_OpeningBalanceWithKnownAsOf'
-  [m_entry_column_kept]='TestM1_EntriesCarryNoMemberColumn'
-  [m_no_fk]='TestM3_LineMemberMustExist|TestM4_LineMemberMustBelongToEntrysSociety'
-  [m_no_society_check]='TestM4_LineMemberMustBelongToEntrysSociety'
-  [m_one_member_per_entry]='TestM2_MemberToMemberTransferInOneEntry'
-  [m_member_required]='TestM_Control_LinesWithoutMember'
-  [p_checks_posted_at]='TestP1_PostingIntoClosedPeriodIsRefused'
-  [p_close_not_final]='TestP3_ClosedPeriodCannotBeReopened|TestP3_ClosedPeriodBoundariesCannotMove'
-  [p_only_reopen_refused]='TestP3_ClosedPeriodBoundariesCannotMove'
-  [p_ignores_closed]='TestP2_Control_PostingIntoOpenPeriod'
-  [p_overlap_across_societies]='TestP4_Control_SameDatesInAnotherSociety'
-  [a_fk_only]='TestA2_|TestA4_|TestA5_'
-  [a_no_society_check]='TestA5_AdjustmentMustBeInSameSociety'
-  [a_allows_both]='TestA4_CorrectionIsReversalOrAdjustmentNotBoth'
-  [a_period_rule_on_original]='TestA1_AdjustmentOfClosedPeriodEntryPostsInOpenPeriod'
-)
+# shellcheck disable=SC1090
+source "$HERE/suite_$SUITE.sh"
+SVC_RUN=${SVC_RUN:-'^TestAuthS'}
+abs() { local IFS=,; local out=(); for f in $1; do out+=("$REPO_DIR/$f"); done; echo "${out[*]}"; }
+BASE=$(abs "$SUITE_BASE")
 
-info "building test binary"
+info "suite $SUITE: building test binary"
 mkdir -p "$REPO_DIR/bin"
 (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$BIN" ./test/tier1/)
 # From the source, not -test.list: listing still runs TestMain, which needs a DB.
-mapfile -t ALL < <(grep -ohE '^func (Test[A-Za-z0-9_]+)\(t \*testing\.T\)' "$HERE"/*_test.go | sed -E 's/^func (Test[A-Za-z0-9_]+).*/\1/')
+mapfile -t ALL < <(grep -ohE '^func (Test[A-Za-z0-9_]+)\(t \*testing\.T\)' "$HERE"/*_test.go \
+  | sed -E 's/^func (Test[A-Za-z0-9_]+).*/\1/' | grep -E "$SUITE_INCLUDE" | grep -vE "$SUITE_EXCLUDE")
 # An empty list would make every check below pass vacuously.
-((${#ALL[@]} > 0)) || die "found no tests in $HERE"
-info "${#ALL[@]} tests, $(( ${#TARGET_OF[@]} - 1 )) mutants + M0"
+((${#ALL[@]} > 0)) || die "found no tests for suite $SUITE in $HERE"
+info "${#ALL[@]} tests in suite $SUITE"
 
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-# run SCHEMA LABEL -> writes $out/LABEL.status lines "Test STATUS detail"
+# Labels become file names: no characters Windows forbids (":" among them).
+# run SCHEMA LABEL RUNREGEX [ENV=VAL] -> $out/LABEL.status lines "Test STATUS detail"
 run() {
-  local schema=$1 label=$2
-  ARGON_TEST_SCHEMA="$schema" "$BIN" -test.v -test.count=1 > "$out/$label.log" 2>&1 || true
+  local schema=$1 label=$2 re=$3; shift 3
+  local args=(-test.v -test.count=1)
+  [[ -n $re ]] && args+=(-test.run "$re")
+  [[ -n $SUITE_SKIP ]] && args+=(-test.skip "$SUITE_SKIP")
+  env "$@" ARGON_TEST_SCHEMA="$schema" "$BIN" "${args[@]}" > "$out/$label.log" 2>&1 || true
   python - "$out/$label.log" > "$out/$label.status" <<'PY'
 import re, sys
 cur, buf, res = None, [], {}
@@ -107,57 +91,94 @@ detail_of() { awk -v t="$1" '$1==t {$1=$2=""; sub(/^  /,""); print; exit}' "$out
 fail=0
 declare -A COVERED
 
-report() {  # label
-  local label=$1 pattern=${TARGET_OF[$1]}
+report() {  # label pattern describe-file
+  local label=$1 pattern=$2 desc=${3:-}
   if grep -q '^__SETUP__' "$out/$label.status"; then
     printf '\n\033[31m%s: SCHEMA DID NOT APPLY\033[0m %s\n' "$label" "$(cut -d' ' -f3- "$out/$label.status")"; fail=1; return
   fi
-  printf '\n\033[1m%s\033[0m  %s\n' "$label" "$(sed -n 's/^-- //p' "$HERE/mutants/$label.sql" 2>/dev/null | head -2 | tr '\n' ' ')"
+  printf '\n\033[1m%s\033[0m  %s\n' "$label" "$( [[ -f $desc ]] && sed -n 's/^-- //p' "$desc" | head -1)"
   for t in "${ALL[@]}"; do
     [[ $t =~ ^($pattern) ]] || continue   # prefix match
     COVERED[$t]=1
     local st; st=$(status_of "$t" "$label")
     case $st in
-      RED)    printf '   \033[32mred   ✓\033[0m %-58s %s\n' "$t" "$(detail_of "$t" "$label" | cut -c1-90)" ;;
-      PASS)   printf '   \033[31mPASSED ON BROKEN SCHEMA ✗\033[0m %s\n' "$t"; fail=1 ;;
+      RED)    printf '   \033[32mred   ✓\033[0m %-62s %s\n' "$t" "$(detail_of "$t" "$label" | cut -c1-88)" ;;
+      PASS)   printf '   \033[31mPASSED ON BROKEN %s ✗\033[0m %s\n' "$( [[ $label == svc_* ]] && echo SERVICE || echo SCHEMA)" "$t"; fail=1 ;;
       BROKEN) printf '   \033[33mBROKEN FIXTURE ?\033[0m %s — %s\n' "$t" "$(detail_of "$t" "$label")"; fail=1 ;;
       *)      printf '   \033[31mNOT RUN ?\033[0m %s\n' "$t"; fail=1 ;;
     esac
   done
 }
 
-# ---- GREEN: every test must pass against the REAL migrations ----------------
-REAL=$(ls "$REPO_DIR"/migrations/*.up.sql | sort | tr '\n' ',' | sed 's/,$//')
-info "GREEN: the real migrations ($(ls "$REPO_DIR"/migrations/*.up.sql | wc -l) files)"
-run "$REAL" GREEN
-if grep -q '^__SETUP__' "$out/GREEN.status"; then fail=1; printf '   \033[31mSCHEMA DID NOT APPLY\033[0m\n'; fi
-green_n=0
-for t in "${ALL[@]}"; do
-  st=$(status_of "$t" GREEN)
-  if [[ $st == PASS ]]; then green_n=$((green_n+1))
-  else printf '   \033[31m%s ✗\033[0m %s — %s\n' "${st:-NOT RUN}" "$t" "$(detail_of "$t" GREEN)"; fail=1; fi
-done
-printf '   %d/%d pass against the real schema\n' "$green_n" "${#ALL[@]}"
+# ---- GREEN ------------------------------------------------------------------
+if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
+  REAL=$(ls "$REPO_DIR"/migrations/*.up.sql | sort | tr '\n' ',' | sed 's/,$//')
+  info "GREEN: the real migrations"
+  run "$REAL" GREEN "$SUITE_RUN"
+  green_n=0
+  for t in "${ALL[@]}"; do
+    st=$(status_of "$t" GREEN)
+    if [[ $st == PASS ]]; then green_n=$((green_n+1))
+    else printf '   \033[31m%s ✗\033[0m %s — %s\n' "${st:-NOT RUN}" "$t" "$(detail_of "$t" GREEN)"; fail=1; fi
+  done
+  printf '   %d/%d pass against the real schema\n' "$green_n" "${#ALL[@]}"
+else
+  printf '\n\033[33mGREEN NOT RUN\033[0m — %s does not exist yet (tests first). The red half below is all this run proves.\n' "$SUITE_GREEN_NEEDS"
+fi
 
-info "M0: 0001 + interface, no enforcement"
-run "$BASE" M0
-report M0
+# ---- M0 ---------------------------------------------------------------------
+info "M0: the no-rules baseline"
+run "$BASE" M0 "$SUITE_RUN"
+report M0 "${TARGET_OF[M0]}"
 printf '\n\033[1mM0 controls\033[0m  (must PASS on a schema with no rules — proves each statement shape is valid)\n'
 for t in "${ALL[@]}"; do
-  [[ $t == *Control* || $t == TestM2_* || $t == TestA1_* ]] || continue
+  [[ $t =~ $CONTROL_RE ]] || continue
+  [[ $t =~ ^TestAuthS ]] && continue
   st=$(status_of "$t" M0)
   if [[ $st == PASS ]]; then printf '   \033[32mpass  ✓\033[0m %s\n' "$t"
   else printf '   \033[31m%s ✗\033[0m %s — %s\n' "$st" "$t" "$(detail_of "$t" M0)"; fail=1; fi
 done
 
-for f in "$HERE"/mutants/*.sql; do
+# ---- SQL mutants ------------------------------------------------------------
+for f in "$HERE/$SUITE_MUTDIR"/*.sql; do
   label=$(basename "$f" .sql)
+  [[ $label == $ONLY ]] || continue
   [[ -n ${TARGET_OF[$label]:-} ]] || { printf '\n\033[31m%s has no expectation\033[0m\n' "$label"; fail=1; continue; }
-  run "$BASE,$f" "$label"
-  report "$label"
+  run "$BASE,$f" "$label" "$SUITE_RUN"
+  report "$label" "${TARGET_OF[$label]}" "$f"
+done
+for label in "${!TARGET_OF[@]}"; do
+  [[ $label == M0 || -f "$HERE/$SUITE_MUTDIR/$label.sql" ]] || { printf '\n\033[31mexpectation for %s has no mutant file\033[0m\n' "$label"; fail=1; }
 done
 
+# ---- service breaks ---------------------------------------------------------
+if ((SVC)) && ((${#SVC_TARGET_OF[@]})); then
+  info "REFERENCE: the service fake with no break (test code, not the service)"
+  run "$BASE" svc_none "$SVC_RUN" ARGON_TEST_AUTH_FAKE=
+  for t in "${ALL[@]}"; do
+    [[ $t =~ $SVC_RUN ]] || continue
+    st=$(status_of "$t" svc_none)
+    if [[ $st == PASS ]]; then printf '   \033[32mpass  ✓\033[0m %s\n' "$t"
+    else printf '   \033[31m%s ✗\033[0m %s — %s\n' "${st:-NOT RUN}" "$t" "$(detail_of "$t" svc_none)"; fail=1; fi
+  done
+  for brk in $(printf '%s\n' "${!SVC_TARGET_OF[@]}" | sort); do
+    run "$BASE" "svc_$brk" "$SVC_RUN" ARGON_TEST_AUTH_FAKE="$brk"
+    report "svc_$brk" "${SVC_TARGET_OF[$brk]}"
+  done
+fi
+
+# ---- coverage ---------------------------------------------------------------
 printf '\n\033[1mCoverage\033[0m\n'
-for t in "${ALL[@]}"; do [[ -n ${COVERED[$t]:-} ]] || { printf '   \033[31mUNPROVEN — no mutant turns it red:\033[0m %s\n' "$t"; fail=1; }; done
+uncovered=0
+for t in "${ALL[@]}"; do
+  [[ -n ${COVERED[$t]:-} ]] && continue
+  uncovered=$((uncovered+1))
+  if ((PARTIAL)); then printf '   \033[33mnot yet covered\033[0m %s\n' "$t"
+  else printf '   \033[31mUNPROVEN — no mutant turns it red:\033[0m %s\n' "$t"; fail=1; fi
+done
 ((fail)) && { echo; die "mutation run FAILED — see above"; }
-echo; ok "every test goes red on the schema broken for it; every control passes on M0; every test covered"
+if ((PARTIAL)); then
+  echo; info "partial run: nothing above failed; $uncovered test(s) not yet covered. NOT an all-clear."
+else
+  echo; ok "every test goes red on what is broken for it; every control passes on M0; every test covered"
+fi

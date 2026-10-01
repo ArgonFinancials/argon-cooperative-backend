@@ -29,6 +29,10 @@ import (
 
 var db *pgxpool.Pool
 
+// adminURL and dbName: the scratch database and a superuser route to it, for
+// tests that must change a DATABASE-level setting (TestAuth0_*).
+var adminURL, dbName string
+
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
@@ -41,6 +45,7 @@ func run(m *testing.M) int {
 	}
 
 	name := fmt.Sprintf("argon_verify_t%d", time.Now().UnixNano())
+	adminURL, dbName = admin, name
 	ac, err := pgx.Connect(ctx, admin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tier1: admin connect:", err)
@@ -51,6 +56,9 @@ func run(m *testing.M) int {
 		`CREATE DATABASE ` + name + ` OWNER argon_owner`,
 		`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
 		`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
+		// The auth suite's clock. auth_now() honours argon.test_now only when
+		// this DATABASE-level setting exists; a session-level SET does not count.
+		`ALTER DATABASE ` + name + ` SET argon.test_clock = 'on'`,
 	} {
 		if _, err := ac.Exec(ctx, q); err != nil {
 			fmt.Fprintln(os.Stderr, "tier1:", q, err)
@@ -234,8 +242,8 @@ func (s *soc) user(name string) string {
 func (s *soc) member(user string) string {
 	var id string
 	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		VALUES ($1, $2, $3, 'Member', '+234000', 'cash', '2020-01-01', $4) RETURNING id`,
-		s.id, s.branch, fmt.Sprintf("M-%d", seq.Add(1)), nz(user)).Scan(&id), "member")
+		VALUES ($1, $2, $3, 'Member', $4, 'cash', '2020-01-01', $5) RETURNING id`,
+		s.id, s.branch, fmt.Sprintf("M-%d", seq.Add(1)), fmt.Sprintf("+23470%08d", seq.Add(1)), nz(user)).Scan(&id), "member")
 	return id
 }
 
