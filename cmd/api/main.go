@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/argon/backend/internal/api"
 	"github.com/argon/backend/internal/config"
 	"github.com/argon/backend/internal/db"
 )
@@ -41,21 +42,16 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Every route comes from api/openapi.yaml through the generated router; a
+	// path that is not in the spec does not exist.
+	h, err := api.NewServer(api.Deps{DB: pool})
+	if err != nil {
+		log.Error("api", "err", err)
+		os.Exit(1)
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
-
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := pool.Ping(r.Context()); err != nil {
-			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// Handlers are generated from api/openapi.yaml and mounted here. Writing
-	// them by hand would make a Go struct the source of truth for semantics
-	// that were settled in the design package and are recorded in the spec.
+	r.Mount("/", h)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,

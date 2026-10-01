@@ -44,8 +44,9 @@ S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
 R1=$(U 61) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83)
 
-# Written for the schema at migration 0002 (users, line-level member_id, no
-# ledger_batches.as_of). M1 and M3 hold current signing posts; M2 is auditor.
+# Written for the schema at migration 0004 (users, line-level member_id, no
+# ledger_batches.as_of; account roles, so every savings line names its member).
+# M1 and M3 hold current signing posts; M2 is auditor.
 info "seeding fixtures in $db as argon_app"
 pg_as argon_app "$db" -q <<SQL >/dev/null
 BEGIN;
@@ -61,9 +62,9 @@ INSERT INTO members (id, society_id, branch_id, member_number, full_name, phone,
 INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from) VALUES
   ($S, $M1, 'treasurer', true, '2020-01-01'),
   ($S, $M3, 'chairman',  true, '2020-01-01');
-INSERT INTO accounts (id, society_id, code, name, kind) VALUES
-  ($A1, $S, '1000', 'Cash at VFD', 'asset'),
-  ($A2, $S, '2000', 'Member savings', 'liability');
+INSERT INTO accounts (id, society_id, code, name, kind, role) VALUES
+  ($A1, $S, '1000', 'Cash at VFD', 'asset', 'bank'),
+  ($A2, $S, '2000', 'Member savings', 'liability', 'member_savings');
 INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo)
   VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000);
 INSERT INTO ledger_entries (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
@@ -141,7 +142,7 @@ probe req C3 argon_app "P0001.*entry a0000000-0000-4000-8000-000000000042 does n
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
      VALUES ($EBAD, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EBAD, $A1,  10000, 'principal');
-   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EBAD, $A2,  -9900, 'principal');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES ($EBAD, $A2,  -9900, 'principal', $M1);
    \\echo PROBE_MARKER_LINES_INSERTED_BEFORE_COMMIT
    COMMIT;" 'PROBE_MARKER_LINES_INSERTED_BEFORE_COMMIT'
 probe req C3b argon_app 'P0001.*C3b-entry-persisted' "…and the unbalanced entry left nothing behind" \
@@ -152,7 +153,7 @@ probe ctl K3 argon_app '' "control: the same entry balanced (+10000/−10000) co
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
      VALUES ($EOK, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EOK, $A1,  10000, 'principal');
-   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EOK, $A2, -10000, 'principal');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES ($EOK, $A2, -10000, 'principal', $M1);
    COMMIT;"
 
 # 4. Internal auditor as signatory.
@@ -199,8 +200,8 @@ probe req P10 $OWNER '23514.*CONSTRAINT NAME: +ledger_entries_posted_at_is_now' 
 # == Closed by 0002 — were gaps under 0001 =====================================
 probe req G1 argon_app '23514.*CONSTRAINT NAME: +ledger_lines_entry_open' "add a balanced pair of new lines to an already-POSTED entry" \
   "BEGIN;
-   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($E1, $A1,  500, 'argon_margin');
-   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($E1, $A2, -500, 'argon_margin');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($E1, $A1,  500, 'principal');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES ($E1, $A2, -500, 'principal', $M1);
    COMMIT;"
 probe req G3 argon_app '23514.*CONSTRAINT NAME: +signatory_not_auditor' "the current internal auditor signs" \
   "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $M2, 'internal_auditor');"
@@ -227,9 +228,9 @@ probe gap G9 argon_app 'ERROR' "reverse the same posted entry twice" \
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, reverses_id, reason) VALUES
      ('a0000000-0000-4000-8000-000000000045', $S, 'contribution_in', '2026-02-02', $ACTOR, 'treasurer', 'Treasurer', $E1, 'probe: posted twice in error'),
      ('a0000000-0000-4000-8000-000000000046', $S, 'contribution_in', '2026-02-02', $ACTOR, 'treasurer', 'Treasurer', $E1, 'probe: posted twice in error');
-   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES
-     ('a0000000-0000-4000-8000-000000000045', $A2,  10000, 'principal'), ('a0000000-0000-4000-8000-000000000045', $A1, -10000, 'principal'),
-     ('a0000000-0000-4000-8000-000000000046', $A2,  10000, 'principal'), ('a0000000-0000-4000-8000-000000000046', $A1, -10000, 'principal');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+     ('a0000000-0000-4000-8000-000000000045', $A2,  10000, 'principal', $M1), ('a0000000-0000-4000-8000-000000000045', $A1, -10000, 'principal', NULL),
+     ('a0000000-0000-4000-8000-000000000046', $A2,  10000, 'principal', $M1), ('a0000000-0000-4000-8000-000000000046', $A1, -10000, 'principal', NULL);
    COMMIT;"
 probe gap G5 $OWNER 'ERROR' "owner TRUNCATEs ledger_lines (rolled back)" \
   "BEGIN; TRUNCATE ledger_lines; ROLLBACK;"

@@ -16,7 +16,7 @@ make migrate-up
 make run           # :8080
 ```
 
-`curl localhost:8080/healthz` should return `{"status":"ok"}`.
+`curl -i localhost:8080/healthz` should return `200` (`503` if the database is unreachable).
 
 ## The rules this service exists to hold
 

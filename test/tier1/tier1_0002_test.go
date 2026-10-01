@@ -220,6 +220,7 @@ type soc struct {
 	t                            *testing.T
 	id, branch, bank, savings    string
 	actor                        string
+	holderID                     string // see holder()
 }
 
 // newSociety gives each test its own society, so tests share a database but
@@ -367,8 +368,19 @@ func (s *soc) insertLines(x pgx.Tx, entryID string, ls ...line) error {
 	return nil
 }
 
+// holder is the society's default account holder: the member whose savings
+// the default entries move. A savings line that names no member says nothing
+// about whose savings it is. 0004 refuses one, and this fixture was wrong
+// before 0004 existed; nothing caught it.
+func (s *soc) holder() string {
+	if s.holderID == "" {
+		s.holderID = s.member("")
+	}
+	return s.holderID
+}
+
 func (s *soc) balanced() []line {
-	return []line{{acct: s.bank, kobo: 10000}, {acct: s.savings, kobo: -10000}}
+	return []line{{acct: s.bank, kobo: 10000}, {acct: s.savings, kobo: -10000, member: s.holder()}}
 }
 
 // postEntry writes an entry and its lines in one transaction.
@@ -418,8 +430,8 @@ func TestG1_BalancedPairOnPostedEntryIsRefused(t *testing.T) {
 	e := s.posted(entry{})
 	err := tx(func(x pgx.Tx) error {
 		return s.insertLines(x, e,
-			line{acct: s.bank, kobo: 500, role: "argon_margin"},
-			line{acct: s.savings, kobo: -500, role: "argon_margin"})
+			line{acct: s.bank, kobo: 500},
+			line{acct: s.savings, kobo: -500, member: s.holder()})
 	})
 	refused(t, err, "a balanced +500/−500 pair added in a later transaction to an already-posted entry", wEntryOpen)
 }
@@ -456,7 +468,7 @@ func TestG1_OlderTransactionCannotAppendToNewerEntry(t *testing.T) {
 	fixture(t, err, "older transaction running")
 	time.Sleep(20 * time.Millisecond)
 	e := s.posted(entry{}) // committed by another connection, after `old` began
-	err = s.insertLines(old, e, line{acct: s.bank, kobo: 500}, line{acct: s.savings, kobo: -500})
+	err = s.insertLines(old, e, line{acct: s.bank, kobo: 500}, line{acct: s.savings, kobo: -500, member: s.holder()})
 	if err == nil {
 		err = old.Commit(bg())
 	}
