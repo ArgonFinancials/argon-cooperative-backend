@@ -48,5 +48,24 @@ GRANT UPDATE (closed_at, closed_by) ON accounting_periods TO argon_app;
 -- those two columns only.
 GRANT UPDATE (explanation, resolved_at) ON wallet_reconciliations TO argon_app;
 
+-- ---- 0003 auth --------------------------------------------------------------
+-- INSERT lists leave out every server-written column (times, act_xid,
+-- privileged, attempts, consumed_at): the app has no path to set them. No
+-- UPDATE or DELETE on credentials, proofs, codes or attempts: a PIN changes
+-- by a credential_act, a proof is consumed and a code attempt counted only
+-- inside the database's own functions.
+GRANT SELECT ON auth_credentials, auth_proofs, auth_codes, auth_devices, auth_sessions,
+                sign_in_attempts, credential_acts TO argon_app;
+GRANT INSERT (user_id, pin_hash) ON auth_credentials TO argon_app;
+GRANT INSERT (id, user_id, method) ON auth_proofs TO argon_app;
+GRANT INSERT (id, user_id, purpose, code_digest, sent_to) ON auth_codes TO argon_app;
+GRANT INSERT (id, user_id, token_digest) ON auth_devices TO argon_app;
+GRANT UPDATE (revoked_at) ON auth_devices TO argon_app;
+GRANT INSERT (id, user_id, device_id, token_digest) ON auth_sessions TO argon_app;
+GRANT UPDATE (ended_at, ended_by_session) ON auth_sessions TO argon_app;
+GRANT INSERT (user_id, credential_digest, device_id, succeeded) ON sign_in_attempts TO argon_app;
+GRANT INSERT (id, kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id,
+              new_phone, new_pin_hash, request_id, reason) ON credential_acts TO argon_app;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

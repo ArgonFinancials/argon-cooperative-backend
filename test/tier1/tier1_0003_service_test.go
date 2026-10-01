@@ -5,8 +5,7 @@
 // notifier, and what it writes to the database.
 //
 // Which implementation runs:
-//   - default: auth.New — the real service (not yet written: every test fails
-//     "NOT IMPLEMENTED", which is the honest state).
+//   - default: auth.New — the real service (internal/auth/service.go).
 //   - ARGON_TEST_AUTH_FAKE=<break>: the mutation vehicle in authfake_test.go,
 //     deliberately broken one way (or "" for none). See mutate.sh.
 package tier1
@@ -132,7 +131,7 @@ func newSvc(t *testing.T) *svcT {
 	} else {
 		s, err := auth.New(deps)
 		if err != nil {
-			t.Fatalf("NOT IMPLEMENTED: %v", err)
+			t.Fatalf("FIXTURE: cannot construct the service: %v", err)
 		}
 		st.svc = s
 	}

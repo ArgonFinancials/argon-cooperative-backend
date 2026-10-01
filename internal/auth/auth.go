@@ -1,8 +1,8 @@
 // Package auth is sign-in: PIN, new-device codes, sessions.
 //
-// THIS FILE IS THE INTERFACE ONLY. The acceptance tests in test/tier1
-// (TestAuthS*) were written against it before any implementation, for review;
-// New returns ErrNotImplemented until then.
+// This file is the interface; service.go implements it. The acceptance tests
+// in test/tier1 (TestAuthS*) were written against this interface and reviewed
+// before the implementation existed.
 //
 // The split with the database (migration 0003): the database holds every rule
 // about STATE — hash formats, proofs, attributable acts, lockout windows, code
@@ -56,7 +56,6 @@ var (
 	// unregistered credential alike.
 	ErrTryLater = errors.New("auth: too many attempts; try again later")
 
-	ErrNotImplemented = errors.New("auth: not implemented — tests first")
 )
 
 type Service interface {
@@ -90,8 +89,6 @@ type Deps struct {
 	CodeKey []byte // HMAC key for code digests; the code itself is never stored
 	Argon   Argon2
 }
-
-func New(d Deps) (Service, error) { return nil, ErrNotImplemented }
 
 // TokenDigest is how a session or device token is stored: hex SHA-256. The
 // token itself is never stored.

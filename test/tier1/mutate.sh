@@ -114,7 +114,8 @@ report() {  # label pattern describe-file
 if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
   REAL=$(ls "$REPO_DIR"/migrations/*.up.sql | sort | tr '\n' ',' | sed 's/,$//')
   info "GREEN: the real migrations"
-  run "$REAL" GREEN "$SUITE_RUN"
+  # The real service: ARGON_TEST_AUTH_FAKE must be UNSET here, or GREEN would test the fake.
+  run "$REAL" GREEN "${SUITE_GREEN_RUN:-$SUITE_RUN}" -u ARGON_TEST_AUTH_FAKE
   green_n=0
   for t in "${ALL[@]}"; do
     st=$(status_of "$t" GREEN)

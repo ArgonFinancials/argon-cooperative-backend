@@ -9,7 +9,8 @@ SUITE_SKIP=''
 SUITE_RUN='^TestAuth[0A-H]'           # database tests; service tests run under --svc
 SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,test/tier1/0003_interface.sql'
 SUITE_MUTDIR='mutants_0003'
-SUITE_GREEN_NEEDS='migrations/0003_auth.up.sql'   # absent until after review
+SUITE_GREEN_NEEDS='migrations/0003_auth.up.sql'
+SUITE_GREEN_RUN='^TestAuth'                      # GREEN runs database AND service tests, against the REAL service
 CONTROL_RE='Control|^TestAuth0_'                   # must PASS on M0
 
 # Service breaks => the TestAuthS* tests each must turn red. See authfake_test.go.
