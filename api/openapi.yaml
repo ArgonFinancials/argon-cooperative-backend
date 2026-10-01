@@ -1,4 +1,4 @@
-openapi: 3.1.0
+openapi: 3.0.3
 info:
   title: Argon Cooperative Platform API
   version: 0.1.0
@@ -24,7 +24,7 @@ components:
       description: |
         An amount in kobo. ₦1 = 100 kobo. A STRING because a JSON number is a
         float. Positive is a debit, negative a credit.
-      examples: ["48000000", "-2500000"]
+      example: "48000000"
 
     MovementKind:
       type: string
@@ -104,6 +104,168 @@ components:
             to be told which date the balances actually carry, and a bare
             acknowledgement cannot say.
 
+    Magnitude:
+      type: string
+      pattern: '^[0-9]+$'
+      description: |
+        A NON-NEGATIVE amount in kobo: "how much", not a signed line. Used for a
+        movement's size (gross). LEDGER_CONTRACT.md §0: a movement's amount is a
+        magnitude; only a LINE carries a sign.
+      example: "2500000"
+
+    SavingsBalance:
+      type: string
+      pattern: '^-?[0-9]+$'
+      description: |
+        A BALANCE, FROM THE MEMBER'S SIDE — NOT a §0 line. Positive means the
+        society owes the member this much (they are in credit). Lines follow §0
+        (positive = debit), so the member's savings lines that build this
+        balance are negative; this field is their negation, computed once, here,
+        so no client ever negates anything. Decided 2026-10-01.
+      example: "2491250"
+
+    OfficerPost:
+      type: string
+      enum: [chairman, treasurer, secretary, internal_auditor, branch_officer, loan_officer]
+
+    ChargeLine:
+      type: object
+      required: [role, amountKobo]
+      description: |
+        One charge line, as posted. Partner charge and Argon margin are SEPARATE
+        lines, never summed (D-03). §0-signed: a charge taken is a credit
+        (negative); a charge refunded on a reversal is a debit (positive), so a
+        refund can never be read as a second charge.
+      properties:
+        role:
+          type: string
+          enum: [partner_charge, argon_margin]
+        amountKobo: { $ref: '#/components/schemas/Kobo' }
+
+    PostedBy:
+      type: object
+      required: [userId, post, postLabel]
+      description: |
+        Who posted the entry, in what post, FROZEN AT POSTING (§4). Present only
+        in the officer projection.
+      properties:
+        userId: { type: string, format: uuid }
+        post:
+          type: string
+          nullable: true
+          enum: [chairman, treasurer, secretary, internal_auditor, branch_officer, loan_officer]
+        postLabel: { type: string }
+
+    StatementRow:
+      type: object
+      required: [entryId, postedAt, valueDate, kind, reference, direction, grossKobo,
+                 savingsLineKobo, charges, savingsBalanceKobo, reversesEntryId,
+                 adjustsEntryId, reason, postedBy]
+      properties:
+        entryId: { type: string, format: uuid }
+        postedAt: { type: string, format: date-time }
+        valueDate:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            The society's as-at date for this movement. NULL means the society's
+            records carry no as-at date: render it as "accumulated before
+            migration", NEVER as a blank, and never substitute postedAt. A blank
+            reads as a bug; a stated unknown reads as a fact.
+        kind: { $ref: '#/components/schemas/MovementKind' }
+        reference:
+          type: string
+          nullable: true
+          description: The batch reference (an import's client-minted key), if any.
+        direction:
+          type: string
+          enum: [in, out]
+          description: |
+            Relative to the member's SAVINGS: "in" when their savings rose. Read
+            from the member's savings line, never from a bank line (an internal
+            transfer has none).
+        grossKobo:
+          $ref: '#/components/schemas/Magnitude'
+        savingsLineKobo:
+          $ref: '#/components/schemas/Kobo'
+        charges:
+          type: array
+          description: Every charge line of the entry, partner and margin separately. Empty when the movement is free.
+          items: { $ref: '#/components/schemas/ChargeLine' }
+        savingsBalanceKobo:
+          $ref: '#/components/schemas/SavingsBalance'
+        reversesEntryId: { type: string, format: uuid, nullable: true }
+        adjustsEntryId: { type: string, format: uuid, nullable: true }
+        reason:
+          type: string
+          nullable: true
+          description: Why a reversal or adjustment was made. Shown to the member; it is their money.
+        postedBy:
+          type: object
+          nullable: true
+          description: NULL in the member projection; present in the officer projection. Frozen at posting (§4).
+          required: [userId, post, postLabel]
+          properties:
+            userId: { type: string, format: uuid }
+            post:
+              type: string
+              nullable: true
+              enum: [chairman, treasurer, secretary, internal_auditor, branch_officer, loan_officer]
+            postLabel: { type: string }
+
+    ChargedInPeriod:
+      type: object
+      required: [partnerChargeKobo, argonMarginKobo]
+      description: |
+        What the member was charged in the period, NET OF REFUNDS, from the
+        member's side (positive = charged). A charge refunded by a reversal
+        nets to zero; it is never counted twice.
+      properties:
+        partnerChargeKobo: { $ref: '#/components/schemas/SavingsBalance' }
+        argonMarginKobo: { $ref: '#/components/schemas/SavingsBalance' }
+
+    MemberStatement:
+      type: object
+      required: [memberId, memberNumber, memberName, societyId, projection, from, to,
+                 openingSavingsBalanceKobo, closingSavingsBalanceKobo, chargedInPeriod, rows]
+      description: |
+        ONE record, two projections. The member and an officer of the member's
+        society are served by the same handler and the same query; the
+        projection decides only whether attribution (postedBy) is included.
+        Every figure is identical in both.
+      properties:
+        memberId: { type: string, format: uuid }
+        memberNumber: { type: string }
+        memberName: { type: string }
+        societyId: { type: string, format: uuid }
+        projection:
+          type: string
+          enum: [member, officer]
+          description: Which projection this is, so a client never infers it from a missing field.
+        from: { type: string, format: date, nullable: true }
+        to: { type: string, format: date, nullable: true }
+        openingSavingsBalanceKobo: { $ref: '#/components/schemas/SavingsBalance' }
+        closingSavingsBalanceKobo: { $ref: '#/components/schemas/SavingsBalance' }
+        chargedInPeriod: { $ref: '#/components/schemas/ChargedInPeriod' }
+        rows:
+          type: array
+          description: Ordered by postedAt, then entryId. Deterministic (§5).
+          items: { $ref: '#/components/schemas/StatementRow' }
+
+    Problem:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+      description: A session token from sign-in. The server stores only its digest.
+
 paths:
   /healthz:
     get:
@@ -153,3 +315,41 @@ paths:
             Refused. An entry that does not balance, a member already carrying
             an opening balance, or a total that does not match what was
             confirmed. Nothing is written.
+
+  /members/{memberId}/statement:
+    get:
+      operationId: getMemberStatement
+      summary: A member's savings statement — one record, two projections
+      description: |
+        Served to the MEMBER (the person the record belongs to) and to an
+        OFFICER of the member's society (any current post, the read-only
+        internal auditor included), by one handler and one query. The officer
+        projection adds attribution; nothing else differs.
+
+        Anyone else receives 404, byte-for-byte the same as for a member id that
+        does not exist, so this endpoint cannot be used to discover who is a
+        member where.
+
+        Lines are the member's own: in an entry that also moves another
+        member's savings, the other member's line is never returned.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: The statement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberStatement' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such member — or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }

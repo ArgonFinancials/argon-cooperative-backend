@@ -1,0 +1,9 @@
+# go generate ./internal/api  -> regenerates internal/api/api.gen.go from api/openapi.yaml.
+# The spec is the source. Never edit the generated file.
+package: api
+output: internal/api/api.gen.go
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: true
