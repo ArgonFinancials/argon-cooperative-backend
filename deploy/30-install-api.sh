@@ -19,6 +19,9 @@ out=$(sudo -u "$builder" mktemp -d)
 sudo -u "$builder" env -C "$REPO_DIR" PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0 \
   go build -trimpath -ldflags "-s -w" -o "$out/argon-api" ./cmd/api
 install -m 0755 "$out/argon-api" /opt/argon/bin/argon-api
+# The Tier 1 acceptance tests, for the restore drill to run against a restored copy.
+sudo -u "$builder" env -C "$REPO_DIR" PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0   go test -c -tags tier1 -o "$out/tier1.test" ./test/tier1/
+install -m 0755 "$out/tier1.test" /opt/argon/bin/tier1.test
 rm -rf "$out"
 ok "/opt/argon/bin/argon-api"
 

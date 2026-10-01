@@ -25,7 +25,7 @@ require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
-  0002|0003) SUITE=$1; shift ;;
+  0002|0003|0004|api) SUITE=$1; shift ;;
   --only) ONLY=$2; shift 2 ;;
   --partial) PARTIAL=1; shift ;;
   --svc) SVC=1; shift ;;
@@ -44,6 +44,7 @@ export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSW
 # shellcheck disable=SC1090
 source "$HERE/suite_$SUITE.sh"
 SVC_RUN=${SVC_RUN:-'^TestAuthS'}
+SVC_ENV=${SVC_ENV:-ARGON_TEST_AUTH_FAKE}   # the variable that selects a broken fake
 abs() { local IFS=,; local out=(); for f in $1; do out+=("$REPO_DIR/$f"); done; echo "${out[*]}"; }
 BASE=$(abs "$SUITE_BASE")
 
@@ -114,8 +115,8 @@ report() {  # label pattern describe-file
 if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
   REAL=$(ls "$REPO_DIR"/migrations/*.up.sql | sort | tr '\n' ',' | sed 's/,$//')
   info "GREEN: the real migrations"
-  # The real service: ARGON_TEST_AUTH_FAKE must be UNSET here, or GREEN would test the fake.
-  run "$REAL" GREEN "${SUITE_GREEN_RUN:-$SUITE_RUN}" -u ARGON_TEST_AUTH_FAKE
+  # The real code: the fake's variable must be UNSET here, or GREEN would test the fake.
+  run "$REAL" GREEN "${SUITE_GREEN_RUN:-$SUITE_RUN}" -u "$SVC_ENV"
   green_n=0
   for t in "${ALL[@]}"; do
     st=$(status_of "$t" GREEN)
@@ -128,19 +129,22 @@ else
 fi
 
 # ---- M0 ---------------------------------------------------------------------
+if [[ -n ${TARGET_OF[M0]:-} ]]; then   # a suite with no SQL baseline (the API) has no M0
 info "M0: the no-rules baseline"
 run "$BASE" M0 "$SUITE_RUN"
 report M0 "${TARGET_OF[M0]}"
 printf '\n\033[1mM0 controls\033[0m  (must PASS on a schema with no rules — proves each statement shape is valid)\n'
 for t in "${ALL[@]}"; do
   [[ $t =~ $CONTROL_RE ]] || continue
-  [[ $t =~ ^TestAuthS ]] && continue
+  [[ $t =~ $SVC_RUN ]] && continue
   st=$(status_of "$t" M0)
   if [[ $st == PASS ]]; then printf '   \033[32mpass  ✓\033[0m %s\n' "$t"
   else printf '   \033[31m%s ✗\033[0m %s — %s\n' "$st" "$t" "$(detail_of "$t" M0)"; fail=1; fi
 done
+fi
 
 # ---- SQL mutants ------------------------------------------------------------
+shopt -s nullglob
 for f in "$HERE/$SUITE_MUTDIR"/*.sql; do
   label=$(basename "$f" .sql)
   [[ $label == $ONLY ]] || continue
@@ -155,7 +159,7 @@ done
 # ---- service breaks ---------------------------------------------------------
 if ((SVC)) && ((${#SVC_TARGET_OF[@]})); then
   info "REFERENCE: the service fake with no break (test code, not the service)"
-  run "$BASE" svc_none "$SVC_RUN" ARGON_TEST_AUTH_FAKE=
+  run "$BASE" svc_none "$SVC_RUN" "$SVC_ENV="
   for t in "${ALL[@]}"; do
     [[ $t =~ $SVC_RUN ]] || continue
     st=$(status_of "$t" svc_none)
@@ -163,7 +167,7 @@ if ((SVC)) && ((${#SVC_TARGET_OF[@]})); then
     else printf '   \033[31m%s ✗\033[0m %s — %s\n' "${st:-NOT RUN}" "$t" "$(detail_of "$t" svc_none)"; fail=1; fi
   done
   for brk in $(printf '%s\n' "${!SVC_TARGET_OF[@]}" | sort); do
-    run "$BASE" "svc_$brk" "$SVC_RUN" ARGON_TEST_AUTH_FAKE="$brk"
+    run "$BASE" "svc_$brk" "$SVC_RUN" "$SVC_ENV=$brk"
     report "svc_$brk" "${SVC_TARGET_OF[$brk]}"
   done
 fi

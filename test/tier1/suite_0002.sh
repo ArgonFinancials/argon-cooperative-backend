@@ -1,8 +1,11 @@
 # Suite 0002 — ledger edges, signatures, periods, adjustments.
 # Sourced by mutate.sh. Paths are relative to test/tier1 and the repo root.
 SUITE_INCLUDE='^Test'              # tests in this suite …
-SUITE_EXCLUDE='^TestAuth'           # … except these
-SUITE_SKIP='^TestAuth'               # passed to -test.skip
+# … except the other suites. This suite is defined by EXCLUSION, so every new
+# suite's prefix must be added here, or it is silently swept into 0002 and run
+# against schemas it was never written for (it happened: 53/82).
+SUITE_EXCLUDE='^(TestAuth|TestRole|TestApi)'
+SUITE_SKIP='^(TestAuth|TestRole|TestApi)'   # passed to -test.skip
 SUITE_RUN=''
 SUITE_BASE='migrations/0001_init.up.sql,test/tier1/0002_interface.sql'
 SUITE_MUTDIR='mutants'

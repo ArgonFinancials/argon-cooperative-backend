@@ -424,12 +424,25 @@ func TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance(t *testing.T) {
 
 // In an entry that also moves another member's savings, only this member's
 // line is theirs to see.
+//
+// A leak has two forms, and the first version of this test caught only one.
+// The visible form: the other member's id or line appears in the body. The
+// silent form: their line is mixed into THIS member's figures. Summing every
+// savings line of the entry gives +50000 − 50000 = 0, so the member's
+// movement vanishes, and nothing foreign appears anywhere in the body. That
+// version passed against the break that does exactly this
+// (leak_other_lines); it now asserts the member's own figures as well.
 func TestApiStatement14_AnotherMembersLineNeverLeaks(t *testing.T) {
 	wd := newWorld(t)
 	r := wd.statement(t, wd.memberUser, "")
-	decode(t, r)
+	s := decode(t, r)
 	if bytes.Contains(r.body, []byte(wd.other)) || bytes.Contains(r.body, []byte(`"-50000"`)) {
 		t.Fatalf("ACCEPTED — the statement exposes the other member's line or id")
+	}
+	row := rowOf(t, s, wd.eToOther)
+	if row.SavingsLineKobo != "50000" || row.SavingsBalanceKobo != "48050000" {
+		t.Fatalf("ACCEPTED — the other member's line is mixed into this member's figures: savings line %s, balance %s; want 50000, 48050000",
+			row.SavingsLineKobo, row.SavingsBalanceKobo)
 	}
 }
 

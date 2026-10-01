@@ -14,10 +14,12 @@ package tier1
 
 import (
 	"context"
+	"regexp"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,13 +40,25 @@ func TestMain(m *testing.M) { os.Exit(run(m)) }
 func run(m *testing.M) int {
 	ctx := context.Background()
 	admin, mig, schema := os.Getenv("ARGON_TEST_ADMIN_URL"), os.Getenv("ARGON_TEST_MIGRATOR_URL"), os.Getenv("ARGON_TEST_SCHEMA")
-	if admin == "" || mig == "" || schema == "" {
+	// ARGON_TEST_DB: run against an EXISTING scratch database (the restore
+	// drill's restored copy) instead of building one from ARGON_TEST_SCHEMA.
+	// Only a scratch name is accepted, never the live database, and it is
+	// never dropped here: the drill owns it.
+	existing := os.Getenv("ARGON_TEST_DB")
+	if admin == "" || mig == "" || (schema == "" && existing == "") {
 		// Not t.Skip: a skipped Tier 1 suite reads as a green one.
-		fmt.Fprintln(os.Stderr, "tier1: set ARGON_TEST_ADMIN_URL, ARGON_TEST_MIGRATOR_URL, ARGON_TEST_SCHEMA (see test/tier1/README.md)")
+		fmt.Fprintln(os.Stderr, "tier1: set ARGON_TEST_ADMIN_URL, ARGON_TEST_MIGRATOR_URL, and ARGON_TEST_SCHEMA or ARGON_TEST_DB (see test/tier1/README.md)")
+		return 2
+	}
+	if existing != "" && !regexp.MustCompile(`^argon_(drill|verify)_[0-9a-z_]+$`).MatchString(existing) {
+		fmt.Fprintf(os.Stderr, "tier1: ARGON_TEST_DB=%q is not a scratch database; refusing (tests write rows that cannot be removed)\n", existing)
 		return 2
 	}
 
-	name := fmt.Sprintf("argon_verify_t%d", time.Now().UnixNano())
+	name := existing
+	if name == "" {
+		name = fmt.Sprintf("argon_verify_t%d", time.Now().UnixNano())
+	}
 	adminURL, dbName = admin, name
 	ac, err := pgx.Connect(ctx, admin)
 	if err != nil {
@@ -52,20 +66,25 @@ func run(m *testing.M) int {
 		return 2
 	}
 	defer ac.Close(ctx)
-	for _, q := range []string{
-		`CREATE DATABASE ` + name + ` OWNER argon_owner`,
-		`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
-		`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
+	setup := []string{
 		// The auth suite's clock. auth_now() honours argon.test_now only when
 		// this DATABASE-level setting exists; a session-level SET does not count.
 		`ALTER DATABASE ` + name + ` SET argon.test_clock = 'on'`,
-	} {
+	}
+	if existing == "" {
+		setup = append([]string{
+			`CREATE DATABASE ` + name + ` OWNER argon_owner`,
+			`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
+			`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
+		}, setup...)
+		defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
+	}
+	for _, q := range setup {
 		if _, err := ac.Exec(ctx, q); err != nil {
 			fmt.Fprintln(os.Stderr, "tier1:", q, err)
 			return 2
 		}
 	}
-	defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
 
 	cfg, err := pgxpool.ParseConfig(mig)
 	if err != nil {
@@ -83,8 +102,12 @@ func run(m *testing.M) int {
 
 	// Schema: 0001, then the 0002 interface (or 0002 itself), then at most one
 	// mutant. Applied as argon_migrator, so objects are owned by argon_owner.
+	// Skipped for an existing database: its schema is what is under test.
 	for _, f := range strings.Split(schema, ",") {
 		f = strings.TrimSpace(f)
+		if existing != "" || f == "" {
+			break
+		}
 		sql, err := os.ReadFile(f)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tier1:", err)
@@ -201,6 +224,25 @@ type soc struct {
 
 // newSociety gives each test its own society, so tests share a database but
 // never each other's rows.
+// Accounts carry a role once the schema has one (0004). The 0002 suite also
+// runs on schemas without the column, so the fixture writes what the schema
+// in use can hold — and, where it can, the role an account actually has.
+var (
+	roleOnce sync.Once
+	hasRoles bool
+)
+
+func accountInsert(code, name, kind, role string) string {
+	roleOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'accounts' AND column_name = 'role')`).Scan(&hasRoles)
+	})
+	if hasRoles {
+		return fmt.Sprintf(`INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, '%s', '%s', '%s', '%s') RETURNING id`, code, name, kind, role)
+	}
+	return fmt.Sprintf(`INSERT INTO accounts (society_id, code, name, kind) VALUES ($1, '%s', '%s', '%s') RETURNING id`, code, name, kind)
+}
+
 func newSociety(t *testing.T) *soc {
 	t.Helper()
 	s := &soc{t: t}
@@ -214,8 +256,8 @@ func newSociety(t *testing.T) *soc {
 			{`INSERT INTO societies (code, registered_name, registration_number, state_directorate)
 			  VALUES ($1, 'Test Cooperative', 'T/1', 'Lagos') RETURNING id`, []any{code}, &s.id},
 			{`INSERT INTO branches (society_id, code, name) VALUES ($1, 'HQ', 'HQ') RETURNING id`, nil, &s.branch},
-			{`INSERT INTO accounts (society_id, code, name, kind) VALUES ($1, '1000', 'Bank', 'asset') RETURNING id`, nil, &s.bank},
-			{`INSERT INTO accounts (society_id, code, name, kind) VALUES ($1, '2000', 'Member savings', 'liability') RETURNING id`, nil, &s.savings},
+			{accountInsert("1000", "Bank", "asset", "bank"), nil, &s.bank},
+			{accountInsert("2000", "Member savings", "liability", "member_savings"), nil, &s.savings},
 			{`INSERT INTO users (full_name) VALUES ('Treasurer (actor)') RETURNING id`, []any{}, &s.actor},
 		}
 		for _, st := range steps {

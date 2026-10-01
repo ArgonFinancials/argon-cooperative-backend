@@ -159,3 +159,39 @@ SELECT 'index=' || indexrelid::regclass FROM pg_index i JOIN pg_class c ON c.oid
  WHERE c.relnamespace = 'public'::regnamespace ORDER BY 1;
 SQL
 )"
+
+# Run Tier 1 acceptance tests against an EXISTING scratch database (the restore
+# drill's restored copy). Usage: run_tier1 DB REGEX. The test binary refuses
+# any database name that is not a scratch one.
+#   docker: built from this checkout; admin is the container superuser over TCP.
+#   host:   /opt/argon/bin/tier1.test (30-install-api.sh); admin is the postgres
+#           OS user over the local socket (peer auth), so it runs as postgres.
+run_tier1() {
+  local db=$1 re=$2 bin rc=0 log
+  log=$(mktemp)
+  require_env ARGON_MIGRATOR_PASSWORD
+  local mig="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+  if [[ $TARGET == docker ]]; then
+    require_env POSTGRES_PASSWORD
+    bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && echo .exe )}"
+    if [[ -z ${TIER1_BIN:-} ]]; then
+      (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
+    fi
+    ARGON_TEST_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable" \
+    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" -test.run "$re" -test.count=1 -test.v > "$log" 2>&1 || rc=$?
+  else
+    bin="${TIER1_BIN:-/opt/argon/bin/tier1.test}"
+    [[ -x $bin ]] || die "$bin missing — run 30-install-api.sh"
+    sudo -u postgres env ARGON_TEST_ADMIN_URL="postgres://postgres@/postgres?host=/var/run/postgresql" \
+      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" -test.run "$re" -test.count=1 -test.v > "$log" 2>&1 || rc=$?
+  fi
+  # A test binary prints PASS when its filter matches NOTHING. Count what ran.
+  local passed failed
+  passed=$(grep -c '^--- PASS' "$log" || true)
+  failed=$(grep -c '^--- FAIL' "$log" || true)
+  grep -E '^--- FAIL' -A3 "$log" | head -40 >&2 || true
+  ((passed + failed > 0)) || { tail -5 "$log" >&2; rm -f "$log"; die "run_tier1: '$re' ran no tests — a pass here would be vacuous"; }
+  rm -f "$log"
+  info "run_tier1 $re: $passed passed, $failed failed"
+  ((rc == 0 && failed == 0))
+}

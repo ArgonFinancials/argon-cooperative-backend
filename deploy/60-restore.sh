@@ -88,11 +88,16 @@ ok "manifest matches: $(grep -c '^rows\.' "$work/expected") tables, $(grep -c '^
 if [[ $mode == drill ]]; then
   info "Tier 1 probe against the restored copy"
   bash "$DEPLOY_DIR/70-verify-tier1.sh" --db "$target"
+  # The probe checks the LEDGER rules. Without this, a restore could come
+  # back with sign-in broken and the drill would still pass.
+  info "auth suite (database and service) against the restored copy"
+  run_tier1 "$target" '^TestAuth' >&2 || die "the auth suite FAILED against the restored copy"
+  ok "auth suite passes against the restored copy"
   record="$work/drill-record"
   printf 'drill_at=%s\nsource=%s\nresult=PASS\nrestore_seconds=%s\n' \
     "$(date -u +%FT%TZ)" "$key" "$restore_secs" > "$record"
   store_put "$record" "drills/$(date -u +%Y/%m/%d)/drill-$(date -u +%Y%m%dT%H%M%SZ).ok"
-  ok "RESTORE DRILL PASSED — $key restores, matches its manifest, and still enforces Tier 1"
+  ok "RESTORE DRILL PASSED — $key restores, matches its manifest, and still enforces the ledger rules and auth"
 else
   ok "restored $key into $target. Start the API: sudo systemctl start argon-api"
 fi
