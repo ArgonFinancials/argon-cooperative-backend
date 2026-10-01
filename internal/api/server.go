@@ -30,7 +30,10 @@ func NewServer(d Deps) (http.Handler, error) {
 		return nil, errors.New("api: Deps.DB is required")
 	}
 	s := &server{db: d.DB}
-	h := HandlerFromMux(NewStrictHandler(s, nil), nil)
+	h := HandlerFromMux(NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
+		RequestErrorHandlerFunc:  RequestError,
+		ResponseErrorHandlerFunc: ResponseError,
+	}), nil)
 	return s.authenticate(h), nil
 }
 
@@ -56,9 +59,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			}
 		}
 		if user == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(Problem{Code: "unauthenticated", Message: "sign in again"})
+			writeProblem(w, http.StatusUnauthorized, Problem{Code: "unauthenticated", Message: "sign in again"})
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, user)))
@@ -77,10 +78,31 @@ func (s *server) GetHealthz(ctx context.Context, _ GetHealthzRequestObject) (Get
 	return GetHealthz200Response{}, nil
 }
 
-// ErrNotBuilt: postAll has its own acceptance tests to come (LEDGER_CONTRACT
-// §1). Until then the route answers with an error, never a pretend success.
-var ErrNotBuilt = errors.New("api: POST /ledger/batches is not built yet")
+// ErrNotBuilt: postAll's acceptance tests are written and under review
+// (test/tier1/tier1_api_batch_test.go). Until the handler is written against
+// them, the route answers with an error, never a pretend success.
+var ErrNotBuilt = errors.New("api: POST /societies/{societyId}/ledger/batches is not built yet")
 
-func (s *server) PostLedgerBatches(context.Context, PostLedgerBatchesRequestObject) (PostLedgerBatchesResponseObject, error) {
+func (s *server) PostLedgerBatch(context.Context, PostLedgerBatchRequestObject) (PostLedgerBatchResponseObject, error) {
 	return nil, ErrNotBuilt
+}
+
+// RequestError answers a request the generated layer could not decode — money
+// sent as a JSON number, a body that is not JSON — as a JSON Problem, never
+// text/plain. Exported so the test fakes answer the same way.
+func RequestError(w http.ResponseWriter, _ *http.Request, err error) {
+	writeProblem(w, http.StatusBadRequest, Problem{Code: "bad_request", Message: err.Error()})
+}
+
+// ResponseError: a handler failed. The cause stays in the server's log; the
+// caller is told only that it failed. (A handler that writes says for itself
+// what was written: postAll answers its own 500.)
+func ResponseError(w http.ResponseWriter, _ *http.Request, err error) {
+	writeProblem(w, http.StatusInternalServerError, Problem{Code: "internal", Message: "the request failed"})
+}
+
+func writeProblem(w http.ResponseWriter, status int, p Problem) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(p)
 }

@@ -85,7 +85,7 @@ components:
           type: string
           description: The client-minted idempotency key. The server never generates one.
         rows: { type: integer }
-        totalKobo: { $ref: '#/components/schemas/Kobo' }
+        totalKobo: { $ref: '#/components/schemas/Magnitude' }
         asOf:
           type: string
           format: date
@@ -103,6 +103,66 @@ components:
             commit did — an admin who committed under the wrong as-at date has
             to be told which date the balances actually carry, and a bare
             acknowledgement cannot say.
+
+    LedgerBatch:
+      type: object
+      required: [kind, asOf, confirmedTotalKobo, rows]
+      properties:
+        kind:
+          type: string
+          enum: [opening_balance]
+          description: The only batch kind so far. Others are added here, each with its own double entry.
+        asOf:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            The society's own as-at date for every row, asked once. null means
+            explicitly unknown ("accumulated before migration"). NEVER defaulted
+            to the import date, and never in the future.
+        confirmedTotalKobo:
+          $ref: '#/components/schemas/Magnitude'
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/BatchRow' }
+
+    BatchRow:
+      type: object
+      required: [line, memberId, amountKobo]
+      properties:
+        line:
+          type: integer
+          minimum: 1
+          description: The row in the uploaded file. Stored on the entry, so a posted line traces back to its source.
+        memberId: { type: string, format: uuid }
+        amountKobo:
+          $ref: '#/components/schemas/Magnitude'
+
+    BatchRefusal:
+      type: object
+      required: [code, message, rows]
+      properties:
+        code:
+          type: string
+          enum:
+            - nothing_to_post
+            - total_mismatch
+            - zero_amount
+            - duplicate_member
+            - unknown_member
+            - member_already_has_balance
+            - as_of_in_future
+            - period_closed
+        message: { type: string }
+        rows:
+          type: array
+          description: The file rows that caused the refusal; empty when it is about the whole batch.
+          items:
+            type: object
+            required: [line, memberId]
+            properties:
+              line: { type: integer }
+              memberId: { type: string, format: uuid }
 
     Magnitude:
       type: string
@@ -274,29 +334,45 @@ paths:
         '200': { description: ok }
         '503': { description: database unreachable }
 
-  /ledger/batches:
+  /societies/{societyId}/ledger/batches:
     post:
-      summary: Post a whole batch atomically
+      operationId: postLedgerBatch
+      summary: postAll — commit a whole import in ONE transaction (LEDGER_CONTRACT §1)
       description: |
-        ONE TRANSACTIONAL CALL. Either every line is written or none is; there
-        is no partial outcome.
+        ONE TRANSACTIONAL CALL. Either every row is written or none is; there is
+        no partial outcome. The client sends MOVEMENTS (member, amount); the
+        server builds the double entry from the society's accounts BY ROLE
+        (0004), so the client never chooses an account:
+        opening_balance debits migration_control and credits the member's
+        member_savings line (D-01).
 
-        Idempotency-Key is minted CLIENT-SIDE from a SHA-256 of the uploaded
-        file's content, so a retry of one upload carries the same key and a
-        corrected file carries its own.
+        Idempotency-Key is the reference, minted CLIENT-SIDE from the uploaded
+        file's content (lib/importReference.ts). The server never generates one.
+        It is unique per society.
 
-        A failed call writes nothing AND does not mark the reference committed,
-        so a retry after failure can succeed.
+        Order of decisions: authenticate (401) → may this caller import for
+        this society (404 / 403) → has this reference already been committed
+        (200, whatever the body now says) → is the body sound (400 / 422) →
+        write everything or nothing (201, or 500 with nothing written).
 
-        The frontend does not queue writes offline — a non-GET with no network
-        is rejected outright with the reason on screen. So this endpoint will
-        never receive a replayed stale write from a device that was offline for
-        a day. The idempotency key is for retries within a request.
+        A REFUSED OR FAILED CALL WRITES NOTHING AND DOES NOT CLAIM THE
+        REFERENCE: a retry with the same key can succeed. The key is recorded
+        in the same transaction as the entries, never before them.
+
+        Imports for one society are serialised, so two different files naming
+        the same member cannot both give that member an opening balance.
+      security: [{ session: [] }]
       parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
         - name: Idempotency-Key
           in: header
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LedgerBatch' }
       responses:
         '201':
           description: Committed. Nothing had been posted under this reference before.
@@ -306,15 +382,48 @@ paths:
         '200':
           description: |
             Already committed. NOTHING WAS WRITTEN. The body describes what the
-            first commit did.
+            FIRST commit did — its rows, total, as-at date and posting time —
+            read from the entries, not from this request.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PostedRecord' }
+        '400':
+          description: Malformed — money that is not a non-negative decimal kobo string, a missing field. Nothing is written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No valid session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: An officer of this society whose post does not import (the read-only auditor included).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society — or one the caller holds no current post in. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: The society's chart cannot take this batch (no single migration_control or member_savings account). Nothing is written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422':
+          description: Refused, with the rows that caused it. Nothing is written and the reference is not claimed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchRefusal' }
+        '500':
           description: |
-            Refused. An entry that does not balance, a member already carrying
-            an opening balance, or a total that does not match what was
-            confirmed. Nothing is written.
+            The write failed. NOTHING WAS WRITTEN and the reference is not
+            claimed: retrying with the same key is safe and can succeed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /members/{memberId}/statement:
     get:

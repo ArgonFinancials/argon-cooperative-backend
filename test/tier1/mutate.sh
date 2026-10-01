@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mutation run for a Tier 1 acceptance suite.
 #
-#   mutate.sh [0002|0003] [--only GLOB] [--partial] [--svc]
+#   mutate.sh [0002|0003|0004|api|batch] [--only GLOB] [--partial] [--svc]
 #
 # Each suite (suite_<n>.sh) names its tests, its no-rules baseline "M0", its
 # mutants (DELIBERATELY WRONG implementations, one file each) and which tests
@@ -25,7 +25,7 @@ require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
-  0002|0003|0004|api) SUITE=$1; shift ;;
+  0002|0003|0004|api|batch) SUITE=$1; shift ;;
   --only) ONLY=$2; shift 2 ;;
   --partial) PARTIAL=1; shift ;;
   --svc) SVC=1; shift ;;

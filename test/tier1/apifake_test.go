@@ -60,7 +60,8 @@ type fakeAPI struct {
 
 func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 	f := &fakeAPI{db: pool, brk: brk}
-	h := api.HandlerFromMux(api.NewStrictHandler(f, nil), nil)
+	h := api.HandlerFromMux(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
 		if !ok {
@@ -344,6 +345,4 @@ func (f *fakeAPI) GetHealthz(context.Context, api.GetHealthzRequestObject) (api.
 	return api.GetHealthz200Response{}, nil
 }
 
-func (f *fakeAPI) PostLedgerBatches(context.Context, api.PostLedgerBatchesRequestObject) (api.PostLedgerBatchesResponseObject, error) {
-	return api.PostLedgerBatches422Response{}, nil
-}
+// PostLedgerBatch: see apifake_batch_test.go.

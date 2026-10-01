@@ -95,7 +95,14 @@ if [[ $mode == drill ]]; then
   # (TestMain does not apply the schema to ARGON_TEST_DB: the tests run
   # against what the restore brought back.)
   covered=()
-  for suite in "ledger (0002)|.|^(TestAuth|TestRole|TestApi)"                "auth (0003)|^TestAuth|"                "roles (0004)|^TestRole|"                "statement API|^TestApi|"; do
+  # postAll (TestApiBatch) joins this list when its handler exists.
+  suites=(
+    "ledger (0002)|.|^(TestAuth|TestRole|TestApi)"
+    "auth (0003)|^TestAuth|"
+    "roles (0004)|^TestRole|"
+    "statement API|^TestApiStatement|"
+  )
+  for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"
     info "$name suite against the restored copy"
     run_tier1 "$target" "$re" "$skip" >&2 || die "the $name suite FAILED against the restored copy"

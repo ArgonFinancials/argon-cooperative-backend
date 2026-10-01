@@ -64,18 +64,18 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 	defer rows.Close()
 
 	var (
-		out                  = []StatementRow{} // [] not null, when empty
-		opening, balance     int64              // member's side: positive = owed to the member
-		chargedP, chargedM   int64
+		out                = []StatementRow{} // [] not null, when empty
+		opening, balance   int64              // member's side: positive = owed to the member
+		chargedP, chargedM int64
 	)
 	from, to := req.Params.From, req.Params.To
 	for rows.Next() {
 		var (
-			id, kind, actor, label            string
-			postedAt                          time.Time
-			valueDate, ref, rev, adj, reason  *string
-			post                              *string
-			sav, partner, margin              int64
+			id, kind, actor, label           string
+			postedAt                         time.Time
+			valueDate, ref, rev, adj, reason *string
+			post                             *string
+			sav, partner, margin             int64
 		)
 		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason,
 			&actor, &post, &label, &sav, &partner, &margin); err != nil {
