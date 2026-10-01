@@ -1,7 +1,7 @@
 # Suite api — GET /members/{memberId}/statement. Sourced by mutate.sh.
 #
 # No SQL baseline: the schema is real (0001–0003) plus the 0004 interface. The
-# mutants are the 20 named breaks of the reference handler in apifake_test.go,
+# mutants are the 21 named breaks of the reference handler in apifake_test.go,
 # selected by ARGON_TEST_API_FAKE. Run with --svc.
 SUITE_INCLUDE='^TestApiStatement'
 SUITE_EXCLUDE='^$'
@@ -35,4 +35,5 @@ declare -gA SVC_TARGET_OF=(
   [officer_ever]='TestApiStatement17_FormerOfficerGetsNotFound'
   [not_found_says_why]='TestApiStatement15_AnotherMemberGetsNotFound|TestApiStatement16_OfficerOfAnotherSocietyGetsNotFound|TestApiStatement17_FormerOfficerGetsNotFound'
   [ended_session_ok]='TestApiStatement18_NoValidSessionGetsUnauthorized'
+  [period_totals_swapped]='TestApiStatement19_ChargedInPeriodKeepsPartnerAndMarginApart'
 )

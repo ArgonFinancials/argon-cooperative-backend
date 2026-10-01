@@ -31,6 +31,7 @@
 //	officer_ever             a post held at any time counts, not just now
 //	not_found_says_why       a refusal says "not permitted" (distinguishable from "no such member")
 //	ended_session_ok         an ended session still authenticates
+//	period_totals_swapped    the period's partner and margin totals are swapped
 package tier1
 
 import (
@@ -314,6 +315,9 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			ArgonMarginKobo:   api.SavingsBalance(strconv.FormatInt(margin, 10)),
 		},
 		Rows: out,
+	}
+	if f.brk == "period_totals_swapped" {
+		st.ChargedInPeriod.PartnerChargeKobo, st.ChargedInPeriod.ArgonMarginKobo = st.ChargedInPeriod.ArgonMarginKobo, st.ChargedInPeriod.PartnerChargeKobo
 	}
 	if f.brk == "balance_contract_sign" {
 		st.ClosingSavingsBalanceKobo = api.SavingsBalance(strconv.FormatInt(-run, 10))

@@ -14,9 +14,8 @@
 //   - Balances are from the member's side (positive = owed to the member).
 //   - Anyone else gets 404, byte-identical to a member that does not exist.
 //
-// Which handler runs: default api.NewServer (not yet written: every test
-// fails "NOT IMPLEMENTED"); ARGON_TEST_API_FAKE=<break> runs the mutation
-// vehicle in apifake_test.go.
+// Which handler runs: default api.NewServer (internal/api, the real one);
+// ARGON_TEST_API_FAKE=<break> runs the mutation vehicle in apifake_test.go.
 package tier1
 
 import (
@@ -488,5 +487,25 @@ func TestApiStatement18_NoValidSessionGetsUnauthorized(t *testing.T) {
 		if r := get(t, wd.srv, path, token); r.status != http.StatusUnauthorized {
 			t.Fatalf("ACCEPTED — %s got %d, want 401", what, r.status)
 		}
+	}
+}
+
+// The period's charge totals, partner and margin
+// apart, when they are not zero. Test 6 is the only other check on these
+// totals, and there the charge and its refund cancel to 0 and 0, so swapping
+// partner and margin moves 3750 − 3750 and nothing shows. The real handler
+// with exactly that swap passed all 18 tests. One more contribution, never
+// refunded, makes the totals 5000 and 3750: distinct, so a swap is visible.
+func TestApiStatement19_ChargedInPeriodKeepsPartnerAndMarginApart(t *testing.T) {
+	wd := newWorld(t)
+	c := wd.c
+	_, err := c.s.postEntry(entry{kind: "contribution_in"},
+		line{acct: c.bank, kobo: 2500000}, line{acct: c.savings, kobo: -2491250, member: wd.member},
+		line{acct: c.partner, kobo: -5000, role: "partner_charge"}, line{acct: c.margin, kobo: -3750, role: "argon_margin"})
+	fixture(t, err, "an unrefunded contribution")
+	s := decode(t, wd.statement(t, wd.memberUser, ""))
+	if s.ChargedInPeriod.Partner != "5000" || s.ChargedInPeriod.Margin != "3750" {
+		t.Fatalf("WRONG FIGURES — charged in period: partner %s, margin %s; want 5000, 3750 (one ₦87.50 charge kept, one refunded)",
+			s.ChargedInPeriod.Partner, s.ChargedInPeriod.Margin)
 	}
 }
