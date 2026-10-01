@@ -26,10 +26,10 @@ Each was written and mutation-tested before the code it covers.
 | `0003` | `tier1_0003_test.go`, `tier1_0003_service_test.go` (84) | `mutants_0003/` (49) + the auth service fake's breaks (`--svc`) | `migrations/0003_auth.up.sql`, `internal/auth` |
 | `0004` | `tier1_0004_test.go` (11) | M0 + `mutants_0004/` (8) | `migrations/0004_roles.up.sql` |
 | `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (21, `--svc`) | `internal/api/statement.go` |
-| `batch` | `tier1_api_batch_test.go` (22) | the breaks in `apifake_batch_test.go` (32, `--svc`) | `internal/api/batch.go` (not written yet: GREEN is reported as NOT RUN) |
+| `batch` | `tier1_api_batch_test.go` (22) | the breaks in `apifake_batch_test.go` (32, `--svc`) | `internal/api/batch.go` |
 
-The restore drill (`deploy/60-restore.sh --drill`) runs the 0002, 0003, 0004
-and statement suites against the restored copy.
+The restore drill (`deploy/60-restore.sh --drill`) runs every suite above (GREEN half)
+against the restored copy.
 
 ## What `make tier1-mutate` proves
 

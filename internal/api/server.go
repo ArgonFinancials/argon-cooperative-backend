@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -15,10 +16,14 @@ import (
 // Deps is what the API needs. Identity comes only from a session token
 // (Authorization: Bearer), resolved against the database by session_valid.
 type Deps struct {
-	DB *pgxpool.Pool
+	DB  *pgxpool.Pool
+	Log *slog.Logger // optional; slog.Default() when nil
 }
 
-type server struct{ db *pgxpool.Pool }
+type server struct {
+	db  *pgxpool.Pool
+	log *slog.Logger
+}
 
 type callerKey struct{}
 
@@ -29,7 +34,10 @@ func NewServer(d Deps) (http.Handler, error) {
 	if d.DB == nil {
 		return nil, errors.New("api: Deps.DB is required")
 	}
-	s := &server{db: d.DB}
+	s := &server{db: d.DB, log: d.Log}
+	if s.log == nil {
+		s.log = slog.Default()
+	}
 	h := HandlerFromMux(NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  RequestError,
 		ResponseErrorHandlerFunc: ResponseError,
@@ -78,14 +86,7 @@ func (s *server) GetHealthz(ctx context.Context, _ GetHealthzRequestObject) (Get
 	return GetHealthz200Response{}, nil
 }
 
-// ErrNotBuilt: postAll's acceptance tests are written and under review
-// (test/tier1/tier1_api_batch_test.go). Until the handler is written against
-// them, the route answers with an error, never a pretend success.
-var ErrNotBuilt = errors.New("api: POST /societies/{societyId}/ledger/batches is not built yet")
-
-func (s *server) PostLedgerBatch(context.Context, PostLedgerBatchRequestObject) (PostLedgerBatchResponseObject, error) {
-	return nil, ErrNotBuilt
-}
+// PostLedgerBatch (postAll): batch.go.
 
 // RequestError answers a request the generated layer could not decode — money
 // sent as a JSON number, a body that is not JSON — as a JSON Problem, never

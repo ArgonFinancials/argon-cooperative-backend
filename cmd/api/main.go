@@ -44,7 +44,7 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
-	h, err := api.NewServer(api.Deps{DB: pool})
+	h, err := api.NewServer(api.Deps{DB: pool, Log: log})
 	if err != nil {
 		log.Error("api", "err", err)
 		os.Exit(1)

@@ -27,6 +27,7 @@ package tier1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -123,11 +124,15 @@ func newKey() string {
 	return fmt.Sprintf("IMPORT-%016x", seq.Add(1)*104729+time.Now().UnixNano()&0xffffff)
 }
 
-func postBatch(t *testing.T, c *http.Client, srv *httptest.Server, society, key, token string, body any) (resp, error) {
+func postBatch(t *testing.T, c *http.Client, srv *httptest.Server, society, key, token string, body any, ctx ...context.Context) (resp, error) {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	fixture(t, err, "encode body")
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/societies/"+society+"/ledger/batches", bytes.NewReader(raw))
+	rc := bg()
+	if len(ctx) > 0 {
+		rc = ctx[0]
+	}
+	req, _ := http.NewRequestWithContext(rc, http.MethodPost, srv.URL+"/societies/"+society+"/ledger/batches", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
@@ -331,14 +336,37 @@ func settled(t *testing.T) {
 	}
 }
 
-// race runs a, then b after a head start, and reports whether a was still in
-// flight when b began — without that, the "race" never happened.
-func race(a, b func() resp, headStart time.Duration) (ra, rb resp, overlapped bool) {
+// stalled reports, without failing the test (it is polled from goroutines),
+// whether the stall has been reached: the stalled line's write has begun.
+func (f *fault) stalled() bool {
+	var v int64
+	var called bool
+	if err := db.QueryRow(bg(), `SELECT last_value, is_called FROM `+f.hits).Scan(&v, &called); err != nil {
+		return false
+	}
+	return called && v > 0
+}
+
+// whenStalled blocks until the stall is reached (true), or 10s pass (false).
+// The fixtures gate on THIS, never on a head start measured by the clock: a
+// slow moment must not decide whether the race being tested happened at all.
+func (f *fault) whenStalled() bool {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if f.stalled() {
+			return true
+		}
+	}
+	return false
+}
+
+// race runs a, and b once a is inside its write (stalled), and reports whether
+// a was still in flight when b began — without that, the race never happened.
+func race(a, b func() resp, f *fault) (ra, rb resp, overlapped bool) {
 	var wg sync.WaitGroup
 	var aDone, bStart time.Time
 	wg.Add(2)
 	go func() { defer wg.Done(); ra = a(); aDone = time.Now() }()
-	go func() { defer wg.Done(); time.Sleep(headStart); bStart = time.Now(); rb = b() }()
+	go func() { defer wg.Done(); f.whenStalled(); bStart = time.Now(); rb = b() }()
 	wg.Wait()
 	return ra, rb, aDone.After(bStart)
 }
@@ -470,6 +498,12 @@ func TestApiBatch04_RetryAfterFailureSucceeds(t *testing.T) {
 	eachOnce(t, w.members, "WRONG WRITE")
 }
 
+// LIMIT: the break no_idempotency (a repeat attempts to post again) goes red
+// here as a REFUSAL, not as a double posting — member_already_has_balance, the
+// total check and the unique (society, reference) key all stand in its way. So
+// these tests prove the ANSWER a repeat gets (200, the first commit's record),
+// which is what the client acts on; that a repeat cannot post twice is proven
+// by test 7 (racing) and test 10, not by the key alone.
 func TestApiBatch05_SecondCallWritesNothingAndReturnsTheFirstCommit(t *testing.T) {
 	w := newBatchWorld(t, 3)
 	key := newKey()
@@ -523,7 +557,7 @@ func TestApiBatch07_RetryRacingTheOriginalPostsOnce(t *testing.T) {
 			return r
 		}
 	}
-	a, b, overlapped := race(call(tokA), call(tokB), 300*time.Millisecond)
+	a, b, overlapped := race(call(tokA), call(tokB), f)
 	if !overlapped || f.count(f.hits) == 0 {
 		t.Fatalf("FIXTURE: the second call did not start while the first was writing (overlap %v, stalls %d)", overlapped, f.count(f.hits))
 	}
@@ -555,10 +589,14 @@ func TestApiBatch08_ClientTimeoutThenRetryPostsExactlyOnce(t *testing.T) {
 	key, body := newKey(), file("2025-12-31", w.members, 10, 20, 30)
 	before := stateOf(t, w.s.id)
 
-	impatient := &http.Client{Timeout: 300 * time.Millisecond}
-	if r, err := postBatch(t, impatient, w.srv, w.s.id, key, signIn(t, w.secretary), body); err == nil {
+	// The client gives up once its request is inside the write — not after a
+	// fixed time, which a slow moment could spend before the write began.
+	ctx, giveUp := context.WithCancel(bg())
+	go func() { f.whenStalled(); giveUp() }()
+	if r, err := postBatch(t, &http.Client{}, w.srv, w.s.id, key, signIn(t, w.secretary), body, ctx); err == nil {
 		t.Fatalf("FIXTURE: the client was meant to give up mid-call; it got %d: %s", r.status, r.body)
 	}
+	giveUp()
 	settled(t) // whatever the abandoned request was going to do, it has done
 	if f.count(f.hits) == 0 {
 		t.Fatalf("FIXTURE: the abandoned call never reached the write")
@@ -601,7 +639,7 @@ func TestApiBatch09_TwoImportsNamingOneMemberCannotBothPost(t *testing.T) {
 			return r
 		}
 	}
-	a, b, overlapped := race(call(tokA, fileA), call(tokB, fileB), 300*time.Millisecond)
+	a, b, overlapped := race(call(tokA, fileA), call(tokB, fileB), f)
 	if !overlapped || f.count(f.hits) == 0 {
 		t.Fatalf("FIXTURE: the second import did not start while the first was writing (overlap %v)", overlapped)
 	}
@@ -656,6 +694,11 @@ func TestApiBatch11_ReversedOpeningBalanceDoesNotBlockAReimport(t *testing.T) {
 	record(t, w.post(t, newKey(), file("2025-12-31", w.members, 45000)), http.StatusCreated)
 }
 
+// A wrong total on a FIRST call: refused, nothing written. confirmedTotalKobo
+// is the figure the secretary typed against the per-branch subtotals; if the
+// server accepted one that disagrees with the rows, the secretary would
+// confirm one figure and another would post. Then the refusal must not have
+// claimed the key: the corrected retry, same file, same key, commits (201).
 func TestApiBatch12_TotalMismatchRefusesAndDoesNotClaimTheReference(t *testing.T) {
 	w := newBatchWorld(t, 2)
 	key := newKey()
@@ -683,6 +726,13 @@ func TestApiBatch13_DuplicateMemberInTheFile(t *testing.T) {
 	nothingWritten(t, w.s.id, before, "one member appeared twice")
 }
 
+// LIMIT, stated where it will be read: a member of ANOTHER society is also
+// refused by the schema (ledger_line_member_in_society, 0002), so the break
+// foreign_member_ok goes red here through the schema's 500, not through the
+// handler. The mutation run therefore does not show WHICH layer caught it.
+// The test still pins the handler: it wants a 422 unknown_member naming the
+// line, which only the handler gives, so removing the handler's check turns
+// it red (500), never green. Shown by direct sabotage of internal/api/batch.go.
 func TestApiBatch14_MemberOutsideTheSocietyIsUnknown(t *testing.T) {
 	w := newBatchWorld(t, 1)
 	foreign := newSociety(t).member("")
@@ -706,6 +756,18 @@ func TestApiBatch15_NothingToPost(t *testing.T) {
 }
 
 // §0: money is a non-negative decimal kobo string here — a movement's size.
+// A ₦0 row and a negative row are refused for DIFFERENT reasons: zero means
+// nothing (more likely a parsing artifact than an intention); a negative is
+// a member who owes — a loan, not savings — and a migration must not create
+// debt from a spreadsheet column.
+//
+// LIMIT, stated where it will be read: the zero case is also refused by the
+// schema (amount_not_zero, 0001), so the break zero_written goes red through
+// the schema's 500, not through the handler; the mutation run does not show
+// which layer caught it. The test still pins the handler (it wants 422
+// zero_amount naming the row), so removing the handler's check turns it red,
+// never green. The negative case is the handler's alone: a negative line is a
+// legal line. Both shown by direct sabotage of internal/api/batch.go.
 func TestApiBatch16_AmountsAreMagnitudeStrings(t *testing.T) {
 	w := newBatchWorld(t, 2)
 	before := stateOf(t, w.s.id)
