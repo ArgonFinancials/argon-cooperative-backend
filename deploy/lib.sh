@@ -166,8 +166,11 @@ SQL
 #   docker: built from this checkout; admin is the container superuser over TCP.
 #   host:   /opt/argon/bin/tier1.test (30-install-api.sh); admin is the postgres
 #           OS user over the local socket (peer auth), so it runs as postgres.
+# run_tier1 DB RUN-REGEX [SKIP-REGEX]
 run_tier1() {
-  local db=$1 re=$2 bin rc=0 log
+  local db=$1 re=$2 skip=${3:-} bin rc=0 log
+  local args=(-test.run "$re" -test.count=1 -test.v)
+  [[ -n $skip ]] && args+=(-test.skip "$skip")
   log=$(mktemp)
   require_env ARGON_MIGRATOR_PASSWORD
   local mig="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
@@ -178,20 +181,23 @@ run_tier1() {
       (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
     fi
     ARGON_TEST_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable" \
-    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" -test.run "$re" -test.count=1 -test.v > "$log" 2>&1 || rc=$?
+    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
   else
     bin="${TIER1_BIN:-/opt/argon/bin/tier1.test}"
     [[ -x $bin ]] || die "$bin missing — run 30-install-api.sh"
     sudo -u postgres env ARGON_TEST_ADMIN_URL="postgres://postgres@/postgres?host=/var/run/postgresql" \
-      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" -test.run "$re" -test.count=1 -test.v > "$log" 2>&1 || rc=$?
+      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
   fi
   # A test binary prints PASS when its filter matches NOTHING. Count what ran.
   local passed failed
   passed=$(grep -c '^--- PASS' "$log" || true)
   failed=$(grep -c '^--- FAIL' "$log" || true)
-  grep -E '^--- FAIL' -A3 "$log" | head -40 >&2 || true
+  # A test's messages come BEFORE its "--- FAIL" line: print each failure with
+  # the lines since its own "=== RUN", never the next test's.
+  awk '/^=== RUN/ {buf=""; next} /^--- FAIL/ {print $0 buf; buf=""; next} {buf=buf "\n" $0}' "$log" | head -60 >&2 || true
   ((passed + failed > 0)) || { tail -5 "$log" >&2; rm -f "$log"; die "run_tier1: '$re' ran no tests — a pass here would be vacuous"; }
   rm -f "$log"
-  info "run_tier1 $re: $passed passed, $failed failed"
+  info "run_tier1 $re${skip:+ (skipping $skip)}: $passed passed, $failed failed"
+  RUN_TIER1_PASSED=$passed
   ((rc == 0 && failed == 0))
 }

@@ -27,14 +27,18 @@ if [[ $TARGET == host ]]; then
   fi
 fi
 
-info "migrate ${args[*]} on $ARGON_DB"
+# What the schema is at BEFORE this run. If the run fails, this — not what
+# migrate records afterwards — is the version to force back to.
+before=$(run_migrate "$ARGON_DB" version 2>&1 || true)
+info "migrate ${args[*]} on $ARGON_DB (schema now at: $before)"
 if ! run_migrate "$ARGON_DB" "${args[@]}"; then
   v=$(run_migrate "$ARGON_DB" version 2>&1 || true)
-  die "migration failed; migrate now records version '$v'.
-  Every migration here is ONE transaction (BEGIN…COMMIT), so a failure leaves the schema
-  at the previous version — but migrate marks it dirty and refuses further runs.
-  Read the error above, fix its cause, then:  $MIGRATE_BIN … force <previous version>
-  Do not force forward past a failed migration."
+  die "migration failed. migrate now records '$v' — that is where it was GOING, not where
+  the schema IS. Every migration here is ONE transaction (BEGIN…COMMIT): the failed one
+  changed nothing, so the schema is still at '$before'.
+  (A failed up to N records N dirty; a refused down from N records N-1 dirty.)
+  Read the error above, fix its cause, then:  $MIGRATE_BIN … force ${before%% *}
+  Never force to the number migrate recorded. See deploy/README.md, \"migrate says dirty\"."
 fi
 apply_grants "$ARGON_DB"
 ok "schema version: $(run_migrate "$ARGON_DB" version 2>&1)"

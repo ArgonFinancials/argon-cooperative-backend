@@ -79,6 +79,33 @@ Anyone with root on the host or the migrator password can rewrite the ledger.
 Nothing in the schema changes that. Access control on the host and backups the
 host cannot delete (`iam/`: no `s3:DeleteObject`) are what stand behind it.
 
+## Incident: migrate says "dirty"
+
+**The version migrate records after a failure is where it was going, not where
+the schema is.** migrate writes the target version, marked dirty, *before* it
+runs the file:
+
+| What failed | migrate records | The schema is actually at |
+|---|---|---|
+| `up` to N (e.g. 0004's guard: accounts already exist) | N, dirty | N−1 |
+| `down` from N (e.g. 0004's down: ledger lines exist) | N−1, dirty | N |
+
+Every migration here is one transaction (`BEGIN…COMMIT`), so a failed one has
+changed nothing. Recovery is always to force the version the schema was at
+**before the command**. `40-migrate.sh` prints that number when a run fails:
+
+```bash
+migrate -path migrations -database "$URL" force <version before the command>
+```
+
+Never force to the number migrate recorded. After a refused down, that would
+tell the next `up` that 0004 is not applied, and it would try to add a column
+that already exists. If in any doubt, check the schema, not the tool. For
+example, 0004 is applied if `accounts.role` exists:
+`SELECT 1 FROM information_schema.columns WHERE table_name='accounts' AND column_name='role';`
+
+Both rows were reproduced on a scratch database on 2026-10-01.
+
 ## Known limits
 - Nightly `pg_dump`, so RPO is up to 24 h. WAL archiving (pgBackRest/WAL-G) is the next step for a funds ledger.
 - A failed timer shows in `systemctl --failed` and nowhere else until an alert channel is wired.
