@@ -137,10 +137,11 @@ func TestProof6_BatchActIsALedgerBatchAct(t *testing.T) {
 	a := newAuth(t)
 	p := a.secretary()
 	here := a.session(p.user, a.device(p.user))
+	proof := a.mint(p.user, "pin_change") // before the transaction, as the auth service mints: not the thing under test
 	refused(t, a.tx(func(x pgx.Tx) error {
 		var other string
 		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, actor_session_id, proof_id, target_user_id, new_pin_hash)
-			VALUES ('pin_change', $1, $2, $3, $1, $4) RETURNING id`, p.user, here.id, a.mint(p.user, "pin_change"), argonHash).Scan(&other); err != nil {
+			VALUES ('pin_change', $1, $2, $3, $1, $4) RETURNING id`, p.user, here.id, proof, argonHash).Scan(&other); err != nil {
 			return err
 		}
 		return a.batchIn(x, p.user, other)

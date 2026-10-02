@@ -22,6 +22,7 @@ import (
 //	the reference already committed?      → 200, the FIRST commit's record, whatever the body says
 //	is the body sound?                    → 400 / 422
 //	the accounts, by role                 → 409
+//	the step-up: an act spends the proof  → 403 step_up_required (0005)
 //	write the batch, its entries, lines   → 201, or roll back: 500
 //
 // The reference is written in the same transaction as the entries, never
@@ -42,6 +43,12 @@ type batchRefusal struct {
 }
 
 func (r *batchRefusal) Error() string { return r.code }
+
+var errStepUp = errors.New("step-up required")
+
+// The refusals that mean "no usable proof": 0003's (missing, not the actor's,
+// stale, spent) and 0005's (minted for another act, or in this transaction).
+var stepUpRefusals = map[string]bool{"act_needs_pin_proof": true, "act_proof_for_this_act": true, "proof_minted_elsewhere": true}
 
 var errChart = errors.New("the society's chart cannot take this batch: it needs exactly one migration_control and one member_savings account")
 
@@ -83,9 +90,26 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 		if err != nil {
 			return err
 		}
+		// The step-up (0005), only now that something is about to be
+		// written, and inside this transaction: a repeat needs no proof, a
+		// refusal never touches it, a failure rolls its spending back. The act
+		// spends the proof; 0003 and 0005 refuse, by name, one that is missing,
+		// someone else's, stale, spent, minted for another act, or minted here.
+		if b.PinProofId == nil {
+			return errStepUp
+		}
+		var act string
+		if err := x.QueryRow(ctx, `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('ledger_batch', $1, $2) RETURNING id::text`,
+			caller, b.PinProofId.String()).Scan(&act); err != nil {
+			var pg *pgconn.PgError
+			if errors.As(err, &pg) && stepUpRefusals[pg.ConstraintName] {
+				return errStepUp
+			}
+			return err
+		}
 		var batch string
-		if err := x.QueryRow(ctx, `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id::text`, society, ref, caller, len(b.Rows), total).Scan(&batch); err != nil {
+		if err := x.QueryRow(ctx, `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo, authorised_by)
+			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`, society, ref, caller, len(b.Rows), total, act).Scan(&batch); err != nil {
 			return err
 		}
 		var asOf any // NULL stays NULL: "accumulated before migration", never the import date
@@ -126,6 +150,9 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 		return PostLedgerBatch400JSONResponse{Code: "bad_request", Message: refusal.msg}, nil
 	case errors.As(err, &refusal):
 		return refusal.response(), nil
+	case errors.Is(err, errStepUp):
+		return PostLedgerBatch403JSONResponse{Code: "step_up_required",
+			Message: "This import needs your PIN: a proof minted for it, in the last five minutes, not yet used. Nothing was posted."}, nil
 	case errors.Is(err, errChart):
 		return PostLedgerBatch409JSONResponse{Code: "chart_incomplete", Message: errChart.Error()}, nil
 	case errors.As(err, &pg) && pg.ConstraintName == "entry_not_in_closed_period":

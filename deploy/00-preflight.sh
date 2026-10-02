@@ -36,8 +36,11 @@ if [[ $TARGET == local ]]; then
     tv=$("$tool" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
     [[ $tv == "${v:0:2}" ]] || flag "$tool on PATH is major ${tv:-missing}; the server is ${v:0:2}"
   done
-  taken=$(q "SELECT string_agg(rolname, ', ') FROM pg_roles WHERE rolname LIKE 'argon\_%'")
-  [[ -z $taken ]] && info "no argon_* roles exist yet" || info "argon_* roles already present: $taken (20-roles.sh is idempotent and resets their passwords from $ARGON_ENV)"
+  ours="'argon_owner','argon_migrator','argon_app','argon_backup','argon_auth'"
+  mine=$(q "SELECT string_agg(rolname, ', ' ORDER BY rolname) FROM pg_roles WHERE rolname IN ($ours)")
+  others=$(q "SELECT string_agg(rolname, ', ' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'argon\_%' AND rolname NOT IN ($ours)")
+  [[ -z $mine ]] && info "none of the five argon roles exist yet" || info "argon roles already present: $mine (20-roles.sh is idempotent and resets THESE passwords from $ARGON_ENV)"
+  [[ -z $others ]] || info "other argon_* roles on this server, not ours and never touched: $others"
   ((fail == 0)) && ok "local postgres $v reachable as $POSTGRES_SUPERUSER" || die "preflight failed"
   exit 0
 fi
