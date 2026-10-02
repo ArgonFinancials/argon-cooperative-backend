@@ -1,0 +1,7 @@
+# Only what the API image needs; never secrets or local state.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!api/

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# HOST ONLY. Installs the nightly backup and weekly restore-drill timers —
+# THE SERVER. Installs the nightly backup and weekly restore-drill timers —
 # but only after a drill has passed by hand, so the first scheduled drill is
 # not also the first time the restore path has ever run.
 source "$(dirname "$0")/lib.sh"
-[[ $TARGET == host ]] || die "80-install-timers.sh is host-only"
+on_server || die "80-install-timers.sh is for the server (ARGON_HOST=1)"
 [[ $EUID -eq 0 ]] || die "run with sudo"
 
 case "$BACKUP_STORE" in

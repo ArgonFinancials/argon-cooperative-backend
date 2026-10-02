@@ -33,7 +33,7 @@ esac; done
 # runs. On a shared developer server only scratch names may be dropped; on
 # EC2, only the real database or a scratch one.
 if [[ $mode == real ]]; then
-  if [[ $TARGET == host ]]; then
+  if on_server; then
     [[ $into == "$ARGON_DB" ]] || assert_scratch "$into"
   else
     assert_scratch "$into"
@@ -62,6 +62,9 @@ else
   ((confirm)) || die "real restore into '$into' destroys it. Re-run with --confirm."
   if [[ $TARGET == host ]] && systemctl is-active -q argon-api; then
     die "argon-api is running — sudo systemctl stop argon-api first"
+  fi
+  if [[ $TARGET == docker ]] && on_server && [[ -n $(dc ps -q api 2>/dev/null) ]]; then
+    die "the api container is running — stop it first: docker compose --env-file $ARGON_ENV -f $COMPOSE_FILE stop api"
   fi
   target=$into
   info "dropping and recreating $target"

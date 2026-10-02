@@ -1,50 +1,41 @@
 #!/usr/bin/env bash
-# HOST ONLY. Builds the API from this checkout, installs it and the deploy
-# scripts under /opt/argon, writes /etc/argon/argon.env and the systemd unit.
-# Does NOT start the API — that happens after migrations (40) have run.
+# THE SERVER. Prepares the API to run as a container, from the installed
+# release (/opt/argon/src): builds the image, builds the restore drill's test
+# binary, writes the container's environment. Does NOT start the API:
+# starting it is its own deliberate step, after the drill.
 #
-# Run from the checkout:  sudo ARGON_ENV=/etc/argon/deploy.env deploy/30-install-api.sh
+#   cd /opt/argon/src && sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/30-install-api.sh
+#
+# The container's environment (/etc/argon/argon.env): the handlers connect as
+# argon_app, the auth service on its own connection as argon_auth, both to the
+# postgres service on Argon's network.
 source "$(dirname "$0")/lib.sh"
-[[ $TARGET == host ]] || die "30-install-api.sh is host-only"
+on_server || die "30-install-api.sh is for the server (ARGON_HOST=1)"
+[[ $TARGET == docker ]] || die "on the server the API runs in a container: TARGET=docker"
 [[ $EUID -eq 0 ]] || die "run with sudo"
-require_env ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_CODE_KEY API_PORT
+[[ $REPO_DIR == /opt/argon/src ]] || die "run from the installed release (/opt/argon/src), not from $REPO_DIR: see 05-install-release.sh"
+require_env ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_CODE_KEY ARGON_DB API_PORT
 [[ $ARGON_CODE_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CODE_KEY must be at least 32 bytes of lowercase hex (openssl rand -hex 32)"
-builder=${SUDO_USER:-ubuntu}
+command -v go >/dev/null || die "go not found: run 15-install-tools.sh"
 
-id argon &>/dev/null || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin argon
-install -d -m 0755 /opt/argon /opt/argon/bin
-install -d -m 0750 -o root -g argon /etc/argon
+export ARGON_RELEASE=$(cat "$REPO_DIR/RELEASE")
+info "building the restore drill's test binary"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+(cd "$REPO_DIR" && GOPATH=/root/go GOCACHE=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=1 \
+  go test -c -tags tier1 -o "$tmp/tier1.test" ./test/tier1/) || die "cannot build the tier1 test binary"
+install -m 0755 "$tmp/tier1.test" /opt/argon/bin/tier1.test
 
-info "building as $builder"
-out=$(sudo -u "$builder" mktemp -d)
-sudo -u "$builder" env -C "$REPO_DIR" PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0 \
-  go build -trimpath -ldflags "-s -w" -o "$out/argon-api" ./cmd/api
-install -m 0755 "$out/argon-api" /opt/argon/bin/argon-api
-# The Tier 1 acceptance tests, for the restore drill to run against a restored copy.
-sudo -u "$builder" env -C "$REPO_DIR" PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0   go test -c -tags tier1 -o "$out/tier1.test" ./test/tier1/
-install -m 0755 "$out/tier1.test" /opt/argon/bin/tier1.test
-rm -rf "$out"
-ok "/opt/argon/bin/argon-api"
+info "building the API image argon-api:$ARGON_RELEASE"
+dc build api || die "image build failed"
 
-info "installing deploy scripts and migrations"
-rm -rf /opt/argon/deploy /opt/argon/migrations
-cp -r "$REPO_DIR/deploy" /opt/argon/deploy
-cp -r "$REPO_DIR/migrations" /opt/argon/migrations
-rm -f /opt/argon/deploy/env/*.env        # examples only; secrets live in /etc/argon
-chmod -R go-w /opt/argon
-
-umask 027
+umask 077
 cat > /etc/argon/argon.env <<EOF
-DATABASE_URL=postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/${ARGON_DB}?sslmode=disable
-AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/${ARGON_DB}?sslmode=disable
+DATABASE_URL=postgres://argon_app:${ARGON_APP_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
+AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
 AUTH_CODE_KEY=${ARGON_CODE_KEY}
-PORT=${API_PORT}
+PORT=8080
 ENV=production
 EOF
-chown root:argon /etc/argon/argon.env; chmod 0640 /etc/argon/argon.env
-chmod 0600 "$ARGON_ENV"
-
-install -m 0644 "$DEPLOY_DIR/systemd/argon-api.service" /etc/systemd/system/argon-api.service
-systemctl daemon-reload
-systemctl enable argon-api.service
-ok "argon-api.service installed and enabled (not started). Start after 40-migrate.sh:  sudo systemctl start argon-api"
+chmod 0600 /etc/argon/argon.env "$ARGON_ENV"
+ok "image argon-api:$ARGON_RELEASE and /opt/argon/bin/tier1.test ready; the API is NOT started"
+info "start it deliberately:  cd /opt/argon/src && sudo docker compose --env-file $ARGON_ENV -f $COMPOSE_FILE --profile api up -d api"

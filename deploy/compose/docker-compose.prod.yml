@@ -1,0 +1,55 @@
+# Production stack on the EC2 host: PostgreSQL 18 and the API as containers.
+# Used by every deploy script through lib.sh (TARGET=docker,
+# COMPOSE_FILE=/opt/argon/src/deploy/compose/docker-compose.prod.yml), with
+# /etc/argon/deploy.env as its --env-file.
+#
+#   - postgres:18 on DEBIAN (glibc), not alpine: musl would add a third
+#     collation rule set beside Windows and glibc.
+#   - Argon's OWN network: anything else that ever runs on this host cannot
+#     reach this Postgres by being on the default bridge.
+#   - EVERY published port on 127.0.0.1. Docker's published ports bypass ufw,
+#     so a bare "5432:5432" would be on the internet; deploy/75-assert-loopback.sh
+#     checks this by script after every install.
+#   - The API is in the "api" profile: `up` for the database never starts it.
+#     Starting the API is its own deliberate step.
+name: argon
+
+services:
+  postgres:
+    image: postgres:18-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/argon/deploy.env}
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:${PGPORT:-5432}:5432"]
+    volumes: ["argon-pgdata:/var/lib/postgresql"]   # 18+ images keep PGDATA under /var/lib/postgresql/18/docker
+    networks: [argon]
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+
+  api:
+    profiles: ["api"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: argon-api:${ARGON_RELEASE:-local}
+    restart: unless-stopped
+    env_file: [/etc/argon/argon.env]
+    ports: ["127.0.0.1:${API_PORT:-8080}:8080"]
+    networks: [argon]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+networks:
+  argon:
+    name: argon
+
+volumes:
+  # Named, and deleted by `docker compose down -v` or a volume prune: never run
+  # either on this host. The data's only other copy is the backups.
+  argon-pgdata:
+    name: argon-pgdata

@@ -3,20 +3,24 @@
 The same scripts run against every target. Only the env file differs:
 `deploy/env/local.env` or `/etc/argon/deploy.env`, selected with `ARGON_ENV`.
 `TARGET` says where Postgres is: `local` (a server already running on this
-machine), `docker` (the compose container), or `host` (EC2).
+machine), `docker` (a compose container: a developer machine, or the EC2
+server with `ARGON_HOST=1`), or `host` (a native server install).
 
 | Script | Target | Purpose |
 |---|---|---|
 | `00-preflight.sh` | all | Read-only. Aborts if the host carries anything not on the allowlist. |
-| `10-install-postgres.sh` | host | PostgreSQL 18 from PGDG (asserted: major and source), loopback-only, scram. Asserts the binding. |
-| `15-install-tools.sh` | host | Go (pinned + sha256), migrate CLI, AWS CLI. |
+| `05-install-release.sh` | server | The checkout becomes the release at `/opt/argon/src`, which scripts, timers and the image build run from. |
+| `10-start-postgres.sh` | server | The postgres:18 (Debian) container on Argon's own network, published on loopback. Asserts major and loopback. |
+| `15-install-tools.sh` | server | Go (pinned + sha256) for the drill's test binary, the migrate CLI; the AWS CLI once backups go to S3. |
 | `20-roles.sh` | all | argon_owner / argon_migrator / argon_app / argon_backup / argon_auth, the database. |
-| `30-install-api.sh` | host | Build and install the API, `/etc/argon/argon.env`, systemd unit (not started). |
+| `30-install-api.sh` | server | The API image, the drill's test binary, the container's env file. Does not start the API. |
 | `40-migrate.sh` | all | Migrate as argon_migrator, then `sql/grants.sql`. Host: backup first, `--confirm`. |
 | `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
 | `60-restore.sh` | all | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
 | `70-verify-tier1.sh` | all | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
 | `80-install-timers.sh` | host | Nightly backup and weekly drill timers. Refuses until a drill has passed. |
+| `75-assert-loopback.sh` | server | Every listener and every published container port on loopback, except `PUBLIC_PORTS`. Run after anything that can open a port. |
+| `85-install-nginx.sh` | server | Nginx on loopback only: healthz proxied, everything else refused until TLS exists. |
 
 ## Local
 
@@ -44,50 +48,59 @@ refuses a server that is not PostgreSQL 18: see "One major version" below.
 `TARGET=docker` still works with `docker-compose.yml` (`PGPORT=5433`, the
 container's own superuser password, `make up`).
 
-## EC2 (Ubuntu 26.04, arm64)
+## EC2 (Ubuntu 26.04, arm64): containers
 
-Prerequisites, all yours to arrange:
-1. An S3 bucket with versioning and Block Public Access on, and a lifecycle rule for old dumps.
-2. An instance role with `iam/argon-backup-policy.json`. It has no Delete, so a compromised host cannot erase its own backups.
-3. Security group: 22 from your IP only. Never 5432. 8080 stays closed until a proxy/TLS decision is made.
+PostgreSQL 18 (Debian image) and the API run as containers on Argon's own
+Docker network (`deploy/compose/docker-compose.prod.yml`). Nginx runs on the
+host. **Everything listens on loopback only**, except sshd; Docker's published
+ports bypass ufw, so `75-assert-loopback.sh` checks this by script after every
+step that can open a port. Public exposure waits for a domain and TLS.
 
 ```bash
-# on the instance, from a checkout of this repo
+# 1. The code, on the instance (CI does this later): a checkout at ~/argon-src.
+# 2. The secrets, generated ON THE INSTANCE straight into the file (never typed or pasted):
 sudo install -d -m 0750 /etc/argon
-sudo install -m 0600 deploy/env/ec2.env.example /etc/argon/deploy.env
-# Generate the secrets ON THE INSTANCE, straight into the file (never typed, never pasted):
-for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD; do
+sudo install -m 0600 ~/argon-src/deploy/env/ec2.env.example /etc/argon/deploy.env
+for v in POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD; do
   sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
 done
 sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
-# Before Part B (the S3 bucket) exists, back up to a local directory instead
-# (see "Stated gap" below: that is NOT a backup):
-#   sudo sed -i 's|^BACKUP_STORE=.*|BACKUP_STORE=file:///var/backups/argon|' /etc/argon/deploy.env
-sudo nano /etc/argon/deploy.env          # check the rest: ARGON_DB, PGPORT, API_PORT, BACKUP_STORE
-# Ubuntu 26.04's sudo ignores -E ("preserving the entire environment is not
-# supported"), so ARGON_ENV is passed on each sudo line, not exported.
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/00-preflight.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/10-install-postgres.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/15-install-tools.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/20-roles.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/30-install-api.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/40-migrate.sh up --confirm
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/70-verify-tier1.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/50-backup.sh
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/60-restore.sh --drill
-sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/80-install-timers.sh
-sudo systemctl start argon-api && curl -s 127.0.0.1:8080/healthz
+
+# 3. Ubuntu 26.04's sudo ignores -E, so ARGON_ENV goes on each sudo line.
+E=ARGON_ENV=/etc/argon/deploy.env
+cd ~/argon-src
+sudo $E bash deploy/00-preflight.sh          # read-only: nothing unexpected on this host
+sudo $E bash deploy/05-install-release.sh    # the checkout becomes the release at /opt/argon/src
+cd /opt/argon/src                            # every later step runs from the release
+sudo $E bash deploy/15-install-tools.sh      # Go (the drill's test binary) and the migrate CLI
+sudo $E bash deploy/10-start-postgres.sh     # the postgres container; asserts loopback
+sudo $E bash deploy/20-roles.sh              # roles and the argon database
+sudo $E bash deploy/30-install-api.sh        # API image, drill binary, /etc/argon/argon.env; NOT started
+sudo $E bash deploy/40-migrate.sh up --confirm
+sudo $E bash deploy/70-verify-tier1.sh       # the probe, in a scratch database
+sudo $E bash deploy/50-backup.sh
+sudo $E bash deploy/60-restore.sh --drill    # restore, manifest, probe and every suite on the copy
+sudo $E bash deploy/80-install-timers.sh     # refuses until a drill has passed
+sudo $E bash deploy/85-install-nginx.sh      # loopback only; asserts loopback
+sudo $E bash deploy/75-assert-loopback.sh
+
+# 4. DELIBERATELY, after the drill result has been read: start the API.
+sudo docker compose --env-file /etc/argon/deploy.env -f /opt/argon/src/deploy/compose/docker-compose.prod.yml --profile api up -d api
+curl -s 127.0.0.1:8080/healthz && curl -s 127.0.0.1/healthz   # direct, and through nginx
 ```
 
-From a laptop, the database is reached only through a tunnel:
-`ssh -L 5433:127.0.0.1:5432 ubuntu@<host>`.
+From a laptop, everything is reached through an SSH tunnel, e.g.
+`ssh -L 8080:127.0.0.1:8080 ubuntu@<host>`.
 
-`/etc/argon/deploy.env` carries four role passwords and one key, all generated
-on the instance: migrator, app, backup, **`ARGON_AUTH_PASSWORD`** (the auth
-service's role, 0005) and **`ARGON_CODE_KEY`** (the HMAC key for sign-in code
-digests). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
-`30-install-api.sh` writes the API's own `/etc/argon/argon.env` from them: the
-app's connection as argon_app, the auth service's as argon_auth, and the key.
+**Never run `docker compose down -v` or a volume prune on this host.** The
+database lives in the named volume `argon-pgdata`, and its only other copy is
+the backups.
+
+`/etc/argon/deploy.env` carries the container's superuser password, four role
+passwords and the code key, all generated on the instance; `30-install-api.sh`
+writes the API container's `/etc/argon/argon.env` from them (the handlers as
+argon_app, the auth service as argon_auth, both to the `postgres` service).
+None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
 
 **Stated gap until the S3 bucket exists: backups are on the same disk as the
 database.** With `BACKUP_STORE=file:///var/backups/argon`, every dump lands on
@@ -97,10 +110,9 @@ dump restores and still enforces its rules; it does **not** mean the data is
 safe anywhere else. This is correct for now and is not a backup. It closes when
 Part B (`AWS_REQUEST.md`) gives `BACKUP_STORE=s3://…`.
 
-**These host scripts have never run anywhere.** Their first run is their first
-test: report each failure as it comes (the step, the command, the output),
-rather than fixing it in place, because what fails says more about the scripts
-than what passes.
+**These host scripts are on their first runs.** Report each failure as it comes
+(the step, the command, the output), rather than fixing it in place, because
+what fails says more about the scripts than what passes.
 
 ## One major version: 18, everywhere
 
@@ -120,6 +132,17 @@ claim; no test establishes it. A result that depends on how two strings sort
 should be checked on EC2, not trusted from a Windows run.
 
 ## Trust boundary
+
+**On the server, Docker access is superuser.** The postgres container trusts
+local connections, so anyone who can run `docker` on the host (root, or any
+member of the `docker` group) is the database superuser through
+`docker exec`, and can read or rewrite anything, the ledger included. The role
+split proven by the probe (P11–P17: argon_app cannot mint a proof, record an
+attempt or read a PIN hash; argon_auth cannot spend a proof or post) protects
+against the **application**: a compromised or buggy handler. It does **not**
+protect against anyone with shell access to the server. Keep the `docker`
+group empty, and treat SSH access to this host as access to every member's
+money.
 
 The ledger constraints bind **argon_app**, which is everything the API can do.
 They do **not** fully bind **argon_owner**, and cannot. As owner, it can:

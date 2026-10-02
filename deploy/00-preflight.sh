@@ -8,8 +8,8 @@ source "$(dirname "$0")/lib.sh"
 fail=0
 flag() { printf '\033[31m  !! %s\033[0m\n' "$*" >&2; fail=1; }
 
-if [[ $TARGET == docker ]]; then
-  info "docker target"
+if [[ $TARGET == docker ]] && ! on_server; then
+  info "docker target (a developer machine)"
   dc ps --status running --services | grep -qx postgres || die "compose postgres is not running (make up)"
   binding=$(dc port postgres 5432 || true)
   [[ $binding == "127.0.0.1:$PGPORT" ]] || flag "postgres published on '$binding' — must be 127.0.0.1:$PGPORT"
@@ -62,23 +62,34 @@ while read -r proto local proc; do
       if [[ $port == "$PGPORT" && ( $addr == 127.0.0.1 || $addr == '[::1]' ) ]]; then continue; fi
       flag "postgres listening on $local — must be loopback only" ; continue ;;
     *'"argon-api"'*) continue ;;
+    # Docker's port forwarding for Argon's containers, and nginx: loopback only
+    # (75-assert-loopback.sh asserts the same after every install).
+    *'"docker-proxy"'*|*'"nginx"'*)
+      [[ $addr =~ ^127\. || $addr == '[::1]' ]] && continue
+      flag "${proc%%,*} listening on $local — must be loopback only"; continue ;;
   esac
   flag "unexpected listener $proto $local $proc"
 done < <(sudo ss -Htulpn | awk '{print $1, $5, $7}')
 
 # ---- services ----------------------------------------------------------------
 info "running services"
-allowed='^(acpid|chrony|containerd|cron|dbus|docker|getty@.*|serial-getty@.*|irqbalance|ModemManager|multipathd|networkd-dispatcher|polkit|rsyslog|snap\.amazon-ssm-agent\..*|snapd|ssh|systemd-.*|udisks2|unattended-upgrades|user@[0-9]+|postgresql@'"$PG_MAJOR"'-main|argon-api|fwupd|packagekit|apt-daily.*|update-notifier.*|check-new-release)\.service$'
+allowed='^(acpid|chrony|containerd|cron|dbus|docker|getty@.*|serial-getty@.*|irqbalance|ModemManager|multipathd|networkd-dispatcher|polkit|rsyslog|snap\.amazon-ssm-agent\..*|snapd|ssh|systemd-.*|udisks2|unattended-upgrades|user@[0-9]+|postgresql@'"$PG_MAJOR"'-main|argon-api|nginx|fwupd|packagekit|apt-daily.*|update-notifier.*|check-new-release)\.service$'
 while read -r unit _; do
   [[ $unit =~ $allowed ]] || flag "unrecognised running service: $unit"
 done < <(systemctl list-units --type=service --state=running --no-legend --plain)
 
-if command -v docker >/dev/null && [[ -n $(sudo docker ps -q) ]]; then
-  flag "docker containers are running: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
+# Containers: Argon's own compose project ("argon") is expected; anyone else's is not.
+if command -v docker >/dev/null; then
+  others=$(sudo docker ps --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | awk '$2 != "argon" {print $1}' | tr '\n' ' ')
+  [[ -z ${others// /} ]] || flag "containers that are not Argon's are running: $others"
 fi
 
 # Postgres clusters that are not ours.
-if command -v pg_lsclusters >/dev/null; then
+# On the server Postgres runs in a container (TARGET=docker): ANY native
+# cluster is unexpected, a second Postgres to collide on 5432 and to patch.
+if command -v pg_lsclusters >/dev/null && [[ $TARGET == docker ]] && [[ -n $(pg_lsclusters -h) ]]; then
+  flag "a native postgres cluster exists, though the server runs Postgres in a container: $(pg_lsclusters -h | awk '{print $1"/"$2}' | tr '\n' ' ')"
+elif command -v pg_lsclusters >/dev/null; then
   pg_lsclusters -h | while read -r ver name _; do
     [[ "$ver/$name" == "$PG_MAJOR/main" ]] || echo "$ver/$name"
   done | grep -q . && flag "unexpected postgres cluster(s): $(pg_lsclusters -h | awk '{print $1"/"$2}' | tr '\n' ' ')"

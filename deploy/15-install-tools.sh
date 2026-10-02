@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# HOST ONLY. Go toolchain (pinned, checksum-verified), golang-migrate CLI
-# (module checksum verified by sum.golang.org), and the AWS CLI for backups.
+# THE SERVER. Go (pinned, checksum-verified) to build the restore drill's test
+# binary, and the golang-migrate CLI (module checksum verified by
+# sum.golang.org), which runs migrations from the host over loopback into the
+# postgres container. The AWS CLI only once BACKUP_STORE is s3://.
 source "$(dirname "$0")/lib.sh"
-[[ $TARGET == host ]] || die "15-install-tools.sh is host-only"
+on_server || die "15-install-tools.sh is for the server (ARGON_HOST=1)"
 [[ $EUID -eq 0 ]] || die "run with sudo"
 require_env GO_VERSION GO_SHA256_ARM64 MIGRATE_VERSION
 

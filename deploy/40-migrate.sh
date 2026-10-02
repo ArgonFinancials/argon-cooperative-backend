@@ -22,7 +22,7 @@ if [[ $TARGET == local && ${args[0]} =~ ^(down|drop|goto)$ ]]; then
   assert_scratch "$ARGON_DB"
 fi
 
-if [[ $TARGET == host ]]; then
+if on_server; then   # the server: back up first, and only with --confirm
   ((confirm)) || die "host target: re-run with --confirm. This will back up '$ARGON_DB' and then run: migrate ${args[*]}"
   current=$(run_migrate "$ARGON_DB" version 2>&1 || true)
   if [[ $current == *"no migration"* ]]; then

@@ -42,6 +42,13 @@ case "$TARGET" in docker|local|host) ;; *) die "TARGET=$TARGET (want docker|loca
 : "${POSTGRES_SUPERUSER:=postgres}"
 # The PostgreSQL major version every target runs: local, docker and EC2 alike.
 : "${PG_MAJOR:=18}"
+# ARGON_HOST=1 marks THE SERVER (the EC2 instance), independent of TARGET,
+# which says only where Postgres runs: on EC2 it runs in a container
+# (TARGET=docker), so "is this the server" can no longer be read from TARGET.
+: "${ARGON_HOST:=0}"
+on_server() { [[ $TARGET == host || $ARGON_HOST == 1 ]]; }
+# Go for the drill's test binary when scripts run under sudo, whose PATH lacks it.
+[[ -x /usr/local/go/bin/go ]] && PATH="/usr/local/go/bin:$PATH"
 # A relative file:// store is relative to the repo, not the caller's cwd.
 if [[ $BACKUP_STORE == file://* && ${BACKUP_STORE#file://} != /* ]]; then
   BACKUP_STORE="file://$REPO_DIR/${BACKUP_STORE#file://./}"
