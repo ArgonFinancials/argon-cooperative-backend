@@ -60,7 +60,8 @@ for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_
   sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
 done
 sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
-# Before Part B (the S3 bucket) exists, back up to a local directory instead:
+# Before Part B (the S3 bucket) exists, back up to a local directory instead
+# (see "Stated gap" below: that is NOT a backup):
 #   sudo sed -i 's|^BACKUP_STORE=.*|BACKUP_STORE=file:///var/backups/argon|' /etc/argon/deploy.env
 sudo nano /etc/argon/deploy.env          # check the rest: ARGON_DB, PGPORT, API_PORT, BACKUP_STORE
 export ARGON_ENV=/etc/argon/deploy.env
@@ -86,6 +87,14 @@ service's role, 0005) and **`ARGON_CODE_KEY`** (the HMAC key for sign-in code
 digests). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
 `30-install-api.sh` writes the API's own `/etc/argon/argon.env` from them: the
 app's connection as argon_app, the auth service's as argon_auth, and the key.
+
+**Stated gap until the S3 bucket exists: backups are on the same disk as the
+database.** With `BACKUP_STORE=file:///var/backups/argon`, every dump lands on
+the instance's own volume. Losing the instance, or its volume, loses the
+database and every backup at once. A passing drill then proves only that a
+dump restores and still enforces its rules; it does **not** mean the data is
+safe anywhere else. This is correct for now and is not a backup. It closes when
+Part B (`AWS_REQUEST.md`) gives `BACKUP_STORE=s3://…`.
 
 **These host scripts have never run anywhere.** Their first run is their first
 test: report each failure as it comes (the step, the command, the output),
