@@ -14,6 +14,8 @@
 //	stepup_any_act         any act name is accepted and minted for
 //	stepup_ended_session   an ended session can still step up
 //	stepup_expiry_wrong    the proof is reported to last an hour, not five minutes
+//	stepup_success_silent  a right PIN at step-up is not recorded, so it ends no run
+//	stepup_ignores_success the step-up's lock counts failures since ANY time, not since the last success
 package tier1
 
 import (
@@ -45,7 +47,12 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	if f.brk == "stepup_own_counter" {
 		key = sha("stepup:" + user)
 	}
-	if f.brk != "stepup_ignores_lock" && f.recentFailures(ctx, key) >= 5 {
+	failures := f.recentFailures(ctx, key)
+	if f.brk == "stepup_ignores_success" {
+		f.d.DB.QueryRow(ctx, `SELECT count(*) FROM sign_in_attempts WHERE credential_digest = $1 AND NOT succeeded
+			AND at > now() - interval '15 minutes'`, key).Scan(&failures)
+	}
+	if f.brk != "stepup_ignores_lock" && failures >= 5 {
 		return auth.Proof{}, auth.ErrTryLater
 	}
 	var phc string
@@ -54,7 +61,7 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	if phc == "" {
 		verifyPHC(dummyPHC, pin)
 	}
-	if ok || f.brk != "stepup_not_counted" {
+	if (ok && f.brk != "stepup_success_silent") || (!ok && f.brk != "stepup_not_counted") {
 		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, $3)`, user, key, ok)
 	}
 	if !ok && f.brk != "stepup_mints_anyway" {

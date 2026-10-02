@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Shared by every deploy script. The ONLY thing that differs between local
-# Docker and the EC2 host is the env file named by ARGON_ENV — never the
-# scripts. See deploy/README.md.
+# Shared by every deploy script. The ONLY thing that differs between targets
+# is the env file named by ARGON_ENV — never the scripts. See deploy/README.md.
+#
+# TARGET says where Postgres is and how its superuser is reached:
+#   docker — the compose container; superuser via `docker compose exec`.
+#   local  — a server already running on THIS machine (a developer's native
+#            install); superuser over TCP to 127.0.0.1:$PGPORT with
+#            POSTGRES_PASSWORD. Never the EC2 host.
+#   host   — the EC2 instance; superuser via `sudo -u postgres` (peer auth).
 #
 # Two ways of reaching Postgres, and only two:
 #   pg_super  — the cluster superuser, used for roles and databases only.
-#               docker: `docker compose exec` over the container's socket.
-#               host:   `sudo -u postgres` over the local socket (peer auth).
 #   pg_as     — a named argon_* role over TCP to 127.0.0.1, password from the
 #               environment (never argv, so it never shows in `ps`).
-# Client tools (psql, pg_dump, pg_restore) always come from the same major
-# version as the server: inside the container locally, PGDG 16 on the host.
+# Client tools (psql, pg_dump, pg_restore) must be the server's major version:
+# inside the container (docker), the server's own install (local), PGDG 16 (host).
 
 set -Eeuo pipefail
 
@@ -26,7 +30,7 @@ ok()   { printf '\033[32m ok\033[0m %s\n' "$*" >&2; }
 # shellcheck disable=SC1090
 set -a; source "$ARGON_ENV"; set +a
 
-: "${TARGET:?TARGET must be docker or host}"
+: "${TARGET:?TARGET must be docker, local or host}"
 : "${ARGON_DB:=argon}"
 : "${PGPORT:=5432}"
 : "${MIGRATIONS_DIR:=$REPO_DIR/migrations}"
@@ -34,7 +38,8 @@ set -a; source "$ARGON_ENV"; set +a
 : "${BACKUP_STORE:?BACKUP_STORE must be s3://bucket/prefix or file:///path}"
 : "${BACKUP_SSE:=AES256}"
 : "${COMPOSE_FILE:=$REPO_DIR/docker-compose.yml}"
-case "$TARGET" in docker|host) ;; *) die "TARGET=$TARGET (want docker|host)";; esac
+case "$TARGET" in docker|local|host) ;; *) die "TARGET=$TARGET (want docker|local|host)";; esac
+: "${POSTGRES_SUPERUSER:=postgres}"
 # A relative file:// store is relative to the repo, not the caller's cwd.
 if [[ $BACKUP_STORE == file://* && ${BACKUP_STORE#file://} != /* ]]; then
   BACKUP_STORE="file://$REPO_DIR/${BACKUP_STORE#file://./}"
@@ -46,11 +51,24 @@ dc() { docker compose --env-file "$ARGON_ENV" -f "$COMPOSE_FILE" "$@"; }
 
 # Superuser access. Reads SQL on stdin.
 pg_super() {
-  if [[ $TARGET == docker ]]; then
-    dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres "$@"
-  else
-    sudo -u postgres psql -X -q -v ON_ERROR_STOP=1 "$@"
-  fi
+  case $TARGET in
+    docker) dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres "$@" ;;
+    local)  require_env POSTGRES_PASSWORD
+            PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PGPORT" -U "$POSTGRES_SUPERUSER" "$@" ;;
+    host)   sudo -u postgres psql -X -q -v ON_ERROR_STOP=1 "$@" ;;
+  esac
+}
+
+# urlenc: a value made safe inside a postgres:// URL (a developer's own
+# superuser password may contain anything).
+urlenc() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1" 2>/dev/null ||
+           python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+
+# The superuser's URL for the Go test binary (docker and local only).
+admin_url() {
+  require_env POSTGRES_PASSWORD
+  local user=postgres; [[ $TARGET == local ]] && user=$POSTGRES_SUPERUSER
+  printf 'postgres://%s:%s@127.0.0.1:%s/postgres?sslmode=disable' "$(urlenc "$user")" "$(urlenc "$POSTGRES_PASSWORD")" "$PGPORT"
 }
 
 # Run a Postgres client tool as a role. Usage: pg_tool ROLE PASSWORD_VAR tool args...
@@ -86,9 +104,9 @@ create_scratch_db() {
   local db=$1
   [[ $db =~ ^argon_(drill|verify)_[0-9a-z_]+$ ]] || die "refusing scratch db name '$db'"
   pg_super -d postgres <<SQL
-CREATE DATABASE "$db" OWNER argon_owner;
+CREATE DATABASE "$db" OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0;
 REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
-GRANT CONNECT ON DATABASE "$db" TO argon_app, argon_migrator, argon_backup;
+GRANT CONNECT ON DATABASE "$db" TO argon_app, argon_migrator, argon_backup, argon_auth;
 SQL
 }
 drop_scratch_db() {
@@ -175,13 +193,12 @@ run_tier1() {
   log=$(mktemp)
   require_env ARGON_MIGRATOR_PASSWORD
   local mig="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
-  if [[ $TARGET == docker ]]; then
-    require_env POSTGRES_PASSWORD
+  if [[ $TARGET == docker || $TARGET == local ]]; then
     bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && echo .exe )}"
     if [[ -z ${TIER1_BIN:-} ]]; then
       (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
     fi
-    ARGON_TEST_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable" \
+    ARGON_TEST_ADMIN_URL="$(admin_url)" \
     ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
   else
     bin="${TIER1_BIN:-/opt/argon/bin/tier1.test}"

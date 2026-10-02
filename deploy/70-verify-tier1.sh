@@ -212,8 +212,18 @@ if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then
     "INSERT INTO credential_acts (kind, actor_user_id) VALUES ('ledger_batch', $U1);"
   probe req P14 argon_auth '42501.*permission denied for table ledger_batches' "the auth role posts a ledger batch" \
     "INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo) VALUES ($S, 'P14', $U1, 1, 1);"
-  probe ctl K11 argon_auth '' "control: the auth role mints a scoped PIN proof (rolled back)" \
-    "BEGIN; INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($U1, 'pin', 'ledger_batch'); ROLLBACK;"
+  # Scoped once 0005 has added act_kind (which it then requires: an unscoped
+  # PIN proof is refused); plain before it.
+  probe ctl K11 argon_auth '' "control: the auth role mints a PIN proof (rolled back)" \
+    "BEGIN;
+     DO \$k\$ BEGIN
+       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'auth_proofs' AND column_name = 'act_kind') THEN
+         EXECUTE format('INSERT INTO auth_proofs (user_id, method, act_kind) VALUES (%L, ''pin'', ''ledger_batch'')', $U1);
+       ELSE
+         EXECUTE format('INSERT INTO auth_proofs (user_id, method) VALUES (%L, ''pin'')', $U1);
+       END IF;
+     END \$k\$;
+     ROLLBACK;"
   probe ctl K12 argon_auth '' "control: the auth role records a sign-in attempt (rolled back)" \
     "BEGIN; INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), false); ROLLBACK;"
 else

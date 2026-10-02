@@ -19,6 +19,29 @@ if [[ $TARGET == docker ]]; then
   exit 0
 fi
 
+if [[ $TARGET == local ]]; then
+  # A developer's own server: report what differs from EC2 rather than demand
+  # it matches. It is someone else's server; this changes nothing on it.
+  info "local target: an existing server on 127.0.0.1:$PGPORT"
+  q() { pg_super -d postgres -At -c "$1" </dev/null; }
+  v=$(q 'SHOW server_version_num') || die "cannot reach the superuser on 127.0.0.1:$PGPORT (POSTGRES_SUPERUSER / POSTGRES_PASSWORD in $ARGON_ENV)"
+  info "server $(q 'SHOW server_version'), listen_addresses=$(q 'SHOW listen_addresses'), template1 encoding $(q "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = 'template1'")"
+  [[ $v == 16* ]] || printf '\033[33m  ?? server is %s; EC2 runs PostgreSQL 16. Every result here is a PostgreSQL %s result.\033[0m\n' "$(q 'SHOW server_version')" "${v:0:2}" >&2
+  [[ $(q 'SHOW listen_addresses') =~ ^(localhost|127\.0\.0\.1)$ ]] ||
+    printf '\033[33m  ?? this server listens on %s, not loopback only: reachable from the network if the firewall allows it\033[0m\n' "$(q 'SHOW listen_addresses')" >&2
+  [[ $(q "SELECT count(*) FROM pg_available_extensions WHERE name = 'btree_gist'") == 1 ]] || flag "btree_gist is not available (0002 needs it)"
+  # The drill's pg_dump/pg_restore come from PATH here, not from inside a
+  # container: they must be the server's major version.
+  for tool in psql pg_dump pg_restore; do
+    tv=$("$tool" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    [[ $tv == "${v:0:2}" ]] || flag "$tool on PATH is major ${tv:-missing}; the server is ${v:0:2}"
+  done
+  taken=$(q "SELECT string_agg(rolname, ', ') FROM pg_roles WHERE rolname LIKE 'argon\_%'")
+  [[ -z $taken ]] && info "no argon_* roles exist yet" || info "argon_* roles already present: $taken (20-roles.sh is idempotent and resets their passwords from $ARGON_ENV)"
+  ((fail == 0)) && ok "local postgres $v reachable as $POSTGRES_SUPERUSER" || die "preflight failed"
+  exit 0
+fi
+
 info "host: $(. /etc/os-release; echo "$PRETTY_NAME") $(dpkg --print-architecture), $(nproc) cpu, $(free -h | awk '/Mem:/{print $2}') ram"
 df -h / | tail -1 | awk '{print "    disk /: "$4" free of "$2}' >&2
 

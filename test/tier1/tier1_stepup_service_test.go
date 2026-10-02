@@ -6,14 +6,18 @@
 // ARGON_TEST_AUTH_FAKE=<break>.
 //
 // What it must make true (the user's terms, 2026-10-01):
+//
 //   - a right PIN on a live session mints ONE proof, for the session holder,
 //     scoped to the act asked for, good for five minutes;
+//
 //   - a wrong PIN mints nothing and counts towards the SAME per-account
 //     lockout as sign-in — same counter, same escalation — in both
 //     directions, or a stolen session is an unlimited PIN oracle.
 //
-// Not specified: whether a RIGHT PIN at step-up ends a run of failures, as a
-// sign-in success does. Either is safe; nothing here depends on it.
+//   - a RIGHT PIN at step-up ends a run of failures exactly as a sign-in
+//     success does (decided 2026-10-02): the person has proven they know the
+//     PIN, the same evidence a sign-in gives, and one counter must not have
+//     two halves that behave differently (S8, S9).
 package tier1
 
 import (
@@ -148,5 +152,44 @@ func TestStepUpS7_UnknownActNoProof(t *testing.T) {
 	}
 	if n := s.proofsOf(m.user); n != 0 {
 		t.Fatalf("MINTED — %d proof(s) for no real act", n)
+	}
+}
+
+// One counter, one rule for what ends a run: a right PIN at step-up clears it.
+// Four wrong at sign-in, a right step-up, four more wrong: never five in a row.
+func TestStepUpS8_RightPinAtStepUpEndsTheRun(t *testing.T) {
+	s := newSvc(t)
+	m := s.member("Secretary")
+	tok := signIn(t, m.user)
+	for i := 0; i < 4; i++ {
+		s.signIn(m.number, "0000", m.deviceToken)
+	}
+	if _, err := s.svc.ProvePIN(bg(), tok, m.pin, auth.ActLedgerBatch); err != nil {
+		t.Fatalf("FIXTURE: four failures should not lock; the right PIN at step-up answered %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		s.signIn(m.number, "0000", m.deviceToken)
+	}
+	if _, err := s.signIn(m.number, m.pin, m.deviceToken); err != nil {
+		t.Fatalf("UNCLEARED — a right PIN at step-up did not end the run: after 4 + 4 failures either side of it, sign-in answered %v", err)
+	}
+}
+
+// The other direction: a sign-in success clears failures made at step-up.
+func TestStepUpS9_RightPinAtSignInEndsAStepUpRun(t *testing.T) {
+	s := newSvc(t)
+	m := s.member("Secretary")
+	tok := signIn(t, m.user)
+	for i := 0; i < 4; i++ {
+		s.svc.ProvePIN(bg(), tok, "0000", auth.ActLedgerBatch)
+	}
+	if _, err := s.signIn(m.number, m.pin, m.deviceToken); err != nil {
+		t.Fatalf("FIXTURE: four failures should not lock; the right PIN at sign-in answered %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		s.svc.ProvePIN(bg(), tok, "0000", auth.ActLedgerBatch)
+	}
+	if _, err := s.svc.ProvePIN(bg(), tok, m.pin, auth.ActLedgerBatch); err != nil {
+		t.Fatalf("UNCLEARED — a sign-in success did not end the step-up's run: after 4 + 4 failures, the step-up answered %v", err)
 	}
 }

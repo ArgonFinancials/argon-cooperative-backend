@@ -112,17 +112,21 @@ var (
 // the PIN, which is the step-up suite's subject, not this one's.
 func mintProof(t *testing.T, user string) string {
 	t.Helper()
-	proofKindOnce.Do(func() {
-		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'auth_proofs' AND column_name = 'act_kind')`).Scan(&proofHasKind)
-	})
 	var id string
 	q := `INSERT INTO auth_proofs (user_id, method) VALUES ($1, 'pin') RETURNING id::text`
-	if proofHasKind {
+	if schemaHasProofKinds() {
 		q = `INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($1, 'pin', 'ledger_batch') RETURNING id::text`
 	}
 	fixture(t, db.QueryRow(bg(), q, user).Scan(&id), "a PIN proof for the import")
 	return id
+}
+
+func schemaHasProofKinds() bool {
+	proofKindOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'auth_proofs' AND column_name = 'act_kind')`).Scan(&proofHasKind)
+	})
+	return proofHasKind
 }
 
 func (w *bworld) proof(t *testing.T) *string { p := mintProof(t, w.secretary); return &p }

@@ -20,7 +20,7 @@
 # migration the suite is for exists. Until then the run says so, rather than
 # counting an absent half as a pass.
 source "$(dirname "$0")/../../deploy/lib.sh"
-[[ $TARGET == docker ]] || die "run the mutation suite against local docker only"
+[[ $TARGET != host ]] || die "the mutation suite runs on a local server (TARGET=docker or local), never the EC2 host"
 require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
@@ -38,7 +38,7 @@ native() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1
 HERE="$(native "$REPO_DIR/test/tier1")"
 BIN="$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && echo .exe )"
 REPO_DIR="$(native "$REPO_DIR")"
-export ARGON_TEST_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+export ARGON_TEST_ADMIN_URL="$(admin_url)"
 export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
 
 # shellcheck disable=SC1090

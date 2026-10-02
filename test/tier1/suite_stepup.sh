@@ -22,4 +22,6 @@ declare -gA SVC_TARGET_OF=(
   [stepup_any_act]='TestStepUpS7_UnknownActNoProof'
   [stepup_ended_session]='TestStepUpS6_NoLiveSessionNoProof'
   [stepup_expiry_wrong]='TestStepUpS1_RightPinMintsOneProofForTheHolderAndTheAct'
+  [stepup_success_silent]='TestStepUpS8_RightPinAtStepUpEndsTheRun'
+  [stepup_ignores_success]='TestStepUpS9_RightPinAtSignInEndsAStepUpRun'
 )

@@ -73,7 +73,7 @@ func run(m *testing.M) int {
 	}
 	if existing == "" {
 		setup = append([]string{
-			`CREATE DATABASE ` + name + ` OWNER argon_owner`,
+			`CREATE DATABASE ` + name + ` OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0`,
 			`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
 			`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
 		}, setup...)

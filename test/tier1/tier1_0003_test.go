@@ -65,7 +65,10 @@ func (a *authT) set(ts time.Time) {
 }
 func (a *authT) advance(d time.Duration) { a.set(a.now.Add(d)) }
 
-func (a *authT) exec(sql string, args ...any) error { _, err := a.c.Exec(bg(), sql, args...); return err }
+func (a *authT) exec(sql string, args ...any) error {
+	_, err := a.c.Exec(bg(), sql, args...)
+	return err
+}
 
 func (a *authT) tx(fn func(pgx.Tx) error) error {
 	x, err := a.c.Begin(bg())
@@ -127,10 +130,17 @@ func (a *authT) withPIN(user string) {
 	fixture(a.t, a.exec(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, user, argonHash), "PIN")
 }
 
-func (a *authT) proof(user, method string) string {
+// proof mints a proof FOR an act kind (0005 scopes every proof at mint). On a
+// schema without the column, the kind is not written, as accountInsert does
+// for roles.
+func (a *authT) proof(user, method, kind string) string {
 	a.t.Helper()
 	var id string
-	a.scan(method+" proof", `INSERT INTO auth_proofs (user_id, method) VALUES ($1, $2) RETURNING id`, []any{&id}, user, method)
+	if schemaHasProofKinds() {
+		a.scan(method+" proof", `INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($1, $2, $3) RETURNING id`, []any{&id}, user, method, kind)
+	} else {
+		a.scan(method+" proof", `INSERT INTO auth_proofs (user_id, method) VALUES ($1, $2) RETURNING id`, []any{&id}, user, method)
+	}
 	return id
 }
 
@@ -285,14 +295,14 @@ func (a *authT) resetFixture() (officer, member person) {
 func TestAuthB1_CodeProofCannotAuthoriseAReset(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "code"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "code", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "an officer's member reset authorised only by a code to the officer's phone", wPinProof)
 }
 
 func TestAuthB1_CodeProofCannotAuthoriseAPhoneChange(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
-	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "code"), targetMember: m.member, newPhone: unregistered(), reason: why})
+	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "code", "phone_change"), targetMember: m.member, newPhone: unregistered(), reason: why})
 	refused(t, err, "a phone change authorised only by a code", wPinProof)
 }
 
@@ -300,14 +310,14 @@ func TestAuthB2_ActorMustUseTheirOwnProof(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
 	colleague := a.officer("Chairman", "chairman", true)
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(colleague.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(colleague.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "an officer acting on a colleague's PIN proof", wPinProof)
 }
 
 func TestAuthB3_StaleProofRefused(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
-	pr := a.proof(o.user, "pin")
+	pr := a.proof(o.user, "pin", "member_reset")
 	a.advance(6 * time.Minute)
 	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: pr, targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "a reset on a PIN proof six minutes old", wPinProof)
@@ -317,7 +327,7 @@ func TestAuthB4_ProofIsSingleUse(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
 	m2 := a.who("Second member")
-	pr := a.proof(o.user, "pin")
+	pr := a.proof(o.user, "pin", "member_reset")
 	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: pr, targetUser: m.user, targetMember: m.member, reason: why})
 	fixture(t, err, "first reset on the proof")
 	_, err = a.act(act{kind: "member_reset", actor: o.user, proof: pr, targetUser: m2.user, targetMember: m2.member, reason: why})
@@ -327,7 +337,11 @@ func TestAuthB4_ProofIsSingleUse(t *testing.T) {
 func TestAuthB5_ProofTimeIsTheServers(t *testing.T) {
 	a := newAuth(t)
 	o := a.officer("Secretary", "secretary", false)
-	refused(t, a.exec(`INSERT INTO auth_proofs (user_id, method, at) VALUES ($1, 'pin', $2)`, o.user, a.now.Add(time.Hour).Format(time.RFC3339)),
+	q := `INSERT INTO auth_proofs (user_id, method, at) VALUES ($1, 'pin', $2)`
+	if schemaHasProofKinds() { // scoped, so the only thing wrong with it is its time
+		q = `INSERT INTO auth_proofs (user_id, method, at, act_kind) VALUES ($1, 'pin', $2, 'member_reset')`
+	}
+	refused(t, a.exec(q, o.user, a.now.Add(time.Hour).Format(time.RFC3339)),
 		"a PIN proof whose caller supplied its time", w("23514", "auth_proofs_at_is_now"))
 }
 
@@ -338,7 +352,7 @@ func TestAuthB5_ProofTimeIsTheServers(t *testing.T) {
 func TestAuthC1_ResetStatesReason(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: m.user, targetMember: m.member})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member})
 	refused(t, err, "a member reset with no reason", w("23514", "reset_states_reason"))
 }
 
@@ -346,7 +360,7 @@ func TestAuthC2_ResetByNonOfficerRefused(t *testing.T) {
 	a := newAuth(t)
 	_, m := a.resetFixture()
 	x := a.who("Ordinary member")
-	_, err := a.act(act{kind: "member_reset", actor: x.user, proof: a.proof(x.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: x.user, proof: a.proof(x.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "a member reset by someone holding no post", w("23514", "reset_by_current_officer"))
 }
 
@@ -354,7 +368,7 @@ func TestAuthC3_ResetByAuditorRefused(t *testing.T) {
 	a := newAuth(t)
 	_, m := a.resetFixture()
 	aud := a.officer("Auditor", "internal_auditor", false)
-	_, err := a.act(act{kind: "member_reset", actor: aud.user, proof: a.proof(aud.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: aud.user, proof: a.proof(aud.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "a member reset by the internal auditor (read-only)", w("23514", "reset_by_current_officer"))
 }
 
@@ -362,7 +376,7 @@ func TestAuthC4_OfficerCannotResetThemselves(t *testing.T) {
 	a := newAuth(t)
 	o, _ := a.resetFixture()
 	a.withPIN(o.user)
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: o.user, targetMember: o.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetUser: o.user, targetMember: o.member, reason: why})
 	refused(t, err, "an officer resetting their own credentials", w("23514", "reset_not_self"))
 }
 
@@ -373,7 +387,7 @@ func TestAuthC4_OfficerCannotResetThemselvesThroughOwnOtherRecord(t *testing.T) 
 	o, _ := a.resetFixture()
 	a.withPIN(o.user)
 	dup := a.record(o.user, o.phone)
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetMember: dup, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetMember: dup, reason: why})
 	refused(t, err, "an officer resetting themselves by naming their duplicate member record", w("23514", "reset_not_self"))
 }
 
@@ -382,7 +396,7 @@ func TestAuthC5_OfficerOfAnotherSocietyRefused(t *testing.T) {
 	_, m := a.resetFixture()
 	other := newAuth(t)
 	far := other.officer("Other society's secretary", "secretary", false)
-	_, err := a.act(act{kind: "member_reset", actor: far.user, proof: a.proof(far.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: far.user, proof: a.proof(far.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	refused(t, err, "a member reset by an officer of a different society", w("23514", "reset_by_current_officer"))
 }
 
@@ -391,7 +405,7 @@ func TestAuthC6_OneOfficerCannotResetASignatory(t *testing.T) {
 	o, _ := a.resetFixture()
 	sig := a.officer("Treasurer", "treasurer", true)
 	a.withPIN(sig.user)
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: sig.user, targetMember: sig.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetUser: sig.user, targetMember: sig.member, reason: why})
 	refused(t, err, "one officer resetting a current signatory (D-15 revised: two other signatories)", w("23514", "signatory_reset_needs_two"))
 }
 
@@ -402,7 +416,7 @@ func TestAuthC7_ResetClearsPinAndEndsEverySession(t *testing.T) {
 	o, m := a.resetFixture()
 	d2 := a.device(m.user)
 	a.session(m.user, d2)
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	accepted(t, err, "officer resets member")
 	if a.hasPIN(m.user) {
 		t.Fatalf("ACCEPTED — the reset left the member's PIN in place")
@@ -420,7 +434,7 @@ func TestAuthC7_ResetClearsPinAndEndsEverySession(t *testing.T) {
 func TestAuthC_Control_OfficerResetsMember(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
-	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "member_reset", actor: o.user, proof: a.proof(o.user, "pin", "member_reset"), targetUser: m.user, targetMember: m.member, reason: why})
 	accepted(t, err, "a current officer resets a member, with a reason and their own fresh PIN proof")
 }
 
@@ -433,9 +447,9 @@ func TestAuthC_Control_OfficerResetsMember(t *testing.T) {
 // =============================================================================
 
 type sigFixture struct {
-	a                      *authT
-	target, first, second  person
-	request                string
+	a                     *authT
+	target, first, second person
+	request               string
 }
 
 // Treasurer (target, locked out), chairman and secretary (the other two).
@@ -447,14 +461,14 @@ func (a *authT) sigReset() *sigFixture {
 	a.withPIN(f.target.user)
 	a.session(f.target.user, a.device(f.target.user))
 	var err error
-	f.request, err = a.act(act{kind: "signatory_reset_request", actor: f.first.user, proof: a.proof(f.first.user, "pin"),
+	f.request, err = a.act(act{kind: "signatory_reset_request", actor: f.first.user, proof: a.proof(f.first.user, "pin", "signatory_reset_request"),
 		targetUser: f.target.user, targetMember: f.target.member, reason: why})
 	fixture(a.t, err, "signatory reset request")
 	return f
 }
 
 func (f *sigFixture) approve(by person) error {
-	_, err := f.a.act(act{kind: "signatory_approval", actor: by.user, proof: f.a.proof(by.user, "pin"), request: f.request, targetUser: f.target.user})
+	_, err := f.a.act(act{kind: "signatory_approval", actor: by.user, proof: f.a.proof(by.user, "pin", "signatory_approval"), request: f.request, targetUser: f.target.user})
 	return err
 }
 
@@ -522,9 +536,9 @@ func TestAuthD6_ApprovalCannotPredateTheRequest(t *testing.T) {
 	target := a.officer("Treasurer", "treasurer", true)
 	first := a.officer("Chairman", "chairman", true)
 	a.withPIN(target.user)
-	early := a.proof(first.user, "pin")
+	early := a.proof(first.user, "pin", "signatory_approval")
 	a.advance(time.Minute)
-	req, err := a.act(act{kind: "signatory_reset_request", actor: first.user, proof: a.proof(first.user, "pin"),
+	req, err := a.act(act{kind: "signatory_reset_request", actor: first.user, proof: a.proof(first.user, "pin", "signatory_reset_request"),
 		targetUser: target.user, targetMember: target.member, reason: why})
 	fixture(t, err, "request")
 	_, err = a.act(act{kind: "signatory_approval", actor: first.user, proof: early, request: req, targetUser: target.user})
@@ -534,7 +548,7 @@ func TestAuthD6_ApprovalCannotPredateTheRequest(t *testing.T) {
 func TestAuthD7_ActTimeIsTheServers(t *testing.T) {
 	a := newAuth(t)
 	f := a.sigReset()
-	_, err := a.act(act{kind: "signatory_approval", actor: f.second.user, proof: a.proof(f.second.user, "pin"), request: f.request,
+	_, err := a.act(act{kind: "signatory_approval", actor: f.second.user, proof: a.proof(f.second.user, "pin", "signatory_approval"), request: f.request,
 		targetUser: f.target.user, at: a.now.Add(-time.Hour).Format(time.RFC3339)})
 	refused(t, err, "an approval whose caller supplied its time", w("23514", "credential_acts_at_is_now"))
 }
@@ -568,7 +582,7 @@ func TestAuthE1_DirectPhoneUpdateRefused(t *testing.T) {
 func TestAuthE2_MemberCannotChangeOwnPhone(t *testing.T) {
 	a := newAuth(t)
 	m := a.who("Member")
-	_, err := a.act(act{kind: "phone_change", actor: m.user, proof: a.proof(m.user, "pin"), targetMember: m.member, newPhone: unregistered(), reason: why})
+	_, err := a.act(act{kind: "phone_change", actor: m.user, proof: a.proof(m.user, "pin", "phone_change"), targetMember: m.member, newPhone: unregistered(), reason: why})
 	refused(t, err, "a member changing their own registered phone", w("23514", "phone_change_not_self"))
 }
 
@@ -576,7 +590,7 @@ func TestAuthE3_OfficerPhoneChangeAppliesTheRecordedNumber(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
 	fresh := unregistered()
-	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "pin"), targetMember: m.member, newPhone: fresh, reason: why})
+	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "pin", "phone_change"), targetMember: m.member, newPhone: fresh, reason: why})
 	accepted(t, err, "an officer records a phone change")
 	var got string
 	a.scan("phone", `SELECT phone FROM members WHERE id = $1`, []any{&got}, m.member)
@@ -589,7 +603,7 @@ func TestAuthE4_OneOfficerCannotChangeASignatorysPhone(t *testing.T) {
 	a := newAuth(t)
 	o, _ := a.resetFixture()
 	sig := a.officer("Treasurer", "treasurer", true)
-	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "pin"), targetMember: sig.member, newPhone: unregistered(), reason: why})
+	_, err := a.act(act{kind: "phone_change", actor: o.user, proof: a.proof(o.user, "pin", "phone_change"), targetMember: sig.member, newPhone: unregistered(), reason: why})
 	refused(t, err, "one officer redirecting a signatory's codes to a new number", w("23514", "signatory_phone_needs_two"))
 }
 
@@ -600,7 +614,7 @@ func TestAuthE5_AppliedNumberMustBeTheRecordedNumber(t *testing.T) {
 	recorded, applied := unregistered(), unregistered()
 	err := a.tx(func(x pgx.Tx) error {
 		if _, err := x.Exec(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id, target_member_id, new_phone, reason)
-			VALUES ('phone_change', $1, $2, $3, $4, $5)`, o.user, a.proof(o.user, "pin"), m.member, recorded, why); err != nil {
+			VALUES ('phone_change', $1, $2, $3, $4, $5)`, o.user, a.proof(o.user, "pin", "phone_change"), m.member, recorded, why); err != nil {
 			return err
 		}
 		_, err := x.Exec(bg(), `UPDATE members SET phone = $2 WHERE id = $1`, m.member, applied)
@@ -615,11 +629,11 @@ func TestAuthE_TwoSignatoriesChangeASignatorysPhone(t *testing.T) {
 	first := a.officer("Chairman", "chairman", true)
 	second := a.officer("Secretary", "secretary", true)
 	fresh := unregistered()
-	req, err := a.act(act{kind: "signatory_phone_request", actor: first.user, proof: a.proof(first.user, "pin"),
+	req, err := a.act(act{kind: "signatory_phone_request", actor: first.user, proof: a.proof(first.user, "pin", "signatory_phone_request"),
 		targetUser: target.user, targetMember: target.member, newPhone: fresh, reason: why})
 	fixture(t, err, "request")
 	for _, by := range []person{first, second} {
-		_, err = a.act(act{kind: "signatory_approval", actor: by.user, proof: a.proof(by.user, "pin"), request: req, targetUser: target.user})
+		_, err = a.act(act{kind: "signatory_approval", actor: by.user, proof: a.proof(by.user, "pin", "signatory_approval"), request: req, targetUser: target.user})
 		fixture(t, err, "approval")
 	}
 	var got string
@@ -857,7 +871,7 @@ func TestAuthG6_OfficerReleaseEndsTheLock(t *testing.T) {
 		t.Fatalf("FIXTURE: the account is not in the officer-release state (G5's rule is missing)")
 	}
 	o := a.officer("Secretary", "secretary", false)
-	_, err := a.act(act{kind: "lock_release", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: m.user, targetMember: m.member, reason: why})
+	_, err := a.act(act{kind: "lock_release", actor: o.user, proof: a.proof(o.user, "pin", "lock_release"), targetUser: m.user, targetMember: m.member, reason: why})
 	accepted(t, err, "an officer releases the lock")
 	if until, officer := a.lock(m.user); until != nil || officer {
 		t.Fatalf("REFUSED — the officer's release did not end the lock")
@@ -868,7 +882,7 @@ func TestAuthG7_OfficerCannotReleaseOwnLock(t *testing.T) {
 	a := newAuth(t)
 	o := a.officer("Secretary", "secretary", false)
 	a.threeLockouts(o.user)
-	_, err := a.act(act{kind: "lock_release", actor: o.user, proof: a.proof(o.user, "pin"), targetUser: o.user, targetMember: o.member, reason: why})
+	_, err := a.act(act{kind: "lock_release", actor: o.user, proof: a.proof(o.user, "pin", "lock_release"), targetUser: o.user, targetMember: o.member, reason: why})
 	refused(t, err, "an officer releasing their own lock", w("23514", "release_not_self"))
 }
 
@@ -910,7 +924,7 @@ func TestAuthH1_PinChangeEndsOtherSessionsKeepsThisOne(t *testing.T) {
 	a.withPIN(m.user)
 	here := a.session(m.user, a.device(m.user))
 	there := a.session(m.user, a.device(m.user))
-	_, err := a.act(act{kind: "pin_change", actor: m.user, actorSession: here.id, proof: a.proof(m.user, "pin"), targetUser: m.user, newPin: argonHash})
+	_, err := a.act(act{kind: "pin_change", actor: m.user, actorSession: here.id, proof: a.proof(m.user, "pin", "pin_change"), targetUser: m.user, newPin: argonHash})
 	accepted(t, err, "a member changes their PIN")
 	if a.valid(there) {
 		t.Fatalf("ACCEPTED — the PIN changed but another device stayed signed in")

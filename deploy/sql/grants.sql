@@ -11,6 +11,7 @@
 -- other role — the capability does not exist rather than being checked.
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM argon_app;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM argon_auth;
 
 -- Append-only.
 GRANT SELECT ON
@@ -48,24 +49,44 @@ GRANT UPDATE (closed_at, closed_by) ON accounting_periods TO argon_app;
 -- those two columns only.
 GRANT UPDATE (explanation, resolved_at) ON wallet_reconciliations TO argon_app;
 
--- ---- 0003 auth --------------------------------------------------------------
+-- ---- 0003 auth, split by role (0005) -----------------------------------------
 -- INSERT lists leave out every server-written column (times, act_xid,
--- privileged, attempts, consumed_at): the app has no path to set them. No
--- UPDATE or DELETE on credentials, proofs, codes or attempts: a PIN changes
--- by a credential_act, a proof is consumed and a code attempt counted only
--- inside the database's own functions.
+-- mint_xid, privileged, attempts, consumed_at): no role has a path to set
+-- them. No UPDATE or DELETE on credentials, proofs, codes or attempts: a PIN
+-- changes by a credential_act, a proof is consumed and a code attempt counted
+-- only inside the database's own functions.
+--
+-- WHO WRITES AUTH STATE. The PIN is checked in Go, not in the database, so
+-- whoever can INSERT a PIN proof can skip the PIN, and whoever can INSERT a
+-- sign-in success can end a lockout run. Only argon_auth (the auth service)
+-- may. argon_app (the API's handlers) READS auth state — session_valid runs
+-- with the caller's privileges — and writes only the attributable act that
+-- spends a proof. argon_auth writes no act and no ledger row. The probe
+-- proves both halves (P11–P14), so the split is shown, not just configured.
 GRANT SELECT ON auth_credentials, auth_proofs, auth_codes, auth_devices, auth_sessions,
                 sign_in_attempts, credential_acts TO argon_app;
-GRANT INSERT (user_id, pin_hash) ON auth_credentials TO argon_app;
-GRANT INSERT (id, user_id, method) ON auth_proofs TO argon_app;
-GRANT INSERT (id, user_id, purpose, code_digest, sent_to) ON auth_codes TO argon_app;
-GRANT INSERT (id, user_id, token_digest) ON auth_devices TO argon_app;
-GRANT UPDATE (revoked_at) ON auth_devices TO argon_app;
-GRANT INSERT (id, user_id, device_id, token_digest) ON auth_sessions TO argon_app;
-GRANT UPDATE (ended_at, ended_by_session) ON auth_sessions TO argon_app;
-GRANT INSERT (user_id, credential_digest, device_id, succeeded) ON sign_in_attempts TO argon_app;
 GRANT INSERT (id, kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id,
               new_phone, new_pin_hash, request_id, reason) ON credential_acts TO argon_app;
+
+GRANT SELECT ON users, members, appointments, auth_credentials, auth_proofs, auth_codes, auth_devices,
+                auth_sessions, sign_in_attempts, credential_acts TO argon_auth;
+GRANT INSERT (user_id, pin_hash) ON auth_credentials TO argon_auth;
+GRANT INSERT (id, user_id, purpose, code_digest, sent_to) ON auth_codes TO argon_auth;
+GRANT INSERT (id, user_id, token_digest) ON auth_devices TO argon_auth;
+GRANT UPDATE (revoked_at) ON auth_devices TO argon_auth;
+GRANT INSERT (id, user_id, device_id, token_digest) ON auth_sessions TO argon_auth;
+GRANT UPDATE (ended_at, ended_by_session) ON auth_sessions TO argon_auth;
+GRANT INSERT (user_id, credential_digest, device_id, succeeded) ON sign_in_attempts TO argon_auth;
+-- A proof names the act it is minted for once 0005 has added the column.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'auth_proofs' AND column_name = 'act_kind') THEN
+    GRANT INSERT (id, user_id, method, act_kind) ON auth_proofs TO argon_auth;
+  ELSE
+    GRANT INSERT (id, user_id, method) ON auth_proofs TO argon_auth;
+  END IF;
+END $$;
 
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

@@ -1,35 +1,49 @@
 # deploy/
 
-The same scripts run against local Docker and the EC2 host. Only the env file
-differs: `deploy/env/local.env` or `/etc/argon/deploy.env`, selected with
-`ARGON_ENV`.
+The same scripts run against every target. Only the env file differs:
+`deploy/env/local.env` or `/etc/argon/deploy.env`, selected with `ARGON_ENV`.
+`TARGET` says where Postgres is: `local` (a server already running on this
+machine), `docker` (the compose container), or `host` (EC2).
 
 | Script | Target | Purpose |
 |---|---|---|
-| `00-preflight.sh` | both | Read-only. Aborts if the host carries anything not on the allowlist. |
+| `00-preflight.sh` | all | Read-only. Aborts if the host carries anything not on the allowlist. |
 | `10-install-postgres.sh` | host | PG 16 from PGDG, loopback-only, scram. Asserts the binding. |
 | `15-install-tools.sh` | host | Go (pinned + sha256), migrate CLI, AWS CLI. |
-| `20-roles.sh` | both | argon_owner / argon_migrator / argon_app / argon_backup, the database. |
+| `20-roles.sh` | all | argon_owner / argon_migrator / argon_app / argon_backup / argon_auth, the database. |
 | `30-install-api.sh` | host | Build and install the API, `/etc/argon/argon.env`, systemd unit (not started). |
-| `40-migrate.sh` | both | Migrate as argon_migrator, then `sql/grants.sql`. Host: backup first, `--confirm`. |
-| `50-backup.sh` | both | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
-| `60-restore.sh` | both | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
-| `70-verify-tier1.sh` | both | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
+| `40-migrate.sh` | all | Migrate as argon_migrator, then `sql/grants.sql`. Host: backup first, `--confirm`. |
+| `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
+| `60-restore.sh` | all | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
+| `70-verify-tier1.sh` | all | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
 | `80-install-timers.sh` | host | Nightly backup and weekly drill timers. Refuses until a drill has passed. |
 
 ## Local
 
+Against a PostgreSQL already installed on this machine (`TARGET=local`):
+
 ```bash
-cp deploy/env/local.env.example deploy/env/local.env   # fill passwords
-cp .env.example .env                                    # ARGON_APP_PASSWORD into DATABASE_URL
+cp deploy/env/local.env.example deploy/env/local.env   # generate the argon_* passwords;
+                                                        # POSTGRES_PASSWORD = that server's superuser
 go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
-make up db-setup migrate-up verify-tier1 backup restore-drill
-make run                                                 # :8081
+export ARGON_ENV=deploy/env/local.env
+bash deploy/00-preflight.sh     # reports version, encoding, listen address, existing argon_* roles
+bash deploy/20-roles.sh         # creates the argon_* roles and ONE database: ARGON_DB=argon_test
+bash deploy/40-migrate.sh up
+bash deploy/70-verify-tier1.sh
+bash deploy/50-backup.sh && bash deploy/60-restore.sh --drill
 ```
 
-Local Postgres is on **127.0.0.1:5433** (`PGPORT`). Port 5432 is left for any
-native install. Client tools run inside the container, so their version always
-matches the server.
+What this touches on that server: five roles (`argon_owner`, `argon_migrator`,
+`argon_app`, `argon_backup`, `argon_auth`, cluster-wide, so visible to its other
+databases), the `argon_test` database, and short-lived scratch databases
+(`argon_verify_*`, `argon_drill_*`) that are dropped after use. Nothing else.
+Client tools are that server's own, so their version matches it. **Its major
+version is whatever is installed (18 on the reference laptop), not EC2's 16**:
+see "Version skew" below.
+
+`TARGET=docker` still works with `docker-compose.yml` (`PGPORT=5433`, the
+container's own superuser password, `make up`).
 
 ## EC2 (Ubuntu 26.04, arm64)
 
@@ -58,6 +72,10 @@ sudo systemctl start argon-api && curl -s 127.0.0.1:8080/healthz
 
 From a laptop, the database is reached only through a tunnel:
 `ssh -L 5433:127.0.0.1:5432 ubuntu@<host>`.
+
+`/etc/argon/deploy.env` carries four role passwords, all generated on the instance:
+migrator, app, backup, and since 0005 **`ARGON_AUTH_PASSWORD`** (the auth
+service's role). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
 
 ## Trust boundary
 
