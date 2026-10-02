@@ -43,6 +43,7 @@ import (
 //	first_match          (D-21) a shared credential signs in whichever record is found first
 //	ambiguous_before_pin (D-21) routes a shared credential to an officer without checking the PIN
 //	one_account_per_record (over-strict) one person's two records counted as two people
+//	signin_ignores_lock  a locked account still signs in
 type fakeService struct {
 	d   auth.Deps
 	brk string
@@ -112,7 +113,7 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	if found && f.brk != "per_credential_form" {
 		key = sha("user:" + user)
 	}
-	if (found || f.brk != "lock_real_only") && f.recentFailures(ctx, key) >= 5 {
+	if (found || f.brk != "lock_real_only") && f.brk != "signin_ignores_lock" && f.recentFailures(ctx, key) >= 5 {
 		return auth.Result{}, auth.ErrTryLater
 	}
 
@@ -169,7 +170,10 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 		return auth.Result{}, err
 	}
 	if f.brk != "never_send" {
-		f.d.SMS.Send(ctx, phones[0], "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it.")
+		// A failed send is an error, never a code_sent that delivers nothing.
+		if err := f.d.SMS.Send(ctx, phones[0], "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it."); err != nil {
+			return auth.Result{}, err
+		}
 	}
 	challenge := id
 	if f.brk == "code_in_challenge" {

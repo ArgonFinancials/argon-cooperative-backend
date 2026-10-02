@@ -30,14 +30,14 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 
 	projection := MemberStatementProjection("")
 	if m.user != nil && *m.user == caller {
-		projection = Member
+		projection = MemberStatementProjectionMember
 	} else {
 		var officer bool
 		if err := s.db.QueryRow(ctx, `SELECT person_holds_post($1, $2)`, caller, m.society).Scan(&officer); err != nil {
 			return nil, err
 		}
 		if officer {
-			projection = Officer
+			projection = MemberStatementProjectionOfficer
 		}
 	}
 	if projection == "" {
@@ -130,7 +130,7 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		if margin != 0 {
 			row.Charges = append(row.Charges, ChargeLine{Role: ArgonMargin, AmountKobo: Kobo(strconv.FormatInt(margin, 10))})
 		}
-		if projection == Officer {
+		if projection == MemberStatementProjectionOfficer {
 			pb := struct {
 				Post      *StatementRowPostedByPost `json:"post"`
 				PostLabel string                    `json:"postLabel"`

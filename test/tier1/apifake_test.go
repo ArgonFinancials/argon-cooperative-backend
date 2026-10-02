@@ -59,8 +59,12 @@ type (
 type fakeAPI struct {
 	db     *pgxpool.Pool
 	brk    string
-	noAuth bool // started without an auth service, as the deployed binary is for now
+	noAuth bool      // started without an auth service, as the deployed binary is for now
+	deps   auth.Deps // the reference auth service's dependencies (sign-in); defaults in authDeps
 }
+
+// The paths that need no session, as in the real server.
+var fakePublic = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true}
 
 func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 	return newFakeAPIWith(&fakeAPI{db: pool, brk: brk})
@@ -71,6 +75,9 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
+		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") {
+			ok = true // no_token_reaches: a request with no token reaches the handlers as nobody
+		}
 		if !ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)

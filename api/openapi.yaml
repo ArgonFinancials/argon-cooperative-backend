@@ -104,6 +104,50 @@ components:
             to be told which date the balances actually carry, and a bare
             acknowledgement cannot say.
 
+    SignInRequest:
+      type: object
+      required: [credential, pin]
+      properties:
+        credential: { type: string, description: A member number or a phone number. }
+        pin: { type: string }
+        deviceToken:
+          type: string
+          description: The token this server issued to this device on an earlier sign-in; absent on a new device.
+        surface:
+          type: string
+          enum: [member, officer]
+          description: Which surface the client is. INFORMATIONAL ONLY; it never sets the session's length.
+
+    VerifyCodeRequest:
+      type: object
+      required: [challenge, code]
+      properties:
+        challenge: { type: string }
+        code: { type: string }
+
+    SignInResult:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [signed_in, code_sent, see_officer]
+        sessionToken: { type: string, description: "signed_in only." }
+        deviceToken: { type: string, description: "Issued when a new device becomes trusted." }
+        expiresAt:
+          type: string
+          format: date-time
+          description: "signed_in only. 8 hours for anyone holding a post, 30 days otherwise."
+        challenge: { type: string, description: "code_sent only. Never contains or implies the code." }
+        reason:
+          type: string
+          description: |
+            see_officer only: why. "ambiguous" — the credential matches more
+            than one person; "no_agreed_number" — no single registered number
+            to send a code to; "sms_unavailable" — TEMPORARY: codes cannot be
+            sent yet (no SMS provider), so a new device goes to an officer.
+        message: { type: string }
+
     ActKind:
       type: string
       description: The attributable act a PIN proof is minted FOR (credential_acts.kind).
@@ -456,6 +500,93 @@ paths:
           description: |
             The write failed. NOTHING WAS WRITTEN and the reference is not
             claimed: retrying with the same key is safe and can succeed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/sign-in:
+    post:
+      operationId: postSignIn
+      summary: Sign in with the one credential box and a PIN (public)
+      description: |
+        The credential is a member number or a phone number. ONE answer for an
+        unregistered credential and a wrong PIN: the same status, the same
+        body, the same time. A credential matching more than one PERSON (a
+        shared family phone) signs in nobody: the right PIN routes to an
+        officer (D-21). A known device signs in on the PIN alone; a new one
+        gets a code to the one registered number, or an officer.
+
+        The session's length follows the highest privilege the person holds
+        (8 hours for anyone holding a post, 30 days otherwise), never the
+        surface the client says it is: `surface` is informational only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignInRequest' }
+      responses:
+        '200':
+          description: signed_in, code_sent, or see_officer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignInResult' }
+        '400':
+          description: Malformed body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: refused — the ONE answer to an unregistered credential and a wrong PIN.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: try_later — locked, for a registered and an unregistered credential alike.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/codes/verify:
+    post:
+      operationId: postVerifyCode
+      summary: Complete a new-device sign-in with the code sent to the registered phone (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyCodeRequest' }
+      responses:
+        '200':
+          description: signed_in, with a device token for next time.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignInResult' }
+        '400':
+          description: Malformed body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: refused — a wrong, spent or expired code.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: try_later.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/sign-out:
+    post:
+      operationId: postSignOut
+      summary: End this session
+      security: [{ session: [] }]
+      responses:
+        '204':
+          description: The session has ended; its token reaches nothing.
+        '401':
+          description: No valid session.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

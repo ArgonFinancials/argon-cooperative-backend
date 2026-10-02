@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -105,6 +106,23 @@ type Proof struct {
 // (see deploy/AUTH_SMS.md); tests use a fake.
 type SMS interface {
 	Send(ctx context.Context, to, text string) error
+}
+
+// ErrSMSUnavailable is what UnavailableSMS answers EVERY send with. The API
+// turns it into "see an officer" for a new device, saying why.
+var ErrSMSUnavailable = errors.New("auth: TEMPORARY: no SMS provider yet (deploy/AUTH_SMS.md); sign-in codes cannot be sent, so a new device goes to an officer")
+
+// UnavailableSMS is the SMS adapter to run with until a provider is
+// procured. It refuses LOUDLY: every send is an error and an Error-level log
+// line, never a success that delivers nothing. Its refusal says it is
+// temporary, so nobody later reads it as the design. Written against
+// test/tier1/tier1_api_signin_test.go (under review).
+type UnavailableSMS struct {
+	Log *slog.Logger // nil: slog.Default()
+}
+
+func (UnavailableSMS) Send(context.Context, string, string) error {
+	return errors.New("auth: UnavailableSMS is not built yet")
 }
 
 // Notifier tells a person's other devices that a new device signed in, with

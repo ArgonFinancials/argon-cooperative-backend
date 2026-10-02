@@ -51,7 +51,7 @@ func NewServer(d Deps) (http.Handler, error) {
 }
 
 // Paths that need no session.
-var public = map[string]bool{"/healthz": true}
+var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true}
 
 // authenticate resolves the bearer token to a user before any handler runs.
 // No token, an invented one, or a session that is ended, expired or whose
@@ -95,6 +95,23 @@ func (s *server) GetHealthz(ctx context.Context, _ GetHealthzRequestObject) (Get
 // PostLedgerBatch (postAll): batch.go.
 
 // PostPinProof (the step-up): stepup.go.
+
+// ErrSignInNotBuilt: the sign-in endpoints' acceptance tests are written and
+// under review (test/tier1/tier1_api_signin_test.go). Until the handlers are
+// written against them, these answer with an error and sign nobody in.
+var ErrSignInNotBuilt = errors.New("api: the sign-in endpoints are not built yet")
+
+func (s *server) PostSignIn(context.Context, PostSignInRequestObject) (PostSignInResponseObject, error) {
+	return nil, ErrSignInNotBuilt
+}
+
+func (s *server) PostVerifyCode(context.Context, PostVerifyCodeRequestObject) (PostVerifyCodeResponseObject, error) {
+	return nil, ErrSignInNotBuilt
+}
+
+func (s *server) PostSignOut(context.Context, PostSignOutRequestObject) (PostSignOutResponseObject, error) {
+	return nil, ErrSignInNotBuilt
+}
 
 // RequestError answers a request the generated layer could not decode — money
 // sent as a JSON number, a body that is not JSON — as a JSON Problem, never
