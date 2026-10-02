@@ -203,6 +203,12 @@ SQL
 run_tier1() {
   local db=$1 re=$2 skip=${3:-} bin rc=0 log
   assert_scratch "$db"   # the suites write fixtures that can never be deleted
+  # Each run in one database gets its own fixture-counter range (10^7 apart:
+  # the phone fixtures have 8 digits), so suites sharing a restored copy never
+  # re-create each other's member numbers, phones or device tokens.
+  RUN_TIER1_N=$(( ${RUN_TIER1_N:-0} + 1 ))
+  ((RUN_TIER1_N <= 9)) || die "run_tier1: more than 9 suites against one database would overlap fixture ranges"
+  export ARGON_TEST_SEQ_BASE=$(( RUN_TIER1_N * 10000000 ))
   local args=(-test.run "$re" -test.count=1 -test.v)
   [[ -n $skip ]] && args+=(-test.skip "$skip")
   log=$(mktemp)

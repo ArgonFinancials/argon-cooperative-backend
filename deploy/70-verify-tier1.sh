@@ -42,16 +42,32 @@ fi
 U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
-R1=$(U 61) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83)
+R1=$(U 61) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
-# Written for the schema at migration 0004 (users, line-level member_id, no
-# ledger_batches.as_of; account roles, so every savings line names its member).
-# M1 and M3 hold current signing posts; M2 is auditor.
+# Written for the schema at migration 0005 (users, line-level member_id, no
+# ledger_batches.as_of; account roles, so every savings line names its member;
+# a batch authorised by its actor's step-up act). M1 and M3 hold current
+# signing posts; M2 is auditor. Adapts to a schema before 0005 (a restored
+# older copy), where a batch names no act.
 info "seeding fixtures in $db as argon_app"
+pg_as argon_app "$db" -q -c "INSERT INTO users (id, full_name) VALUES
+  ($ACTOR, 'Probe Actor'), ($U1, 'Probe Treasurer'), ($U2, 'Probe Auditor'), ($U3, 'Probe Chairman');" </dev/null >/dev/null
+has_acts=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
+  WHERE table_name = 'ledger_batches' AND column_name = 'authorised_by'" </dev/null)
+if [[ $has_acts == 1 ]]; then
+  # The batch's step-up: the proof is minted by argon_auth (the only role that
+  # can) in its own transaction; the act that spends it is argon_app's, below.
+  require_env ARGON_AUTH_PASSWORD
+  pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES ($PROOF, $ACTOR, 'pin', 'ledger_batch');" </dev/null >/dev/null
+  BATCH_SQL="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($ACT, 'ledger_batch', $ACTOR, $PROOF);
+INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo, authorised_by)
+  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000, $ACT);"
+else
+  BATCH_SQL="INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo)
+  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000);"
+fi
 pg_as argon_app "$db" -q <<SQL >/dev/null
 BEGIN;
-INSERT INTO users (id, full_name) VALUES
-  ($ACTOR, 'Probe Actor'), ($U1, 'Probe Treasurer'), ($U2, 'Probe Auditor'), ($U3, 'Probe Chairman');
 INSERT INTO societies (id, code, registered_name, registration_number, state_directorate)
   VALUES ($S, 'ZZPROBE', 'Probe Cooperative', 'PROBE/0001', 'Lagos');
 INSERT INTO branches (id, society_id, code, name) VALUES ($B, $S, 'HQ', 'Head office');
@@ -65,8 +81,7 @@ INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from) 
 INSERT INTO accounts (id, society_id, code, name, kind, role) VALUES
   ($A1, $S, '1000', 'Cash at VFD', 'asset', 'bank'),
   ($A2, $S, '2000', 'Member savings', 'liability', 'member_savings');
-INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo)
-  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000);
+$BATCH_SQL
 INSERT INTO ledger_entries (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
   VALUES ($E1, $S, $BT, 'contribution_in', '2026-01-31', $ACTOR, 'treasurer', 'Treasurer');
 INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
@@ -203,8 +218,18 @@ probe req P10 $OWNER '23514.*CONSTRAINT NAME: +ledger_entries_posted_at_is_now' 
 # be able to mint a proof or record a sign-in attempt (a forged success would
 # end a lockout run). Only argon_auth, the auth service's role, can; and
 # argon_auth can neither use a proof (credential_acts) nor post (ledger_*).
-probe req P11 argon_app '42501.*permission denied for table auth_proofs' "app mints a PIN proof without a PIN" \
-  "INSERT INTO auth_proofs (user_id, method) VALUES ($U1, 'pin');"
+# A proof that is valid in EVERY other respect (scoped, once 0005 requires it),
+# so the only thing that can refuse it is the privilege. An unscoped proof
+# would be refused by 0005's own rule first, and P11 would then go red for the
+# wrong reason even with the grant restored (it did, under sabotage).
+probe req P11 argon_app '42501.*permission denied for table auth_proofs' "app mints a valid, scoped PIN proof without a PIN" \
+  "DO \$p\$ BEGIN
+     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'auth_proofs' AND column_name = 'act_kind') THEN
+       EXECUTE format('INSERT INTO auth_proofs (user_id, method, act_kind) VALUES (%L, ''pin'', ''ledger_batch'')', $U1);
+     ELSE
+       EXECUTE format('INSERT INTO auth_proofs (user_id, method) VALUES (%L, ''pin'')', $U1);
+     END IF;
+   END \$p\$;"
 probe req P12 argon_app '42501.*permission denied for table sign_in_attempts' "app records a sign-in success (would end a lockout run)" \
   "INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), true);"
 if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then

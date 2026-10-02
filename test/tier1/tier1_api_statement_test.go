@@ -21,7 +21,6 @@ package tier1
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,7 +88,12 @@ func signIn(t *testing.T, user string) string {
 	return tok
 }
 
-func randHex() string { return fmt.Sprintf("%016x%016x", seq.Add(1), seq.Add(1)*7919) + digest()[:32] }
+// randHex: a token unique across PROCESSES, not only within one. It used to be
+// a per-process counter plus the leading digits of a zero-padded timestamp
+// (always zeros), so every test process minted the same sequence; the drill,
+// which runs every suite as its own process in ONE restored database, made
+// two of them collide. Random, as a real token is.
+func randHex() string { return digest() }
 
 // ---- the statement's wire shape, decoded loosely so the TESTS read the JSON
 // as a client would, not through the generated types the handler uses -----------

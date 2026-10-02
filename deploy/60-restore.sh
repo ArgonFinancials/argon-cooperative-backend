@@ -5,7 +5,7 @@
 #   60-restore.sh --drill [--key dumps/.../argon-X]
 #       Restore into a scratch argon_drill_<ts>, verify it against the
 #       manifest, run the Tier 1 probe and every acceptance suite (ledger,
-#       auth, roles, statement API, postAll API) ON THE RESTORED COPY, drop it.
+#       auth, roles, statement API, postAll API, the step-up) ON THE RESTORED COPY, drop it.
 #       Exit 0 only if every check passes.
 #
 #   60-restore.sh --into argon --confirm [--key ...]
@@ -88,8 +88,9 @@ restore_secs=$(( $(date +%s) - t0 ))
 ok "pg_restore finished in ${restore_secs}s"
 
 info "comparing manifest"
-grep -v '^#' "$work/manifest.full" > "$work/expected"
-printf '%s\n' "$MANIFEST_SQL" | pg_as argon_migrator "$target" -q -At -f - > "$work/actual"
+# Both sides without CR: a native Windows psql writes CR LF to a file.
+grep -v '^#' "$work/manifest.full" | tr -d '\r' > "$work/expected"
+printf '%s\n' "$MANIFEST_SQL" | pg_as argon_migrator "$target" -q -At -f - | tr -d '\r' > "$work/actual"
 if ! diff -u "$work/expected" "$work/actual" > "$work/diff"; then
   cat "$work/diff" >&2
   die "restored database does NOT match the manifest"
@@ -111,6 +112,9 @@ if [[ $mode == drill ]]; then
     "roles (0004)|^TestRole|"
     "statement API|^TestApiStatement|"
     "postAll API|^TestApiBatch|"
+    "step-up (0005)|^TestProof|"
+    "step-up service|^TestStepUpS|"
+    "step-up API|^TestApiStepUp|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"

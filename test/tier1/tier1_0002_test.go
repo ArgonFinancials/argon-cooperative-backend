@@ -13,6 +13,7 @@
 package tier1
 
 import (
+	"strconv"
 	"context"
 	"regexp"
 	"errors"
@@ -45,6 +46,21 @@ func run(m *testing.M) int {
 	// Only a scratch name is accepted, never the live database, and it is
 	// never dropped here: the drill owns it.
 	existing := os.Getenv("ARGON_TEST_DB")
+	// Fixtures name things from one per-process counter (member numbers,
+	// phones, device tokens). In a fresh database that is enough; when several
+	// test processes share ONE database (the restore drill runs every suite
+	// against the same restored copy), each must start its own range, or the
+	// second process re-creates the first one's identifiers and a collision
+	// reads like a product defect (it did: a shared member number routed a
+	// sign-in to D-21's ambiguous path, and the lockout "failed").
+	if v := os.Getenv("ARGON_TEST_SEQ_BASE"); v != "" {
+		base, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || base < 0 || base > 90_000_000 {
+			fmt.Fprintf(os.Stderr, "tier1: ARGON_TEST_SEQ_BASE=%q must be 0..90000000\n", v)
+			os.Exit(2)
+		}
+		seq.Store(base)
+	}
 	if admin == "" || mig == "" || (schema == "" && existing == "") {
 		// Not t.Skip: a skipped Tier 1 suite reads as a green one.
 		fmt.Fprintln(os.Stderr, "tier1: set ARGON_TEST_ADMIN_URL, ARGON_TEST_MIGRATOR_URL, and ARGON_TEST_SCHEMA or ARGON_TEST_DB (see test/tier1/README.md)")
@@ -785,9 +801,39 @@ func TestS_Control_CurrentSignatorySigns(t *testing.T) {
 
 func (s *soc) openingBatch() string {
 	var id string
-	fixture(s.t, db.QueryRow(bg(), `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo)
-		VALUES ($1, $2, $3, 1, 10000) RETURNING id`, s.id, fmt.Sprintf("sha256:%d", seq.Add(1)), s.actor).Scan(&id), "opening-balance batch")
+	ref := fmt.Sprintf("sha256:%d", seq.Add(1))
+	if !schemaHasBatchActs() {
+		fixture(s.t, db.QueryRow(bg(), `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo)
+			VALUES ($1, $2, $3, 1, 10000) RETURNING id`, s.id, ref, s.actor).Scan(&id), "opening-balance batch")
+		return id
+	}
+	// 0005: a batch rests on its actor's step-up act, written in the batch's
+	// transaction and spending a proof minted before it.
+	proof := mintProof(s.t, s.actor)
+	fixture(s.t, tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('ledger_batch', $1, $2) RETURNING id`,
+			s.actor, proof).Scan(&act); err != nil {
+			return err
+		}
+		return x.QueryRow(bg(), `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo, authorised_by)
+			VALUES ($1, $2, $3, 1, 10000, $4) RETURNING id`, s.id, ref, s.actor, act).Scan(&id)
+	}), "opening-balance batch, on its step-up act")
 	return id
+}
+
+var (
+	batchActOnce sync.Once
+	batchHasAct  bool
+)
+
+// schemaHasBatchActs: does a batch name its authorising act (0005)?
+func schemaHasBatchActs() bool {
+	batchActOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'ledger_batches' AND column_name = 'authorised_by')`).Scan(&batchHasAct)
+	})
+	return batchHasAct
 }
 
 func TestV4_BatchesCarryNoAsOfColumn(t *testing.T) {

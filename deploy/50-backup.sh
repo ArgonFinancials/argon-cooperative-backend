@@ -28,11 +28,14 @@ cop_pid=$PSQL_PID
 exec {to}>&"${PSQL[1]}" {from}<&"${PSQL[0]}"
 echo "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT pg_export_snapshot();" >&$to
 read -r -t 30 snap <&$from || die "could not export snapshot"
+# A native Windows psql ends its lines with CR LF, and `read` keeps the CR.
+snap=${snap%$'\r'}
 [[ $snap =~ ^[0-9A-F]+-[0-9A-F]+-[0-9]+$ ]] || die "unexpected snapshot id: $snap"
 
 printf '%s\n\\echo __END__\n' "$MANIFEST_SQL" >&$to
 : > "$work/manifest"
 while read -r -t 60 line <&$from; do
+  line=${line%$'\r'}
   [[ $line == __END__ ]] && break
   [[ $line == ERROR:* ]] && die "manifest query failed: $line"
   echo "$line" >> "$work/manifest"

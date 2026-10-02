@@ -149,7 +149,7 @@ func (s *svcT) member(name string) member {
 	m := member{person: s.who(name), pin: "4827"}
 	fixture(s.t, db.QueryRow(bg(), `SELECT member_number FROM members WHERE id = $1`, m.member).Scan(&m.number), "member number")
 	fixture(s.t, s.exec(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, m.user, hashPIN(m.pin)), "PIN")
-	m.deviceToken = fmt.Sprintf("device-%d", seq.Add(1))
+	m.deviceToken = "device-" + digest() // random: a token, unique across processes
 	fixture(s.t, s.exec(`INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2)`, m.user, auth.TokenDigest(m.deviceToken)), "trusted device")
 	return m
 }

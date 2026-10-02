@@ -25,6 +25,8 @@
 package tier1
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -94,7 +96,13 @@ const argonHash = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHRzb21lc2FsdA$Zm9vYmF
 var dseq atomic.Int64
 
 // digest: a unique 64-hex string, the shape of an HMAC/SHA-256 digest.
-func digest() string { return fmt.Sprintf("%064x", time.Now().UnixNano()+dseq.Add(1)) }
+func digest() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
 
 type person struct{ user, member, phone string }
 
@@ -612,9 +620,10 @@ func TestAuthE5_AppliedNumberMustBeTheRecordedNumber(t *testing.T) {
 	a := newAuth(t)
 	o, m := a.resetFixture()
 	recorded, applied := unregistered(), unregistered()
+	proof := a.proof(o.user, "pin", "phone_change") // before the transaction: a proof is never minted where it is spent (0005)
 	err := a.tx(func(x pgx.Tx) error {
 		if _, err := x.Exec(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id, target_member_id, new_phone, reason)
-			VALUES ('phone_change', $1, $2, $3, $4, $5)`, o.user, a.proof(o.user, "pin", "phone_change"), m.member, recorded, why); err != nil {
+			VALUES ('phone_change', $1, $2, $3, $4, $5)`, o.user, proof, m.member, recorded, why); err != nil {
 			return err
 		}
 		_, err := x.Exec(bg(), `UPDATE members SET phone = $2 WHERE id = $1`, m.member, applied)
