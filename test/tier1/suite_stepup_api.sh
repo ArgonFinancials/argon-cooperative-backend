@@ -29,4 +29,5 @@ declare -gA SVC_TARGET_OF=(
   [refusal_spends_proof]='TestApiStepUp12_RefusedBatchKeepsTheProof'
   [failure_spends_proof]='TestApiStepUp13_FailedBatchKeepsTheProof'
   [batch_unlinked]='TestApiStepUp14_CommittedBatchSpendsItsProofThroughItsOwnAct'
+  [unconfigured_500]='TestApiStepUp15_UnconfiguredServerSaysSoAndMintsNothing'
 )

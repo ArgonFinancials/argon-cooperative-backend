@@ -21,8 +21,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 
+	"github.com/argon/backend/internal/api"
 	"github.com/argon/backend/internal/auth"
 )
 
@@ -282,5 +285,31 @@ func TestApiStepUp14_CommittedBatchSpendsItsProofThroughItsOwnAct(t *testing.T) 
 	}
 	if kind != "ledger_batch" || actor != w.secretary || used != *proof {
 		t.Fatalf("WRONG ACT — the batch is authorised by a %s act of %s spending %s; want ledger_batch, the secretary, this proof", kind, actor, used)
+	}
+}
+
+// The deployed binary runs WITHOUT an auth service until the argon_auth
+// connection and the SMS provider exist. The step-up must then say so —
+// a deliberate 503 naming the reason — rather than a bare 500 that reads as a
+// defect to whoever hits it next. And it mints nothing.
+func TestApiStepUp15_UnconfiguredServerSaysSoAndMintsNothing(t *testing.T) {
+	w := stepWorld(t, 0)
+	var h http.Handler
+	if brk, ok := os.LookupEnv("ARGON_TEST_API_FAKE"); ok {
+		h = newFakeAPIWith(&fakeAPI{db: db, brk: brk, noAuth: true})
+	} else {
+		var err error
+		h, err = api.NewServer(api.Deps{DB: db}) // no Auth: as cmd/api is today
+		fixture(t, err, "the API without an auth service")
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	w.srv = srv
+	r := askProof(t, w, signIn(t, w.secretary), stepPIN, "ledger_batch")
+	if r.status != http.StatusServiceUnavailable || !bytes.Contains(r.body, []byte(`"step_up_unavailable"`)) {
+		t.Fatalf("UNEXPLAINED — with no auth service the step-up answered %d %s; want 503 step_up_unavailable, saying why", r.status, r.body)
+	}
+	if n := proofCount(t, w.secretary); n != 0 {
+		t.Fatalf("MINTED — %d proof(s) on a server with no auth service", n)
 	}
 }

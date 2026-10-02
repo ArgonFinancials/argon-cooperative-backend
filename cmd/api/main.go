@@ -44,6 +44,12 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
+	// The auth service (sign-in, the PIN step-up) is not wired yet: it needs
+	// its own connection as argon_auth and the SMS provider, both pending.
+	// Until then POST /auth/pin-proofs answers 503 step_up_unavailable, so
+	// nothing that needs a step-up (postAll) can be authorised. Deliberate.
+	log.Warn("auth service not configured: the PIN step-up answers 503 step_up_unavailable, and imports cannot be authorised",
+		"needs", "argon_auth database connection and SMS provider")
 	h, err := api.NewServer(api.Deps{DB: pool, Log: log})
 	if err != nil {
 		log.Error("api", "err", err)

@@ -57,12 +57,16 @@ type (
 )
 
 type fakeAPI struct {
-	db  *pgxpool.Pool
-	brk string
+	db     *pgxpool.Pool
+	brk    string
+	noAuth bool // started without an auth service, as the deployed binary is for now
 }
 
 func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
-	f := &fakeAPI{db: pool, brk: brk}
+	return newFakeAPIWith(&fakeAPI{db: pool, brk: brk})
+}
+
+func newFakeAPIWith(f *fakeAPI) http.Handler {
 	h := api.HandlerFromMux(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +124,10 @@ var notFound = api.GetMemberStatement404JSONResponse{Code: "not_found", Message:
 
 func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberStatementRequestObject) (api.GetMemberStatementResponseObject, error) {
 	caller := ctx.Value(ctxUser{}).(string)
-	var m struct{ id, number, name, society string; user *string }
+	var m struct {
+		id, number, name, society string
+		user                      *string
+	}
 	if err := f.db.QueryRow(ctx, `SELECT id::text, member_number, full_name, society_id::text, user_id::text FROM members WHERE id = $1`,
 		req.MemberId.String()).Scan(&m.id, &m.number, &m.name, &m.society, &m.user); err != nil {
 		return notFound, nil
@@ -207,12 +214,12 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 	from, to := req.Params.From, req.Params.To
 	for rows.Next() {
 		var (
-			id, kind                                    string
-			postedAt                                    time.Time
-			valueDate, ref, rev, adj, reason, post      *string
-			actor, label                                string
-			sav, pc, am                                 int64
-			bankOut                                     bool
+			id, kind                               string
+			postedAt                               time.Time
+			valueDate, ref, rev, adj, reason, post *string
+			actor, label                           string
+			sav, pc, am                            int64
+			bankOut                                bool
 		)
 		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason, &actor, &post, &label, &sav, &pc, &am, &bankOut); err != nil {
 			return nil, err
@@ -238,10 +245,10 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 
 		r := api.StatementRow{
 			EntryId: uuidOf(id), PostedAt: postedAt, Kind: api.MovementKind(kind), Reference: ref,
-			GrossKobo:       api.Magnitude(strconv.FormatInt(abs(sav+pc+am), 10)),
-			SavingsLineKobo: api.Kobo(strconv.FormatInt(sav, 10)),
+			GrossKobo:          api.Magnitude(strconv.FormatInt(abs(sav+pc+am), 10)),
+			SavingsLineKobo:    api.Kobo(strconv.FormatInt(sav, 10)),
 			SavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(run, 10)),
-			Reason:          reason,
+			Reason:             reason,
 		}
 		if f.brk == "balance_contract_sign" {
 			r.SavingsBalanceKobo = api.SavingsBalance(strconv.FormatInt(-run, 10))

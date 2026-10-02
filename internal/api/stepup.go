@@ -18,7 +18,12 @@ import (
 // which cannot mint one — so the path that uses a proof cannot have made it.
 func (s *server) PostPinProof(ctx context.Context, req PostPinProofRequestObject) (PostPinProofResponseObject, error) {
 	if s.auth == nil {
-		return nil, errors.New("api: no auth service configured for the step-up")
+		// Deliberate: the server was started without an auth service (it
+		// needs the argon_auth connection and the SMS provider). Say so, in
+		// words that do not read as a defect.
+		return PostPinProof503JSONResponse{Code: "step_up_unavailable",
+			Message: "The PIN step-up is not available on this server yet: it runs without an auth service " +
+				"(pending the argon_auth database connection and the SMS provider). Nothing was minted."}, nil
 	}
 	if req.Body == nil {
 		return PostPinProof400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil

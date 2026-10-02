@@ -10,6 +10,7 @@
 //	pin_proof_ignores_lock a locked account still mints
 //	pin_proof_any_act      an unknown act is minted for
 //	pin_proof_unscoped     the proof names no act
+//	unconfigured_500       with no auth service, a bare 500 instead of a 503 that says why
 package tier1
 
 import (
@@ -21,6 +22,12 @@ import (
 )
 
 func (f *fakeAPI) PostPinProof(ctx context.Context, req api.PostPinProofRequestObject) (api.PostPinProofResponseObject, error) {
+	if f.noAuth {
+		if f.brk == "unconfigured_500" {
+			return nil, errors.New("no auth service") // a bare 500: reads as a defect
+		}
+		return api.PostPinProof503JSONResponse{Code: "step_up_unavailable", Message: "the PIN step-up is not available on this server yet"}, nil
+	}
 	if req.Body == nil {
 		return api.PostPinProof400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}

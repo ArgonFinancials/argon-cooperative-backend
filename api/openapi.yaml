@@ -507,6 +507,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: |
+            step_up_unavailable — DELIBERATE, not a defect: this server runs
+            without an auth service (it needs the argon_auth database
+            connection and the SMS provider, both pending). Nothing is minted,
+            so nothing that needs a step-up (an import) can be authorised here.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /members/{memberId}/statement:
     get:
