@@ -230,6 +230,19 @@ probe req P11 argon_app '42501.*permission denied for table auth_proofs' "app mi
        EXECUTE format('INSERT INTO auth_proofs (user_id, method) VALUES (%L, ''pin'')', $U1);
      END IF;
    END \$p\$;"
+# What the app must not READ: the split took minting away, not reading. A
+# handler that can read PIN hashes is an offline attack on every PIN in the
+# system. (credential_acts.new_pin_hash carries the same hashes, from PIN
+# changes and resets.) The app reads only what session_valid and its own
+# writes need.
+probe req P15 argon_app '42501.*permission denied for table auth_credentials' "app reads the PIN hashes" \
+  "SELECT pin_hash FROM auth_credentials LIMIT 1;"
+probe req P16 argon_app '42501.*permission denied for table credential_acts' "app reads a PIN hash carried by an act" \
+  "SELECT new_pin_hash FROM credential_acts LIMIT 1;"
+probe req P17 argon_app '42501.*permission denied for table auth_codes' "app reads the sign-in code digests" \
+  "SELECT code_digest FROM auth_codes LIMIT 1;"
+probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
+  "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 probe req P12 argon_app '42501.*permission denied for table sign_in_attempts' "app records a sign-in success (would end a lockout run)" \
   "INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), true);"
 if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then

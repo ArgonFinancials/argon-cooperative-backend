@@ -63,8 +63,15 @@ GRANT UPDATE (explanation, resolved_at) ON wallet_reconciliations TO argon_app;
 -- with the caller's privileges — and writes only the attributable act that
 -- spends a proof. argon_auth writes no act and no ledger row. The probe
 -- proves both halves (P11–P14), so the split is shown, not just configured.
-GRANT SELECT ON auth_credentials, auth_proofs, auth_codes, auth_devices, auth_sessions,
-                sign_in_attempts, credential_acts TO argon_app;
+--
+-- And what argon_app READS: only what session_valid needs (sessions and
+-- devices, which hold token digests) and the acts it writes, WITHOUT their PIN
+-- hash. Never PIN hashes (auth_credentials, credential_acts.new_pin_hash),
+-- code digests or attempts: a handler role that can read PIN hashes is an
+-- offline attack on every PIN in the system (probe P15–P17).
+GRANT SELECT ON auth_devices, auth_sessions TO argon_app;
+GRANT SELECT (id, kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id,
+              new_phone, request_id, reason, at, act_xid) ON credential_acts TO argon_app;
 GRANT INSERT (id, kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id,
               new_phone, new_pin_hash, request_id, reason) ON credential_acts TO argon_app;
 
