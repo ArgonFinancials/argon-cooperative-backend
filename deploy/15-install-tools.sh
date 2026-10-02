@@ -22,10 +22,20 @@ info "migrate $MIGRATE_VERSION"
 GOBIN=/usr/local/bin GOFLAGS=-mod=mod GOPATH=/root/go GOCACHE=/root/.cache/go-build \
   /usr/local/go/bin/go install -tags postgres \
   "github.com/golang-migrate/migrate/v4/cmd/migrate@$MIGRATE_VERSION"
-ok "$(/usr/local/bin/migrate -version 2>&1)"
+# `migrate -version` says "dev" for any `go install` build, so it proves
+# nothing (found on the first EC2 run). The module version is in the binary.
+got=$(/usr/local/go/bin/go version -m /usr/local/bin/migrate | awk '$1 == "mod" && $2 == "github.com/golang-migrate/migrate/v4" {print $3}')
+[[ $got == "$MIGRATE_VERSION" ]] || die "migrate is module version '${got:-unknown}', not $MIGRATE_VERSION"
+ok "migrate $got (module version, read from the binary)"
 
 if [[ $BACKUP_STORE == s3://* ]] && ! command -v aws >/dev/null; then
   info "AWS CLI (snap, published by Amazon)"
   snap install aws-cli --classic
 fi
-command -v aws >/dev/null && ok "$(aws --version)"
+# As the last command, a bare `command -v aws && ok` made the whole script
+# exit 1 whenever the AWS CLI was rightly skipped (found on the first EC2 run).
+if command -v aws >/dev/null; then
+  ok "$(aws --version)"
+else
+  info "AWS CLI not installed: BACKUP_STORE is not s3:// (see the stated gap in deploy/README.md)"
+fi
