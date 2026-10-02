@@ -1,7 +1,7 @@
 [Unit]
 Description=Argon nightly backup to S3
-After=postgresql@16-main.service
-Requires=postgresql@16-main.service
+After=postgresql@18-main.service
+Requires=postgresql@18-main.service
 
 [Service]
 Type=oneshot

@@ -15,6 +15,12 @@ for a in "$@"; do [[ $a == --confirm ]] && confirm=1 || args+=("$a"); done
 ((${#args[@]})) || args=(up)
 
 if [[ ${args[0]} == version ]]; then run_migrate "$ARGON_DB" version; exit; fi
+# Going down drops tables and their rows. On a shared developer server that is
+# refused for everything but a scratch database. (force only rewrites
+# migrate's own version record, and is the recovery from "dirty".)
+if [[ $TARGET == local && ${args[0]} =~ ^(down|drop|goto)$ ]]; then
+  assert_scratch "$ARGON_DB"
+fi
 
 if [[ $TARGET == host ]]; then
   ((confirm)) || die "host target: re-run with --confirm. This will back up '$ARGON_DB' and then run: migrate ${args[*]}"

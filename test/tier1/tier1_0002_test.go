@@ -77,6 +77,12 @@ func run(m *testing.M) int {
 			`REVOKE ALL ON DATABASE ` + name + ` FROM PUBLIC`,
 			`GRANT CONNECT ON DATABASE ` + name + ` TO argon_migrator`,
 		}, setup...)
+		// The drop is guarded like every destructive operation: only a name
+		// this process generated, in the scratch pattern, is ever dropped.
+		if !regexp.MustCompile(`^argon_verify_t[0-9]+$`).MatchString(name) {
+			fmt.Fprintf(os.Stderr, "tier1: refusing to create or drop %q: not a scratch name\n", name)
+			os.Exit(2)
+		}
 		defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
 	}
 	for _, q := range setup {

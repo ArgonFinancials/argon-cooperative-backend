@@ -29,6 +29,16 @@ while (($#)); do case $1 in
   *) die "unknown arg $1" ;;
 esac; done
 [[ -n $mode ]] || die "use --drill or --into DB --confirm"
+# Restoring drops the target, so the name is checked before anything else
+# runs. On a shared developer server only scratch names may be dropped; on
+# EC2, only the real database or a scratch one.
+if [[ $mode == real ]]; then
+  if [[ $TARGET == host ]]; then
+    [[ $into == "$ARGON_DB" ]] || assert_scratch "$into"
+  else
+    assert_scratch "$into"
+  fi
+fi
 
 key=${key:-$(store_latest_dump)}; key=${key%.dump}
 [[ -n $key ]] || die "no dumps found in $BACKUP_STORE"

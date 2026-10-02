@@ -14,7 +14,7 @@ if [[ $TARGET == docker ]]; then
   binding=$(dc port postgres 5432 || true)
   [[ $binding == "127.0.0.1:$PGPORT" ]] || flag "postgres published on '$binding' — must be 127.0.0.1:$PGPORT"
   v=$(pg_super -d postgres -At -c 'SHOW server_version_num' </dev/null)
-  [[ $v == 16* ]] || flag "server_version_num=$v, want 16.x"
+  [[ $v == "$PG_MAJOR"* ]] || flag "server_version_num=$v, want $PG_MAJOR.x"
   ((fail == 0)) && ok "local docker postgres $v on $binding" || die "preflight failed"
   exit 0
 fi
@@ -26,7 +26,7 @@ if [[ $TARGET == local ]]; then
   q() { pg_super -d postgres -At -c "$1" </dev/null; }
   v=$(q 'SHOW server_version_num') || die "cannot reach the superuser on 127.0.0.1:$PGPORT (POSTGRES_SUPERUSER / POSTGRES_PASSWORD in $ARGON_ENV)"
   info "server $(q 'SHOW server_version'), listen_addresses=$(q 'SHOW listen_addresses'), template1 encoding $(q "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = 'template1'")"
-  [[ $v == 16* ]] || printf '\033[33m  ?? server is %s; EC2 runs PostgreSQL 16. Every result here is a PostgreSQL %s result.\033[0m\n' "$(q 'SHOW server_version')" "${v:0:2}" >&2
+  [[ $v == "$PG_MAJOR"* ]] || flag "server is $(q 'SHOW server_version'): every target runs PostgreSQL $PG_MAJOR, so results here would not speak for EC2"
   [[ $(q 'SHOW listen_addresses') =~ ^(localhost|127\.0\.0\.1)$ ]] ||
     printf '\033[33m  ?? this server listens on %s, not loopback only: reachable from the network if the firewall allows it\033[0m\n' "$(q 'SHOW listen_addresses')" >&2
   [[ $(q "SELECT count(*) FROM pg_available_extensions WHERE name = 'btree_gist'") == 1 ]] || flag "btree_gist is not available (0002 needs it)"
@@ -64,7 +64,7 @@ done < <(sudo ss -Htulpn | awk '{print $1, $5, $7}')
 
 # ---- services ----------------------------------------------------------------
 info "running services"
-allowed='^(acpid|chrony|containerd|cron|dbus|docker|getty@.*|serial-getty@.*|irqbalance|ModemManager|multipathd|networkd-dispatcher|polkit|rsyslog|snap\.amazon-ssm-agent\..*|snapd|ssh|systemd-.*|udisks2|unattended-upgrades|user@[0-9]+|postgresql@16-main|argon-api|fwupd|packagekit|apt-daily.*|update-notifier.*|check-new-release)\.service$'
+allowed='^(acpid|chrony|containerd|cron|dbus|docker|getty@.*|serial-getty@.*|irqbalance|ModemManager|multipathd|networkd-dispatcher|polkit|rsyslog|snap\.amazon-ssm-agent\..*|snapd|ssh|systemd-.*|udisks2|unattended-upgrades|user@[0-9]+|postgresql@'"$PG_MAJOR"'-main|argon-api|fwupd|packagekit|apt-daily.*|update-notifier.*|check-new-release)\.service$'
 while read -r unit _; do
   [[ $unit =~ $allowed ]] || flag "unrecognised running service: $unit"
 done < <(systemctl list-units --type=service --state=running --no-legend --plain)
@@ -76,7 +76,7 @@ fi
 # Postgres clusters that are not ours.
 if command -v pg_lsclusters >/dev/null; then
   pg_lsclusters -h | while read -r ver name _; do
-    [[ "$ver/$name" == 16/main ]] || echo "$ver/$name"
+    [[ "$ver/$name" == "$PG_MAJOR/main" ]] || echo "$ver/$name"
   done | grep -q . && flag "unexpected postgres cluster(s): $(pg_lsclusters -h | awk '{print $1"/"$2}' | tr '\n' ' ')"
 fi
 

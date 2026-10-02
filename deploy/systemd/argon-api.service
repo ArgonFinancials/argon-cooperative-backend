@@ -1,9 +1,9 @@
 [Unit]
 Description=Argon API
 Documentation=file:///opt/argon/deploy/README.md
-After=network-online.target postgresql@16-main.service
+After=network-online.target postgresql@18-main.service
 Wants=network-online.target
-Requires=postgresql@16-main.service
+Requires=postgresql@18-main.service
 # Crash-looping five times in two minutes stops trying rather than hammering
 # the database.
 StartLimitIntervalSec=120

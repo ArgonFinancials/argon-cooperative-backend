@@ -6,6 +6,8 @@ Instance `i-0df0964197555cc26`, us-east-1d, t4g.medium (arm64), Ubuntu 26.04. Re
 ## 0. Confirm before anything
 - [ ] Is this the same AWS account as the production loan platform? If yes, every resource below stays separate from it (own role, own SG, own bucket, own key pair), and none is shared.
 
+**Stated requirement: PostgreSQL 18** on the instance, from PGDG (`resolute-pgdg`, checked 2026-10-02: 18.6 for arm64), installed by `deploy/10-install-postgres.sh`, which refuses any other major version or source. This is not something AWS provisions, and nothing on the host forces another version. It is listed here because the database's major version must match local development's (18): an 18 `pg_dump` cannot be restored into 16, so a split would make backups one-way and leave each drill proving only its own version. Outbound 443 to PGDG (A2) is what it needs.
+
 ---
 
 ## PART A — needed to deploy at all

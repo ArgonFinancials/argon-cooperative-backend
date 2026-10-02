@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# HOST ONLY. PostgreSQL 16 from PGDG (Ubuntu 26.04 ships only 18), bound to
-# loopback, scram-sha-256 over TCP, peer for the postgres OS user. Idempotent.
+# HOST ONLY. PostgreSQL $PG_MAJOR (18) from PGDG, bound to loopback,
+# scram-sha-256 over TCP, peer for the postgres OS user. Idempotent.
+#
+# 18 is a REQUIREMENT, not whatever the distribution offers: local
+# development runs 18, and one major version on both ends is what lets dumps
+# move either way (an 18 pg_dump cannot restore into 16), keeps backup
+# manifests comparable, and makes local test results speak for production.
+# Ubuntu 26.04's own archive also carries postgresql-18; PGDG is pinned so
+# minor releases follow PGDG's patches, and the source is asserted below.
 # Fails — rather than warns — if 5432 ends up reachable from anywhere but
 # loopback.
 source "$(dirname "$0")/lib.sh"
@@ -23,11 +30,20 @@ echo "deb [signed-by=$KEY] https://apt.postgresql.org/pub/repos/apt $CODENAME-pg
   > /etc/apt/sources.list.d/pgdg.list
 apt-get update -q
 
-info "installing postgresql-16"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-16 postgresql-client-16
-pg_lsclusters -h | grep -q '^16 main' || pg_createcluster 16 main --start
+# Prefer PGDG over the distribution's build of the same packages.
+cat > /etc/apt/preferences.d/pgdg.pref <<'EOF'
+Package: *
+Pin: release o=apt.postgresql.org
+Pin-Priority: 900
+EOF
 
-CONF=/etc/postgresql/16/main
+info "installing postgresql-$PG_MAJOR"
+DEBIAN_FRONTEND=noninteractive apt-get install -y -q "postgresql-$PG_MAJOR" "postgresql-client-$PG_MAJOR"
+src=$(apt-cache policy "postgresql-$PG_MAJOR" | awk '/\*\*\*/{getline; print; exit}')
+[[ $src == *apt.postgresql.org* ]] || die "postgresql-$PG_MAJOR came from '$src', not PGDG"
+pg_lsclusters -h | grep -q "^$PG_MAJOR main" || pg_createcluster "$PG_MAJOR" main --start
+
+CONF=/etc/postgresql/$PG_MAJOR/main
 info "configuring $CONF"
 # Sized for a t4g.medium (3.7 GiB) shared with the API.
 cat > "$CONF/conf.d/argon.conf" <<'EOF'
@@ -64,8 +80,8 @@ EOF
 chown postgres:postgres "$CONF/pg_hba.conf" "$CONF/conf.d/argon.conf"
 chmod 0640 "$CONF/pg_hba.conf"
 
-systemctl enable --now postgresql@16-main
-systemctl restart postgresql@16-main
+systemctl enable --now "postgresql@$PG_MAJOR-main"
+systemctl restart "postgresql@$PG_MAJOR-main"
 for _ in $(seq 20); do pg_isready -q -h 127.0.0.1 && break; sleep 1; done
 pg_isready -h 127.0.0.1 || die "postgres did not come up"
 
@@ -74,6 +90,7 @@ bad=$(ss -Htln "sport = :5432" | awk '{print $4}' | grep -vE '^(127\.0\.0\.1|\[:
 [[ -z $bad ]] || die "postgres is listening on: $bad"
 ss -Htln "sport = :5432" | awk '{print "    " $4}' >&2
 v=$(sudo -u postgres psql -XAtc 'SHOW server_version')
+[[ $v == "$PG_MAJOR".* ]] || die "the running server is $v, not PostgreSQL $PG_MAJOR"
 ok "postgres $v on loopback only"
 
 # Optional: 2 GiB swap, so a memory spike is slow rather than an OOM kill of

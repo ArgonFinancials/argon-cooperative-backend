@@ -14,7 +14,7 @@
 #   pg_as     — a named argon_* role over TCP to 127.0.0.1, password from the
 #               environment (never argv, so it never shows in `ps`).
 # Client tools (psql, pg_dump, pg_restore) must be the server's major version:
-# inside the container (docker), the server's own install (local), PGDG 16 (host).
+# inside the container (docker), the server's own install (local), PGDG $PG_MAJOR (host).
 
 set -Eeuo pipefail
 
@@ -40,6 +40,8 @@ set -a; source "$ARGON_ENV"; set +a
 : "${COMPOSE_FILE:=$REPO_DIR/docker-compose.yml}"
 case "$TARGET" in docker|local|host) ;; *) die "TARGET=$TARGET (want docker|local|host)";; esac
 : "${POSTGRES_SUPERUSER:=postgres}"
+# The PostgreSQL major version every target runs: local, docker and EC2 alike.
+: "${PG_MAJOR:=18}"
 # A relative file:// store is relative to the repo, not the caller's cwd.
 if [[ $BACKUP_STORE == file://* && ${BACKUP_STORE#file://} != /* ]]; then
   BACKUP_STORE="file://$REPO_DIR/${BACKUP_STORE#file://./}"
@@ -97,12 +99,24 @@ pg_as() {
   pg_tool "$role" "$pwvar" psql -X -v ON_ERROR_STOP=1 -d "$db" "$@"
 }
 
+# THE GUARD. On a shared server (TARGET=local) the scratch-name rule is the
+# only thing between a mistake and someone else's databases, so every
+# destructive operation calls this BEFORE touching anything: dropping,
+# restoring over, migrating down, or writing probe/test fixtures (rows that
+# can never be deleted). It refuses every other name, argon_test and the real
+# argon included. The pattern is anchored at both ends and admits no quotes,
+# dots, spaces or capitals.
+SCRATCH_RE='^argon_(drill|verify)_[0-9a-z_]+$'
+assert_scratch() {
+  [[ ${1:-} =~ $SCRATCH_RE ]] ||
+    die "refusing '${1:-}': destructive operations run only on scratch databases (argon_verify_*, argon_drill_*)"
+}
+
 # Scratch databases (restore drills, constraint probes). Owned by argon_owner,
-# connectable only by the argon roles. Name must match the scratch pattern so a
-# typo can never point this at the real database.
+# connectable only by the argon roles.
 create_scratch_db() {
   local db=$1
-  [[ $db =~ ^argon_(drill|verify)_[0-9a-z_]+$ ]] || die "refusing scratch db name '$db'"
+  assert_scratch "$db"
   pg_super -d postgres <<SQL
 CREATE DATABASE "$db" OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0;
 REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
@@ -111,7 +125,7 @@ SQL
 }
 drop_scratch_db() {
   local db=$1
-  [[ $db =~ ^argon_(drill|verify)_[0-9a-z_]+$ ]] || die "refusing to drop '$db'"
+  assert_scratch "$db"
   pg_super -d postgres -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" </dev/null
 }
 
@@ -188,6 +202,7 @@ SQL
 # run_tier1 DB RUN-REGEX [SKIP-REGEX]
 run_tier1() {
   local db=$1 re=$2 skip=${3:-} bin rc=0 log
+  assert_scratch "$db"   # the suites write fixtures that can never be deleted
   local args=(-test.run "$re" -test.count=1 -test.v)
   [[ -n $skip ]] && args+=(-test.skip "$skip")
   log=$(mktemp)

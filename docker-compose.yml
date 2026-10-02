@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       # Superuser only. The app connects as argon_app — see deploy/20-roles.sh.
       POSTGRES_USER: postgres
@@ -11,11 +11,11 @@ services:
     # deploy/env/local.env (5433 by default) so it never collides with a native
     # Postgres already on 5432.
     ports: ["127.0.0.1:${PGPORT:?set PGPORT in deploy/env/local.env}:5432"]
-    volumes: ["argon-pg16:/var/lib/postgresql/data"]
+    volumes: ["argon-pg18:/var/lib/postgresql"]   # 18+ images keep PGDATA under /var/lib/postgresql/18/docker
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       retries: 10
 
 volumes:
-  argon-pg16:
+  argon-pg18:

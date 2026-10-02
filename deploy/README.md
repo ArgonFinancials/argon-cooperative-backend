@@ -8,7 +8,7 @@ machine), `docker` (the compose container), or `host` (EC2).
 | Script | Target | Purpose |
 |---|---|---|
 | `00-preflight.sh` | all | Read-only. Aborts if the host carries anything not on the allowlist. |
-| `10-install-postgres.sh` | host | PG 16 from PGDG, loopback-only, scram. Asserts the binding. |
+| `10-install-postgres.sh` | host | PostgreSQL 18 from PGDG (asserted: major and source), loopback-only, scram. Asserts the binding. |
 | `15-install-tools.sh` | host | Go (pinned + sha256), migrate CLI, AWS CLI. |
 | `20-roles.sh` | all | argon_owner / argon_migrator / argon_app / argon_backup / argon_auth, the database. |
 | `30-install-api.sh` | host | Build and install the API, `/etc/argon/argon.env`, systemd unit (not started). |
@@ -38,9 +38,8 @@ What this touches on that server: five roles (`argon_owner`, `argon_migrator`,
 `argon_app`, `argon_backup`, `argon_auth`, cluster-wide, so visible to its other
 databases), the `argon_test` database, and short-lived scratch databases
 (`argon_verify_*`, `argon_drill_*`) that are dropped after use. Nothing else.
-Client tools are that server's own, so their version matches it. **Its major
-version is whatever is installed (18 on the reference laptop), not EC2's 16**:
-see "Version skew" below.
+Client tools are that server's own, so their version matches it. Preflight
+refuses a server that is not PostgreSQL 18: see "One major version" below.
 
 `TARGET=docker` still works with `docker-compose.yml` (`PGPORT=5433`, the
 container's own superuser password, `make up`).
@@ -76,6 +75,23 @@ From a laptop, the database is reached only through a tunnel:
 `/etc/argon/deploy.env` carries four role passwords, all generated on the instance:
 migrator, app, backup, and since 0005 **`ARGON_AUTH_PASSWORD`** (the auth
 service's role). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
+
+## One major version: 18, everywhere
+
+Local, docker and EC2 all run PostgreSQL 18 (`PG_MAJOR` in `lib.sh`;
+preflight and `10-install-postgres.sh` refuse anything else). One major
+version removes a whole class of differences: an 18 `pg_dump` cannot restore
+into 16, backup manifests from different majors do not match (18 lists NOT
+NULL constraints in `pg_constraint`; 16 does not), and error wording and
+trigger behaviour that cannot be verified by reading are then the same
+behaviour. Minor versions may differ (local 18.4, PGDG 18.6 on EC2).
+
+**Known difference, not a proven equivalence: collation.** A Windows server
+sorts text by Windows locale rules; EC2 by Linux (glibc/ICU) rules. Nothing in
+the schema or the tests *appears to* depend on text sort order: ordering is
+by time, id or number, and uniqueness is exact. "Appears to" is the accurate
+claim; no test establishes it. A result that depends on how two strings sort
+should be checked on EC2, not trusted from a Windows run.
 
 ## Trust boundary
 

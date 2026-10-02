@@ -1,7 +1,7 @@
 [Unit]
 Description=Argon restore drill: restore the latest backup into a scratch DB, verify, probe Tier 1, drop
-After=postgresql@16-main.service
-Requires=postgresql@16-main.service
+After=postgresql@18-main.service
+Requires=postgresql@18-main.service
 
 [Service]
 Type=oneshot

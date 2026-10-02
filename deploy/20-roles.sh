@@ -23,6 +23,16 @@ for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_
   [[ ${!v} =~ ^[A-Za-z0-9._~-]{16,}$ ]] || die "$v must be >=16 chars of [A-Za-z0-9._~-]"
 done
 
+# FIRST, before anything is created: never take over a database that is not
+# ours. On a shared server, ARGON_DB naming someone else's database would hand
+# it to argon_owner and revoke everyone else's access. Read-only.
+[[ $ARGON_DB =~ ^argon[0-9a-z_]*$ ]] || die "ARGON_DB='$ARGON_DB' is not an argon database name"
+owner=$(pg_super -d postgres -At -v db="$ARGON_DB" <<'SQL'
+SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'db'
+SQL
+)
+[[ -z $owner || $owner == argon_owner ]] || die "database '$ARGON_DB' already exists and belongs to '$owner', not argon_owner: refusing to take it over"
+
 info "roles"
 {
 printf "\\set migrator_pw '%s'\n\\set app_pw '%s'\n\\set backup_pw '%s'\n\\set auth_pw '%s'\n" \

@@ -27,7 +27,7 @@ while (($#)); do case $1 in
   --keep) keep=1; shift ;;
   *) die "unknown arg $1" ;;
 esac; done
-[[ -z $db || $db =~ ^argon_(drill|verify)_ ]] || die "--db must be a scratch database (argon_drill_* / argon_verify_*), never '$db'"
+[[ -z $db ]] || assert_scratch "$db"
 
 if [[ -z $db ]]; then
   db="argon_verify_$(date -u +%Y%m%dt%H%M%S)"
