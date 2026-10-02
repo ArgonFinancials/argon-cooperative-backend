@@ -33,7 +33,8 @@ if [[ $TARGET == local ]]; then
   # The drill's pg_dump/pg_restore come from PATH here, not from inside a
   # container: they must be the server's major version.
   for tool in psql pg_dump pg_restore; do
-    tv=$("$tool" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    tv=$("$tool" --version 2>/dev/null || true)   # no early-exit pipe under pipefail
+    [[ $tv =~ ([0-9]+) ]] && tv=${BASH_REMATCH[1]} || tv=""
     [[ $tv == "${v:0:2}" ]] || flag "$tool on PATH is major ${tv:-missing}; the server is ${v:0:2}"
   done
   ours="'argon_owner','argon_migrator','argon_app','argon_backup','argon_auth'"
@@ -72,7 +73,7 @@ while read -r unit _; do
   [[ $unit =~ $allowed ]] || flag "unrecognised running service: $unit"
 done < <(systemctl list-units --type=service --state=running --no-legend --plain)
 
-if command -v docker >/dev/null && sudo docker ps -q | grep -q .; then
+if command -v docker >/dev/null && [[ -n $(sudo docker ps -q) ]]; then
   flag "docker containers are running: $(sudo docker ps --format '{{.Names}}' | tr '\n' ' ')"
 fi
 

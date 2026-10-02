@@ -23,7 +23,9 @@ apt-get update -q
 apt-get install -y -q ca-certificates curl gnupg
 install -d -m 0755 "$(dirname "$KEY")"
 curl -fsSL -o "$KEY.tmp" https://www.postgresql.org/media/keys/ACCC4CF8.asc
-got=$(gpg --show-keys --with-colons "$KEY.tmp" | awk -F: '/^fpr/{print $10; exit}')
+# Never stop reading early in a pipe: under pipefail the writer's SIGPIPE (141)
+# kills the script silently (found on the first EC2 run, at the source check).
+got=$(gpg --show-keys --with-colons "$KEY.tmp" | awk -F: '/^fpr/ && !f {print $10; f=1}')
 [[ $got == "$PGDG_FPR" ]] || { rm -f "$KEY.tmp"; die "PGDG key fingerprint $got != $PGDG_FPR"; }
 mv "$KEY.tmp" "$KEY"
 echo "deb [signed-by=$KEY] https://apt.postgresql.org/pub/repos/apt $CODENAME-pgdg main" \
@@ -39,7 +41,7 @@ EOF
 
 info "installing postgresql-$PG_MAJOR"
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q "postgresql-$PG_MAJOR" "postgresql-client-$PG_MAJOR"
-src=$(apt-cache policy "postgresql-$PG_MAJOR" | awk '/\*\*\*/{getline; print; exit}')
+src=$(apt-cache policy "postgresql-$PG_MAJOR" | awk '/\*\*\*/ && !f {getline; print; f=1}')
 [[ $src == *apt.postgresql.org* ]] || die "postgresql-$PG_MAJOR came from '$src', not PGDG"
 pg_lsclusters -h | grep -q "^$PG_MAJOR main" || pg_createcluster "$PG_MAJOR" main --start
 
