@@ -104,6 +104,27 @@ components:
             to be told which date the balances actually carry, and a bare
             acknowledgement cannot say.
 
+    ActKind:
+      type: string
+      description: The attributable act a PIN proof is minted FOR (credential_acts.kind).
+      enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
+             signatory_reset_request, signatory_phone_request, signatory_approval]
+
+    PinProofRequest:
+      type: object
+      required: [pin, act]
+      properties:
+        pin: { type: string }
+        act: { $ref: '#/components/schemas/ActKind' }
+
+    PinProof:
+      type: object
+      required: [proofId, act, expiresAt]
+      properties:
+        proofId: { type: string, format: uuid }
+        act: { $ref: '#/components/schemas/ActKind' }
+        expiresAt: { type: string, format: date-time }
+
     LedgerBatch:
       type: object
       required: [kind, asOf, confirmedTotalKobo, rows]
@@ -125,6 +146,16 @@ components:
         rows:
           type: array
           items: { $ref: '#/components/schemas/BatchRow' }
+        pinProofId:
+          type: string
+          format: uuid
+          description: |
+            The STEP-UP (0005): a proof from POST /auth/pin-proofs, minted for
+            act "ledger_batch", by the caller, in the last five minutes, not yet
+            used. Spent by the batch, in the batch's own transaction. Needed only
+            when something is about to be WRITTEN: a repeat of a committed
+            reference needs none. A refused or failed call does not spend it, so
+            a quick retry can reuse it.
 
     BatchRow:
       type: object
@@ -398,7 +429,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: An officer of this society whose post does not import (the read-only auditor included).
+          description: |
+            not_permitted: an officer of this society whose post does not import
+            (the read-only auditor included). step_up_required: no usable PIN
+            proof (missing, stale, spent, someone else's, or minted for another
+            act). Nothing is written and the reference is not claimed.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -421,6 +456,54 @@ paths:
           description: |
             The write failed. NOTHING WAS WRITTEN and the reference is not
             claimed: retrying with the same key is safe and can succeed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/pin-proofs:
+    post:
+      operationId: postPinProof
+      summary: The PIN step-up — a proof that authorises ONE act of ONE kind (0005)
+      description: |
+        The signed-in person re-enters their PIN. A right PIN mints one proof
+        for the session holder, scoped to the act named here (bound at mint,
+        never at use: a proof minted for an import does not satisfy a
+        reversal), good for five minutes, spent by the act itself.
+
+        A wrong PIN mints nothing and counts towards the SAME per-account
+        lockout as sign-in. Otherwise a stolen session is an unlimited PIN oracle.
+
+        General by design: imports, reversals, officer resets and dispute
+        corrections all take a proof from here.
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PinProofRequest' }
+      responses:
+        '201':
+          description: Minted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PinProof' }
+        '400':
+          description: No such act, or a malformed body. Nothing is minted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No valid session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: pin_refused — the PIN is wrong. Nothing is minted; the failure is counted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: try_later — the account is locked, as it would be at sign-in. Nothing is minted.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

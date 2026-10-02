@@ -55,12 +55,50 @@ var (
 	// ErrTryLater follows too many attempts, for a registered and an
 	// unregistered credential alike.
 	ErrTryLater = errors.New("auth: too many attempts; try again later")
-
+	// ErrNoSession: the step-up was asked for without a live session.
+	ErrNoSession = errors.New("auth: no live session")
+	// ErrUnknownAct: a proof was asked for an act that does not exist.
+	ErrUnknownAct = errors.New("auth: no such act")
 )
 
 type Service interface {
 	SignIn(ctx context.Context, req SignInRequest) (Result, error)
 	VerifyCode(ctx context.Context, challenge, code string) (Result, error)
+	// ProvePIN is the STEP-UP (0005): the person signed in on sessionToken
+	// re-enters their PIN, and gets a proof that authorises ONE act of kind
+	// act, within five minutes. A wrong PIN counts towards the same per-account
+	// lockout as sign-in (same counter, same escalation): otherwise a stolen
+	// session is an unlimited PIN oracle. Errors: ErrNoSession, ErrUnknownAct,
+	// ErrRefused (wrong PIN), ErrTryLater (locked).
+	ProvePIN(ctx context.Context, sessionToken, pin string, act ActKind) (Proof, error)
+}
+
+// ActKind names the attributable act a PIN proof is minted FOR. The kind is
+// bound at mint, never at use: a proof minted for an import does not satisfy
+// a reversal (0005).
+type ActKind string
+
+const (
+	ActLedgerBatch           ActKind = "ledger_batch"
+	ActPinChange             ActKind = "pin_change"
+	ActMemberReset           ActKind = "member_reset"
+	ActPhoneChange           ActKind = "phone_change"
+	ActLockRelease           ActKind = "lock_release"
+	ActSignatoryResetRequest ActKind = "signatory_reset_request"
+	ActSignatoryPhoneRequest ActKind = "signatory_phone_request"
+	ActSignatoryApproval     ActKind = "signatory_approval"
+)
+
+// ActKinds is every kind a proof can be minted for: credential_acts.kind.
+var ActKinds = []ActKind{ActLedgerBatch, ActPinChange, ActMemberReset, ActPhoneChange, ActLockRelease,
+	ActSignatoryResetRequest, ActSignatoryPhoneRequest, ActSignatoryApproval}
+
+// Proof is a minted step-up. Its id is what the act names; it is spent by the
+// act, inside the act's own transaction, and by nothing else.
+type Proof struct {
+	ID        string
+	Act       ActKind
+	ExpiresAt time.Time
 }
 
 // SMS delivers a text to a phone number. The real one is a procurement item

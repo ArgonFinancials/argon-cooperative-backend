@@ -197,6 +197,35 @@ probe req P9 argon_app '42501.*permission denied for table ledger_entries' "app 
 probe req P10 $OWNER '23514.*CONSTRAINT NAME: +ledger_entries_posted_at_is_now' "owner supplies posted_at (refused for every role)"   "INSERT INTO ledger_entries (society_id, kind, value_date, posted_at, actor_user_id, actor_post_label)
      VALUES ($S, 'contribution_in', '2026-02-01', '2099-01-01', $ACTOR, 'Treasurer');"
 
+# == The step-up's ROLE half (0005): the path that uses a proof cannot mint it ==
+# The PIN is checked in Go, not in the database, so whoever can INSERT a PIN
+# proof can skip the PIN. The API's handlers run as argon_app, which must not
+# be able to mint a proof or record a sign-in attempt (a forged success would
+# end a lockout run). Only argon_auth, the auth service's role, can; and
+# argon_auth can neither use a proof (credential_acts) nor post (ledger_*).
+probe req P11 argon_app '42501.*permission denied for table auth_proofs' "app mints a PIN proof without a PIN" \
+  "INSERT INTO auth_proofs (user_id, method) VALUES ($U1, 'pin');"
+probe req P12 argon_app '42501.*permission denied for table sign_in_attempts' "app records a sign-in success (would end a lockout run)" \
+  "INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), true);"
+if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then
+  probe req P13 argon_auth '42501.*permission denied for table credential_acts' "the auth role uses a proof (writes an attributable act)" \
+    "INSERT INTO credential_acts (kind, actor_user_id) VALUES ('ledger_batch', $U1);"
+  probe req P14 argon_auth '42501.*permission denied for table ledger_batches' "the auth role posts a ledger batch" \
+    "INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo) VALUES ($S, 'P14', $U1, 1, 1);"
+  probe ctl K11 argon_auth '' "control: the auth role mints a scoped PIN proof (rolled back)" \
+    "BEGIN; INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($U1, 'pin', 'ledger_batch'); ROLLBACK;"
+  probe ctl K12 argon_auth '' "control: the auth role records a sign-in attempt (rolled back)" \
+    "BEGIN; INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), false); ROLLBACK;"
+else
+  # Not provisioned: the separation does not exist, which is a failure, not a skip.
+  for c in "P13|the auth role uses a proof" "P14|the auth role posts a ledger batch" "K11|control: the auth role mints a proof" "K12|control: the auth role records an attempt"; do
+    class=req; [[ ${c:0:1} == K ]] && class=ctl
+    ROWS+=("$(printf '%-4s %-3s %-14s %-23s %s\n                                              → %s' "${c%%|*}" "$class" argon_auth "NOT PROVISIONED ✗" "${c#*|}" "ARGON_AUTH_PASSWORD is unset: there is no argon_auth role, so nothing separates minting from use")")
+    printf '%-4s %-24s %s\n' "${c%%|*}" "NOT PROVISIONED ✗" "${c#*|}" >&2
+  done
+  req_fail=1
+fi
+
 # == Closed by 0002 — were gaps under 0001 =====================================
 probe req G1 argon_app '23514.*CONSTRAINT NAME: +ledger_lines_entry_open' "add a balanced pair of new lines to an already-POSTED entry" \
   "BEGIN;

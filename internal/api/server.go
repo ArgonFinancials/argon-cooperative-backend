@@ -16,16 +16,21 @@ import (
 // Deps is what the API needs. Identity comes only from a session token
 // (Authorization: Bearer), resolved against the database by session_valid.
 type Deps struct {
-	DB  *pgxpool.Pool
-	Log *slog.Logger // optional; slog.Default() when nil
+	DB   *pgxpool.Pool
+	Log  *slog.Logger // optional; slog.Default() when nil
+	Auth auth.Service // the step-up (POST /auth/pin-proofs); optional until it is built
 }
 
 type server struct {
-	db  *pgxpool.Pool
-	log *slog.Logger
+	db   *pgxpool.Pool
+	log  *slog.Logger
+	auth auth.Service
 }
 
-type callerKey struct{}
+type (
+	callerKey struct{}
+	tokenKey  struct{} // the bearer token itself: the step-up re-proves the PIN on THIS session
+)
 
 // NewServer returns the HTTP handler for every path in api/openapi.yaml,
 // through the generated router and strict-server types, so a handler that
@@ -34,7 +39,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	if d.DB == nil {
 		return nil, errors.New("api: Deps.DB is required")
 	}
-	s := &server{db: d.DB, log: d.Log}
+	s := &server{db: d.DB, log: d.Log, auth: d.Auth}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
@@ -70,7 +75,8 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			writeProblem(w, http.StatusUnauthorized, Problem{Code: "unauthenticated", Message: "sign in again"})
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, user)))
+		ctx := context.WithValue(context.WithValue(r.Context(), callerKey{}, user), tokenKey{}, tok)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -87,6 +93,15 @@ func (s *server) GetHealthz(ctx context.Context, _ GetHealthzRequestObject) (Get
 }
 
 // PostLedgerBatch (postAll): batch.go.
+
+// ErrStepUpNotBuilt: POST /auth/pin-proofs has its acceptance tests written and
+// under review (test/tier1/tier1_api_stepup_test.go). Until the handler is
+// written against them it mints nothing.
+var ErrStepUpNotBuilt = errors.New("api: POST /auth/pin-proofs is not built yet")
+
+func (s *server) PostPinProof(context.Context, PostPinProofRequestObject) (PostPinProofResponseObject, error) {
+	return nil, ErrStepUpNotBuilt
+}
 
 // RequestError answers a request the generated layer could not decode — money
 // sent as a JSON number, a body that is not JSON — as a JSON Problem, never

@@ -93,11 +93,39 @@ type bRow struct {
 }
 
 type bBody struct {
-	Kind               string `json:"kind"`
-	AsOf               any    `json:"asOf"`
-	ConfirmedTotalKobo any    `json:"confirmedTotalKobo"`
-	Rows               []bRow `json:"rows"`
+	Kind               string  `json:"kind"`
+	AsOf               any     `json:"asOf"`
+	ConfirmedTotalKobo any     `json:"confirmedTotalKobo"`
+	Rows               []bRow  `json:"rows"`
+	PinProofId         *string `json:"pinProofId,omitempty"`
 }
+
+// proofKinds: does the schema scope proofs to an act (0005)? The fixtures
+// mint what the schema in use can hold, as accountInsert does for roles.
+var (
+	proofKindOnce sync.Once
+	proofHasKind  bool
+)
+
+// mintProof: a fresh PIN proof for user, minted as the auth service would —
+// in its own transaction, before the call that spends it. A FIXTURE: it skips
+// the PIN, which is the step-up suite's subject, not this one's.
+func mintProof(t *testing.T, user string) string {
+	t.Helper()
+	proofKindOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'auth_proofs' AND column_name = 'act_kind')`).Scan(&proofHasKind)
+	})
+	var id string
+	q := `INSERT INTO auth_proofs (user_id, method) VALUES ($1, 'pin') RETURNING id::text`
+	if proofHasKind {
+		q = `INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($1, 'pin', 'ledger_batch') RETURNING id::text`
+	}
+	fixture(t, db.QueryRow(bg(), q, user).Scan(&id), "a PIN proof for the import")
+	return id
+}
+
+func (w *bworld) proof(t *testing.T) *string { p := mintProof(t, w.secretary); return &p }
 
 // file builds the import of members[i] with amounts[i], file rows from 2 (row
 // 1 is the header), confirming the true total.
@@ -150,8 +178,12 @@ func postBatch(t *testing.T, c *http.Client, srv *httptest.Server, society, key,
 	return resp{r.StatusCode, buf.Bytes()}, nil
 }
 
-func (w *bworld) post(t *testing.T, key string, body any) resp {
+// post: as the secretary, with a fresh proof unless the body carries one.
+func (w *bworld) post(t *testing.T, key string, body bBody) resp {
 	t.Helper()
+	if body.PinProofId == nil {
+		body.PinProofId = w.proof(t)
+	}
 	r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, w.secretary), body)
 	fixture(t, err, "POST batch")
 	return r
@@ -546,6 +578,7 @@ func TestApiBatch07_RetryRacingTheOriginalPostsOnce(t *testing.T) {
 	w := newBatchWorld(t, 3)
 	f := inject(t, w.s.id, w.members[2], stall)
 	key, body := newKey(), file("2025-12-31", w.members, 10, 20, 30)
+	body.PinProofId = w.proof(t)
 	tokA, tokB := signIn(t, w.secretary), signIn(t, w.secretary)
 	before := stateOf(t, w.s.id)
 	call := func(tok string) func() resp {
@@ -587,6 +620,7 @@ func TestApiBatch08_ClientTimeoutThenRetryPostsExactlyOnce(t *testing.T) {
 	w := newBatchWorld(t, 3)
 	f := inject(t, w.s.id, w.members[1], stall)
 	key, body := newKey(), file("2025-12-31", w.members, 10, 20, 30)
+	body.PinProofId = w.proof(t) // the retry carries the SAME proof: the abandoned call must not have spent it
 	before := stateOf(t, w.s.id)
 
 	// The client gives up once its request is inside the write — not after a
@@ -629,6 +663,7 @@ func TestApiBatch09_TwoImportsNamingOneMemberCannotBothPost(t *testing.T) {
 	tokA, tokB := signIn(t, w.secretary), signIn(t, w.secretary)
 	fileA := file("2025-12-31", w.members[0:2], 10, 20)
 	fileB := file("2025-12-31", w.members[1:3], 30, 40)
+	fileA.PinProofId, fileB.PinProofId = w.proof(t), w.proof(t)
 	call := func(tok string, body bBody) func() resp {
 		key := newKey()
 		return func() resp {
@@ -839,10 +874,21 @@ func TestApiBatch19_OnlyTheSecretaryImports(t *testing.T) {
 	before := stateOf(t, w.s.id)
 	var notFound []byte
 	for _, p := range people {
-		r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, p.user), body)
+		// Each person carries a valid PIN proof of their OWN, so the only thing
+		// that can refuse them is who they are. Without it, the step-up's 403
+		// masks the authorisation's: a handler letting the treasurer import
+		// would still answer 403 (step_up_required), and this test passed
+		// against exactly that break.
+		mine := body
+		proof := mintProof(t, p.user)
+		mine.PinProofId = &proof
+		r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, p.user), mine)
 		fixture(t, err, "POST as "+p.who)
 		if r.status != p.status {
 			t.Fatalf("WRONG ANSWER — %s got %d, want %d: %s", p.who, r.status, p.status, r.body)
+		}
+		if p.status == http.StatusForbidden && !bytes.Contains(r.body, []byte(`"not_permitted"`)) {
+			t.Fatalf("WRONG REASON — %s was refused, but not for their post: %s", p.who, r.body)
 		}
 		if p.status == http.StatusNotFound {
 			if notFound != nil && !bytes.Equal(r.body, notFound) {

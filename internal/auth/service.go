@@ -296,3 +296,12 @@ func isConstraint(err error, name string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.ConstraintName == name
 }
+
+// ErrStepUpNotBuilt: ProvePIN's acceptance tests are written and under review
+// (test/tier1/tier1_stepup_service_test.go). Until it is written against them
+// it refuses, and never mints a proof it has not earned.
+var ErrStepUpNotBuilt = errors.New("auth: the PIN step-up is not built yet")
+
+func (s *service) ProvePIN(context.Context, string, string, ActKind) (Proof, error) {
+	return Proof{}, ErrStepUpNotBuilt
+}

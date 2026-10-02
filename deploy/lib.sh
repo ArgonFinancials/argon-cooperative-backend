@@ -73,6 +73,7 @@ pg_as() {
     argon_app)      pwvar=ARGON_APP_PASSWORD ;;
     argon_migrator) pwvar=ARGON_MIGRATOR_PASSWORD ;;
     argon_backup)   pwvar=ARGON_BACKUP_PASSWORD ;;
+    argon_auth)     pwvar=ARGON_AUTH_PASSWORD ;;     # the auth service's role (0005)
     *) die "pg_as: unknown role $role" ;;
   esac
   pg_tool "$role" "$pwvar" psql -X -v ON_ERROR_STOP=1 -d "$db" "$@"

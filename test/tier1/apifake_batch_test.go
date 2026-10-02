@@ -40,6 +40,19 @@
 //	former_secretary_imports    a post held at any time counts
 //	chart_any_account           with no migration_control account, any equity account is used
 //	key_global                  the reference is looked up across every society
+//
+// Step-up breaks (0005; tier1_api_stepup_test.go):
+//
+//	proof_optional              no proof, and the batch posts anyway
+//	batch_mints_own_proof       no proof, so the handler mints one and spends it in the same call
+//	proof_any_act               a proof minted for another act is accepted
+//	proof_reusable              the proof is checked but never spent
+//	proof_never_stale           freshness is not checked (and the proof is not spent by an act)
+//	proof_anyones               another person's proof is accepted
+//	repeat_needs_proof          (over-strict) a repeat of a committed reference demands a proof
+//	refusal_spends_proof        the proof is spent on arrival, before the body is judged
+//	failure_spends_proof        the act is committed on its own, before the write lands
+//	batch_unlinked              the act is written, but the batch does not name it
 package tier1
 
 import (
@@ -155,9 +168,16 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 				return err
 			}
 			if ok {
+				if f.brk == "repeat_needs_proof" && b.PinProofId == nil {
+					return stepUpRefused
+				}
 				out = f.fromRequest(rec, b)
 				return nil
 			}
+		}
+		if f.brk == "refusal_spends_proof" && b.PinProofId != nil {
+			// The proof is spent on arrival, before the body is judged.
+			f.db.Exec(ctx, `UPDATE auth_proofs SET consumed_at = auth_now() WHERE id = $1`, b.PinProofId.String())
 		}
 		// 3. Is the body sound?
 		amounts, refusal := f.judge(ctx, x, society, b)
@@ -179,6 +199,13 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 		if err != nil {
 			return err
 		}
+		// 4b. The step-up (0005), after the body is judged and inside this
+		// transaction: a refusal never touches the proof, a failure rolls the
+		// spend back.
+		act, err := f.stepUp(ctx, x, caller, b.PinProofId)
+		if err != nil {
+			return err
+		}
 		// 5. Write.
 		var batch string
 		if f.brk == "claim_then_write" {
@@ -190,8 +217,8 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 			for _, a := range amounts {
 				total += a
 			}
-			if err := x.QueryRow(ctx, `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo)
-				VALUES ($1, $2, $3, $4, $5) RETURNING id::text`, society, ref, caller, len(b.Rows), total).Scan(&batch); err != nil {
+			if err := x.QueryRow(ctx, `INSERT INTO ledger_batches (society_id, reference, actor_user_id, row_count, total_kobo, authorised_by)
+				VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`, society, ref, caller, len(b.Rows), total, nz(act)).Scan(&batch); err != nil {
 				return err
 			}
 		}
@@ -261,6 +288,8 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 	switch {
 	case err == nil:
 		return out, nil
+	case errors.As(err, &refusal) && refusal.code == "__step_up":
+		return api.PostLedgerBatch403JSONResponse{Code: "step_up_required", Message: refusal.msg}, nil
 	case errors.As(err, &refusal) && refusal.code == "__bad_request":
 		return api.PostLedgerBatch400JSONResponse{Code: "bad_request", Message: refusal.msg}, nil
 	case errors.As(err, &refusal):
@@ -459,4 +488,69 @@ func (f *fakeAPI) fromRequest(rec api.PostLedgerBatchResponseObject, b *api.Ledg
 		r.Rows, r.TotalKobo = len(b.Rows), b.ConfirmedTotalKobo
 	}
 	return r
+}
+
+var stepUpRefused = batchRefused{code: "__step_up", msg: "this import needs your PIN: a proof minted for it, in the last five minutes, not yet used"}
+
+// stepUp checks the caller's proof and writes the act that spends it, in x.
+// The suite's schema is the 0005 INTERFACE (no rules), so the reference checks
+// in Go what the real migration will refuse by name.
+func (f *fakeAPI) stepUp(ctx context.Context, x pgx.Tx, caller string, proofID *openapi_types.UUID) (string, error) {
+	if proofID == nil {
+		switch f.brk {
+		case "proof_optional":
+			return "", nil
+		case "batch_mints_own_proof":
+			var id string
+			if err := f.db.QueryRow(ctx, `INSERT INTO auth_proofs (user_id, method, act_kind) VALUES ($1, 'pin', 'ledger_batch') RETURNING id::text`,
+				caller).Scan(&id); err != nil {
+				return "", err
+			}
+			p := uuidOf(id)
+			proofID = &p
+		default:
+			return "", stepUpRefused
+		}
+	}
+	pid := proofID.String()
+	var owner string
+	var kind *string
+	var fresh, unused bool
+	err := x.QueryRow(ctx, `SELECT user_id::text, act_kind, at > auth_now() - interval '5 minutes', consumed_at IS NULL
+		FROM auth_proofs WHERE id = $1 AND method = 'pin'`, pid).Scan(&owner, &kind, &fresh, &unused)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", stepUpRefused
+	case err != nil:
+		return "", err
+	case owner != caller && f.brk != "proof_anyones",
+		(kind == nil || *kind != "ledger_batch") && f.brk != "proof_any_act",
+		!fresh && f.brk != "proof_never_stale",
+		!unused && f.brk != "proof_reusable":
+		return "", stepUpRefused
+	}
+	if f.brk == "proof_reusable" || f.brk == "proof_never_stale" {
+		return "", nil // checked here, never spent by an act
+	}
+	actor := caller
+	if f.brk == "proof_anyones" {
+		actor = owner
+	}
+	var q querier = x
+	if f.brk == "failure_spends_proof" {
+		q = f.db // the act commits on its own, before the write lands
+	}
+	var act string
+	if err := q.QueryRow(ctx, `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('ledger_batch', $1, $2) RETURNING id::text`,
+		actor, pid).Scan(&act); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.ConstraintName == "act_needs_pin_proof" {
+			return "", stepUpRefused
+		}
+		return "", err
+	}
+	if f.brk == "batch_unlinked" {
+		return "", nil
+	}
+	return act, nil
 }

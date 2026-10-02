@@ -51,7 +51,10 @@ import (
 	"github.com/argon/backend/internal/auth"
 )
 
-type ctxUser struct{}
+type (
+	ctxUser  struct{}
+	ctxToken struct{}
+)
 
 type fakeAPI struct {
 	db  *pgxpool.Pool
@@ -70,7 +73,8 @@ func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 			json.NewEncoder(w).Encode(api.Problem{Code: "unauthenticated", Message: "sign in again"})
 			return
 		}
-		r = r.WithContext(context.WithValue(r.Context(), ctxUser{}, user))
+		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		r = r.WithContext(context.WithValue(context.WithValue(r.Context(), ctxUser{}, user), ctxToken{}, tok))
 		if f.brk != "money_as_numbers" {
 			h.ServeHTTP(w, r)
 			return
