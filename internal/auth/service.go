@@ -296,4 +296,3 @@ func isConstraint(err error, name string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.ConstraintName == name
 }
-

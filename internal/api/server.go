@@ -43,10 +43,12 @@ func NewServer(d Deps) (http.Handler, error) {
 	if s.log == nil {
 		s.log = slog.Default()
 	}
-	h := HandlerFromMux(NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
+	// The router's own refusals (a missing header, a malformed parameter)
+	// answer in the same JSON Problem as everything else: one contract.
+	h := HandlerWithOptions(NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  RequestError,
 		ResponseErrorHandlerFunc: ResponseError,
-	}), nil)
+	}), ChiServerOptions{ErrorHandlerFunc: RequestError})
 	return s.authenticate(h), nil
 }
 
@@ -96,22 +98,7 @@ func (s *server) GetHealthz(ctx context.Context, _ GetHealthzRequestObject) (Get
 
 // PostPinProof (the step-up): stepup.go.
 
-// ErrSignInNotBuilt: the sign-in endpoints' acceptance tests are written and
-// under review (test/tier1/tier1_api_signin_test.go). Until the handlers are
-// written against them, these answer with an error and sign nobody in.
-var ErrSignInNotBuilt = errors.New("api: the sign-in endpoints are not built yet")
-
-func (s *server) PostSignIn(context.Context, PostSignInRequestObject) (PostSignInResponseObject, error) {
-	return nil, ErrSignInNotBuilt
-}
-
-func (s *server) PostVerifyCode(context.Context, PostVerifyCodeRequestObject) (PostVerifyCodeResponseObject, error) {
-	return nil, ErrSignInNotBuilt
-}
-
-func (s *server) PostSignOut(context.Context, PostSignOutRequestObject) (PostSignOutResponseObject, error) {
-	return nil, ErrSignInNotBuilt
-}
+// PostSignIn, PostVerifyCode, PostSignOut: signin.go.
 
 // RequestError answers a request the generated layer could not decode — money
 // sent as a JSON number, a body that is not JSON — as a JSON Problem, never

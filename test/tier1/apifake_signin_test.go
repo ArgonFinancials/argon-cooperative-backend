@@ -16,6 +16,7 @@
 //	sms_failure_silent   a refused code send is reported as code_sent: the worst outcome
 //	verify_any_code      any code completes a new-device sign-in
 //	no_token_reaches     a request with no token reaches the handlers as nobody
+//	router_errors_plain  the generated router's own errors answer text/plain, not the JSON Problem
 package tier1
 
 import (
@@ -57,6 +58,12 @@ func (f *fakeAPI) expiry(ctx context.Context, token string, surface *api.SignInR
 }
 
 func (f *fakeAPI) PostSignIn(ctx context.Context, req api.PostSignInRequestObject) (api.PostSignInResponseObject, error) {
+	if f.noAuth {
+		if f.brk == "unconfigured_500" {
+			return nil, errors.New("no auth service")
+		}
+		return api.PostSignIn503JSONResponse{Code: "sign_in_unavailable", Message: "sign-in is not available on this server yet"}, nil
+	}
 	if req.Body == nil {
 		return api.PostSignIn400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}

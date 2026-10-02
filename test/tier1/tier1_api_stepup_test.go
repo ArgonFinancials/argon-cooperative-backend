@@ -312,4 +312,8 @@ func TestApiStepUp15_UnconfiguredServerSaysSoAndMintsNothing(t *testing.T) {
 	if n := proofCount(t, w.secretary); n != 0 {
 		t.Fatalf("MINTED — %d proof(s) on a server with no auth service", n)
 	}
+	si := postJSON(t, srv, "/auth/sign-in", "", map[string]string{"credential": "+2348000000000", "pin": stepPIN})
+	if si.status != http.StatusServiceUnavailable || !bytes.Contains(si.body, []byte(`"sign_in_unavailable"`)) {
+		t.Fatalf("UNEXPLAINED — with no auth service, sign-in answered %d %s; want 503 sign_in_unavailable", si.status, si.body)
+	}
 }

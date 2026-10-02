@@ -71,8 +71,12 @@ func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 }
 
 func newFakeAPIWith(f *fakeAPI) http.Handler {
-	h := api.HandlerFromMux(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), nil)
+	opts := api.ChiServerOptions{ErrorHandlerFunc: api.RequestError} // the router's own errors in the one format
+	if f.brk == "router_errors_plain" {
+		opts = api.ChiServerOptions{} // the generated default: text/plain
+	}
+	h := api.HandlerWithOptions(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
 		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") {

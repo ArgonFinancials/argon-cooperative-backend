@@ -5,7 +5,7 @@
 #   60-restore.sh --drill [--key dumps/.../argon-X]
 #       Restore into a scratch argon_drill_<ts>, verify it against the
 #       manifest, run the Tier 1 probe and every acceptance suite (ledger,
-#       auth, roles, statement API, postAll API, the step-up) ON THE RESTORED COPY, drop it.
+#       auth, roles, statement API, postAll API, the step-up, sign-in) ON THE RESTORED COPY, drop it.
 #       Exit 0 only if every check passes.
 #
 #   60-restore.sh --into argon --confirm [--key ...]
@@ -115,6 +115,7 @@ if [[ $mode == drill ]]; then
     "step-up (0005)|^TestProof|"
     "step-up service|^TestStepUpS|"
     "step-up API|^TestApiStepUp|"
+    "sign-in API|^TestApiSignIn|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"

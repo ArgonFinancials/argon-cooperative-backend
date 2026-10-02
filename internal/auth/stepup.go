@@ -70,3 +70,17 @@ func (s *service) ProvePIN(ctx context.Context, sessionToken, pin string, act Ac
 	p.ExpiresAt = at.Add(5 * time.Minute) // 0003: an act accepts a proof entered in the last five minutes
 	return p, nil
 }
+
+// SignOut ends a live session. The session ends itself (ended_by_session =
+// its own id), which 0003 requires of an end made by the person.
+func (s *service) SignOut(ctx context.Context, sessionToken string) error {
+	tag, err := s.d.DB.Exec(ctx, `UPDATE auth_sessions SET ended_at = auth_now(), ended_by_session = id
+		WHERE token_digest = $1 AND ended_at IS NULL`, TokenDigest(sessionToken))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSession
+	}
+	return nil
+}

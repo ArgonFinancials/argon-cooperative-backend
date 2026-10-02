@@ -84,3 +84,17 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	}
 	return p, nil
 }
+
+// SignOut in the reference service (the API fake ends sessions itself; this
+// satisfies the interface).
+func (f *fakeService) SignOut(ctx context.Context, sessionToken string) error {
+	tag, err := f.d.DB.Exec(ctx, `UPDATE auth_sessions SET ended_at = auth_now(), ended_by_session = id
+		WHERE token_digest = $1 AND ended_at IS NULL`, sha(sessionToken))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return auth.ErrNoSession
+	}
+	return nil
+}

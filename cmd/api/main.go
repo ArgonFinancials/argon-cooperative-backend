@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/argon/backend/internal/api"
+	"github.com/argon/backend/internal/auth"
 	"github.com/argon/backend/internal/config"
 	"github.com/argon/backend/internal/db"
 )
@@ -44,13 +45,37 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
-	// The auth service (sign-in, the PIN step-up) is not wired yet: it needs
-	// its own connection as argon_auth and the SMS provider, both pending.
-	// Until then POST /auth/pin-proofs answers 503 step_up_unavailable, so
-	// nothing that needs a step-up (postAll) can be authorised. Deliberate.
-	log.Warn("auth service not configured: the PIN step-up answers 503 step_up_unavailable, and imports cannot be authorised",
-		"needs", "argon_auth database connection and SMS provider")
-	h, err := api.NewServer(api.Deps{DB: pool, Log: log})
+	deps := api.Deps{DB: pool, Log: log}
+	if cfg.AuthDatabaseURL == "" {
+		// Deliberate: sign-in and the PIN step-up answer 503 until the auth
+		// service has its own argon_auth connection (AUTH_DATABASE_URL).
+		log.Warn("auth service not configured: sign-in and the PIN step-up answer 503, and imports cannot be authorised",
+			"needs", "AUTH_DATABASE_URL and AUTH_CODE_KEY")
+	} else {
+		authPool, err := db.Open(ctx, cfg.AuthDatabaseURL) // as argon_auth: the only role that writes auth state
+		if err != nil {
+			log.Error("auth database", "err", err)
+			os.Exit(1)
+		}
+		defer authPool.Close()
+		svc, err := auth.New(auth.Deps{
+			DB: authPool,
+			// TEMPORARY until an SMS provider is procured (deploy/AUTH_SMS.md):
+			// every code send is refused loudly, and a new device is routed to
+			// an officer. Known devices and the step-up need no SMS.
+			SMS:     auth.UnavailableSMS{Log: log},
+			Notify:  auth.LogNotifier{Log: log},
+			CodeKey: cfg.AuthCodeKey,
+			Argon:   auth.Argon2{MemoryKiB: 19 * 1024, Time: 2, Threads: 1},
+		})
+		if err != nil {
+			log.Error("auth service", "err", err)
+			os.Exit(1)
+		}
+		log.Warn("sign-in runs with the REFUSING SMS adapter (TEMPORARY): new devices are routed to an officer until an SMS provider exists")
+		deps.Auth = svc
+	}
+	h, err := api.NewServer(deps)
 	if err != nil {
 		log.Error("api", "err", err)
 		os.Exit(1)

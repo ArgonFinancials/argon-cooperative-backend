@@ -7,7 +7,8 @@
 source "$(dirname "$0")/lib.sh"
 [[ $TARGET == host ]] || die "30-install-api.sh is host-only"
 [[ $EUID -eq 0 ]] || die "run with sudo"
-require_env ARGON_APP_PASSWORD API_PORT
+require_env ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_CODE_KEY API_PORT
+[[ $ARGON_CODE_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CODE_KEY must be at least 32 bytes of lowercase hex (openssl rand -hex 32)"
 builder=${SUDO_USER:-ubuntu}
 
 id argon &>/dev/null || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin argon
@@ -35,6 +36,8 @@ chmod -R go-w /opt/argon
 umask 027
 cat > /etc/argon/argon.env <<EOF
 DATABASE_URL=postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/${ARGON_DB}?sslmode=disable
+AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/${ARGON_DB}?sslmode=disable
+AUTH_CODE_KEY=${ARGON_CODE_KEY}
 PORT=${API_PORT}
 ENV=production
 EOF

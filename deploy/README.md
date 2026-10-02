@@ -54,7 +54,15 @@ Prerequisites, all yours to arrange:
 ```bash
 # on the instance, from a checkout of this repo
 sudo install -d -m 0750 /etc/argon
-sudo install -m 0600 deploy/env/ec2.env.example /etc/argon/deploy.env && sudo nano /etc/argon/deploy.env
+sudo install -m 0600 deploy/env/ec2.env.example /etc/argon/deploy.env
+# Generate the secrets ON THE INSTANCE, straight into the file (never typed, never pasted):
+for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD; do
+  sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
+done
+sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
+# Before Part B (the S3 bucket) exists, back up to a local directory instead:
+#   sudo sed -i 's|^BACKUP_STORE=.*|BACKUP_STORE=file:///var/backups/argon|' /etc/argon/deploy.env
+sudo nano /etc/argon/deploy.env          # check the rest: ARGON_DB, PGPORT, API_PORT, BACKUP_STORE
 export ARGON_ENV=/etc/argon/deploy.env
 sudo -E bash deploy/00-preflight.sh
 sudo -E bash deploy/10-install-postgres.sh
@@ -72,9 +80,17 @@ sudo systemctl start argon-api && curl -s 127.0.0.1:8080/healthz
 From a laptop, the database is reached only through a tunnel:
 `ssh -L 5433:127.0.0.1:5432 ubuntu@<host>`.
 
-`/etc/argon/deploy.env` carries four role passwords, all generated on the instance:
-migrator, app, backup, and since 0005 **`ARGON_AUTH_PASSWORD`** (the auth
-service's role). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
+`/etc/argon/deploy.env` carries four role passwords and one key, all generated
+on the instance: migrator, app, backup, **`ARGON_AUTH_PASSWORD`** (the auth
+service's role, 0005) and **`ARGON_CODE_KEY`** (the HMAC key for sign-in code
+digests). None is an AWS resource; nothing in `AWS_REQUEST.md` changes.
+`30-install-api.sh` writes the API's own `/etc/argon/argon.env` from them: the
+app's connection as argon_app, the auth service's as argon_auth, and the key.
+
+**These host scripts have never run anywhere.** Their first run is their first
+test: report each failure as it comes (the step, the command, the output),
+rather than fixing it in place, because what fails says more about the scripts
+than what passes.
 
 ## One major version: 18, everywhere
 

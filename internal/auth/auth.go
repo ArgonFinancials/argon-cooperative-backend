@@ -72,6 +72,10 @@ type Service interface {
 	// session is an unlimited PIN oracle. Errors: ErrNoSession, ErrUnknownAct,
 	// ErrRefused (wrong PIN), ErrTryLater (locked).
 	ProvePIN(ctx context.Context, sessionToken, pin string, act ActKind) (Proof, error)
+	// SignOut ends the session behind sessionToken, as its own act. The API's
+	// role cannot end sessions itself (auth state is argon_auth's to write).
+	// ErrNoSession if it is not a live session.
+	SignOut(ctx context.Context, sessionToken string) error
 }
 
 // ActKind names the attributable act a PIN proof is minted FOR. The kind is
@@ -121,8 +125,40 @@ type UnavailableSMS struct {
 	Log *slog.Logger // nil: slog.Default()
 }
 
-func (UnavailableSMS) Send(context.Context, string, string) error {
-	return errors.New("auth: UnavailableSMS is not built yet")
+func (u UnavailableSMS) Send(ctx context.Context, to, _ string) error {
+	log := u.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	// Never the text: it carries the code. Never the whole number either.
+	log.ErrorContext(ctx, "REFUSED to send a sign-in code: TEMPORARY, no SMS provider yet (deploy/AUTH_SMS.md); the person is routed to an officer",
+		"to_last4", last4(to))
+	return ErrSMSUnavailable
+}
+
+func last4(phone string) string {
+	if len(phone) <= 4 {
+		return "****"
+	}
+	return "…" + phone[len(phone)-4:]
+}
+
+// LogNotifier stands in for telling a person's other devices that a new one
+// signed in, until a push or SMS channel exists. It does not pretend to have
+// told anyone: every call is a Warn line saying nobody was told, and that this
+// is temporary. It returns nil so a sign-in is not refused for want of it.
+type LogNotifier struct {
+	Log *slog.Logger // nil: slog.Default()
+}
+
+func (n LogNotifier) NewDeviceSignedIn(ctx context.Context, userID string, at time.Time) error {
+	log := n.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	log.WarnContext(ctx, "NOT TOLD: a new device signed in, and no channel exists yet to tell the person's other devices (TEMPORARY)",
+		"user", userID, "at", at)
+	return nil
 }
 
 // Notifier tells a person's other devices that a new device signed in, with

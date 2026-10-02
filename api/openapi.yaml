@@ -545,6 +545,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "sign_in_unavailable — DELIBERATE, not a defect: this server runs without an auth service (pending the argon_auth connection). Nobody is signed in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /auth/codes/verify:
     post:
@@ -576,6 +581,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "sign_in_unavailable — DELIBERATE, not a defect: this server runs without an auth service (pending the argon_auth connection). Nobody is signed in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /auth/sign-out:
     post:
@@ -587,6 +597,11 @@ paths:
           description: The session has ended; its token reaches nothing.
         '401':
           description: No valid session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "sign_in_unavailable — DELIBERATE, not a defect: this server runs without an auth service (pending the argon_auth connection). Nobody is signed in."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

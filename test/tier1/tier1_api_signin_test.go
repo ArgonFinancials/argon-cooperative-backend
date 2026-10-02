@@ -473,3 +473,51 @@ func TestApiSignIn13_LockedAccountIsTryLaterEvenWithTheRightPin(t *testing.T) {
 		t.Fatalf("SIGNED IN — a locked account got %d session(s)", n)
 	}
 }
+
+// =============================================================================
+// ONE ERROR FORMAT
+// =============================================================================
+
+// Requests the generated router refuses before any handler runs (a missing
+// required header, a body that is not JSON, a path parameter that is not a
+// uuid) answer in the same JSON Problem as every other refusal. Two error
+// formats is two contracts: the frontend parses one and breaks on the other.
+func TestApiSignIn14_MalformedRequestsAnswerTheOneErrorFormat(t *testing.T) {
+	srv := authServer(t, &fakeSMS{}, nil)
+	s := newSociety(t)
+	p := newSigner(t, s, "Secretary", "secretary", true)
+	tok, _ := signedIn(t, signInAs(t, srv, p.number, signPIN, p.device, ""))
+	send := func(method, path, token, contentType, body string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		r, err := http.DefaultClient.Do(req)
+		fixture(t, err, method+" "+path)
+		defer r.Body.Close()
+		var buf bytes.Buffer
+		buf.ReadFrom(r.Body)
+		return r, buf.Bytes()
+	}
+	for what, call := range map[string]func() (*http.Response, []byte){
+		"an import without its Idempotency-Key": func() (*http.Response, []byte) {
+			return send(http.MethodPost, "/societies/"+s.id+"/ledger/batches", tok, "application/json", `{"kind":"opening_balance","asOf":null,"confirmedTotalKobo":"1","rows":[]}`)
+		},
+		"a sign-in whose body is not JSON": func() (*http.Response, []byte) {
+			return send(http.MethodPost, "/auth/sign-in", "", "application/json", `{not json`)
+		},
+		"a statement for a member id that is not a uuid": func() (*http.Response, []byte) {
+			return send(http.MethodGet, "/members/not-a-uuid/statement", tok, "", "")
+		},
+	} {
+		r, body := call()
+		var pb struct{ Code, Message string }
+		if r.StatusCode != http.StatusBadRequest || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") ||
+			json.Unmarshal(body, &pb) != nil || pb.Code == "" || pb.Message == "" {
+			t.Fatalf("TWO FORMATS — %s answered %d %q %q; want 400 application/json {code, message}", what, r.StatusCode, r.Header.Get("Content-Type"), body)
+		}
+	}
+}

@@ -179,7 +179,7 @@ does not sum to zero.
 |---|---|---|
 | Charge posting rules | Engineering + Tier 1 accountant | **Must join the B-29 review.** Which accounts charges post to, and when they are recognised, is not settled. |
 | Partner charge vs Argon margin recorded separately | Commercial | **Must be separate.** See below. |
-| VFD balance vs Argon ledger: which is the record of account | Legal + Product | See below. |
+| VFD balance vs Argon ledger: which is the record of account | Legal + Product | **DISPUTED** (2026-10-02): two contradicting claims in this project, the original source unavailable. See below. Blocks anything that reconciles against VFD. |
 | Does a reversal refund the Argon charge? | **Commercial** | **D-02: answered, assumed-pending.** The charge is refunded with the principal. Assumed until Commercial confirms; **blocks shipping.** See below. |
 | Opening balance contra account | Tier 1 accountant | `opening_balance` posts at zero charge as its own movement kind. What it debits is §7's assumption, not a decision. |
 
@@ -226,6 +226,15 @@ into one total, the pass-through-versus-margin distinction is unrecoverable
 from history — you cannot later ask what Argon actually earned, because the
 answer was never written down. Transaction charges are the only revenue line in
 the product, so this is the only place that number exists.
+
+> **DISPUTED (2026-10-02). Do not build on either claim.** This project holds
+> two contradicting statements of which balance is the record of account:
+> `lib/decisions.ts` D-04 as first written says **Argon's ledger**; the same
+> file's D-19 note said **the VFD balance is the record of account and Argon's
+> ledger the book of account**. Both, and the paragraph below, were carried
+> from the Step 0 B-04 spike as *summarised*; the original is unavailable to
+> both repositories. The answer comes from whoever ran B-04, not from reading
+> documents. Blocks anything that reconciles against VFD.
 
 **VFD balance vs Argon ledger.** They will periodically disagree: in-flight
 transfers, provider fees, settlement timing. **Adjusting the books to match VFD

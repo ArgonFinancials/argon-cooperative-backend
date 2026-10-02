@@ -31,4 +31,5 @@ declare -gA SVC_TARGET_OF=(
   [sms_adapter_sounds_final]='TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary'
   [verify_any_code]='TestApiSignIn12_NewDeviceCodeCompletesSignIn'
   [signin_ignores_lock]='TestApiSignIn13_LockedAccountIsTryLaterEvenWithTheRightPin'
+  [router_errors_plain]='TestApiSignIn14_MalformedRequestsAnswerTheOneErrorFormat'
 )
