@@ -64,17 +64,18 @@ sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/
 # (see "Stated gap" below: that is NOT a backup):
 #   sudo sed -i 's|^BACKUP_STORE=.*|BACKUP_STORE=file:///var/backups/argon|' /etc/argon/deploy.env
 sudo nano /etc/argon/deploy.env          # check the rest: ARGON_DB, PGPORT, API_PORT, BACKUP_STORE
-export ARGON_ENV=/etc/argon/deploy.env
-sudo -E bash deploy/00-preflight.sh
-sudo -E bash deploy/10-install-postgres.sh
-sudo -E bash deploy/15-install-tools.sh
-sudo -E bash deploy/20-roles.sh
-sudo -E bash deploy/30-install-api.sh
-sudo -E bash deploy/40-migrate.sh up --confirm
-sudo -E bash deploy/70-verify-tier1.sh
-sudo -E bash deploy/50-backup.sh
-sudo -E bash deploy/60-restore.sh --drill
-sudo -E bash deploy/80-install-timers.sh
+# Ubuntu 26.04's sudo ignores -E ("preserving the entire environment is not
+# supported"), so ARGON_ENV is passed on each sudo line, not exported.
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/00-preflight.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/10-install-postgres.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/15-install-tools.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/20-roles.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/30-install-api.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/40-migrate.sh up --confirm
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/70-verify-tier1.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/50-backup.sh
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/60-restore.sh --drill
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/80-install-timers.sh
 sudo systemctl start argon-api && curl -s 127.0.0.1:8080/healthz
 ```
 
