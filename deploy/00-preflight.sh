@@ -46,6 +46,9 @@ if [[ $TARGET == local ]]; then
   exit 0
 fi
 
+if [[ $TARGET == docker ]]; then
+  info "docker: $(docker --version 2>/dev/null || echo 'NOT INSTALLED'); compose: $(docker compose version 2>/dev/null || echo 'not installed (15-install-tools.sh installs it)')"
+fi
 info "host: $(. /etc/os-release; echo "$PRETTY_NAME") $(dpkg --print-architecture), $(nproc) cpu, $(free -h | awk '/Mem:/{print $2}') ram"
 df -h / | tail -1 | awk '{print "    disk /: "$4" free of "$2}' >&2
 

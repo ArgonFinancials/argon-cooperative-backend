@@ -30,6 +30,18 @@ got=$(/usr/local/go/bin/go version -m /usr/local/bin/migrate | awk '$1 == "mod" 
 [[ $got == "$MIGRATE_VERSION" ]] || die "migrate is module version '${got:-unknown}', not $MIGRATE_VERSION"
 ok "migrate $got (module version, read from the binary)"
 
+# Docker Compose v2. Ubuntu's docker.io does not include it: `docker compose`
+# is then not a command, and every compose step fails with "unknown flag:
+# --env-file" (found on the first EC2 run, at 10-start-postgres).
+if [[ $TARGET == docker ]]; then
+  if ! docker compose version >/dev/null 2>&1; then
+    info "Docker Compose v2 (Ubuntu's docker-compose-v2)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker-compose-v2 >/dev/null
+  fi
+  docker compose version >/dev/null 2>&1 || die "docker compose is still not available"
+  ok "$(docker compose version)"
+fi
+
 if [[ $BACKUP_STORE == s3://* ]] && ! command -v aws >/dev/null; then
   info "AWS CLI (snap, published by Amazon)"
   snap install aws-cli --classic
