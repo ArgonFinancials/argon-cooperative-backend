@@ -11,6 +11,11 @@ on_server || die "05-install-release.sh is for the server (ARGON_HOST=1)"
 [[ $EUID -eq 0 ]] || die "run with sudo"
 [[ $REPO_DIR != /opt/argon/src ]] || die "run from a checkout, not from the installed release itself"
 
+# A Windows checkout (or git archive under core.autocrlf) delivers CRLF, and a
+# CRLF script fails only when it first runs (`$'bash\r'`). Refuse it here.
+crlf=$(cd "$REPO_DIR" && grep -rlI $'\r' --exclude='*.md' deploy migrations Dockerfile .dockerignore 2>/dev/null || true)
+[[ -z $crlf ]] || die "CRLF line endings in the release (check .gitattributes): $(echo $crlf)"
+
 install -d -m 0755 /opt/argon /opt/argon/bin
 rel=${ARGON_RELEASE:-$(date -u +%Y%m%dt%H%M%Sz)}
 new=/opt/argon/src.new

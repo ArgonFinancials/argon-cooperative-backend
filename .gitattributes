@@ -7,3 +7,12 @@
 *.timer  text eol=lf
 *.env.example text eol=lf
 Makefile text eol=lf
+# Read on the server too. git archive applies core.autocrlf, so anything the
+# server runs or parses is pinned here, extension or not.
+deploy/argon-deploy text eol=lf
+Dockerfile   text eol=lf
+.dockerignore text eol=lf
+*.conf   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.json   text eol=lf
