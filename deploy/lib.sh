@@ -49,6 +49,10 @@ case "$TARGET" in docker|local|host) ;; *) die "TARGET=$TARGET (want docker|loca
 on_server() { [[ $TARGET == host || $ARGON_HOST == 1 ]]; }
 # Go for the drill's test binary when scripts run under sudo, whose PATH lacks it.
 [[ -x /usr/local/go/bin/go ]] && PATH="/usr/local/go/bin:$PATH"
+# Executable suffix for built binaries. Never `x=$( [[ … ]] && echo .exe )`:
+# where the test is false (Linux) the assignment's status is 1 and set -e
+# exits on it silently.
+EXE=""; if [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]]; then EXE=.exe; fi
 # A relative file:// store is relative to the repo, not the caller's cwd.
 if [[ $BACKUP_STORE == file://* && ${BACKUP_STORE#file://} != /* ]]; then
   BACKUP_STORE="file://$REPO_DIR/${BACKUP_STORE#file://./}"
@@ -222,7 +226,7 @@ run_tier1() {
   require_env ARGON_MIGRATOR_PASSWORD
   local mig="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
   if [[ $TARGET == docker || $TARGET == local ]]; then
-    bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && echo .exe )}"
+    bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$EXE}"
     if [[ -z ${TIER1_BIN:-} ]]; then
       (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
     fi

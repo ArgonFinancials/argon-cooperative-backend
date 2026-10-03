@@ -36,7 +36,7 @@ export PYTHONIOENCODING=utf-8   # test messages contain −, ₦, §
 # Paths handed to the test binary must be native: on Windows, C:/..., not /c/...
 native() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
 HERE="$(native "$REPO_DIR/test/tier1")"
-BIN="$REPO_DIR/bin/tier1.test$( [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && echo .exe )"
+BIN="$REPO_DIR/bin/tier1.test$EXE"
 REPO_DIR="$(native "$REPO_DIR")"
 export ARGON_TEST_ADMIN_URL="$(admin_url)"
 export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
