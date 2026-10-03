@@ -1,0 +1,113 @@
+# Tier 1 first, then deploy. See deploy/README.md, "CI/CD".
+#
+#   tier1  — every acceptance suite's mutation run (mutate.sh <suite> --svc)
+#            against PostgreSQL 18 in a service container on the runner: the
+#            tests must pass on the real migrations AND turn red on every
+#            deliberately broken schema and service. Runs on every push and PR.
+#   deploy — main only, after tier1. Streams `git archive` of the commit to the
+#            server as the dedicated user argon-deploy, whose key can run one
+#            command (deploy/argon-deploy) and nothing else. Never the key that
+#            opens other hosts.
+#
+# Repository settings this needs (none of them is in this file):
+#   secret   ARGON_DEPLOY_KEY   the PRIVATE half of the argon-deploy ed25519 key
+#   variable ARGON_DEPLOY_HOST  the server's hostname
+#   environment "production"    add required reviewers to gate each deploy
+name: tier1-and-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tier1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ["0002", "0003", "0004", "0005", stepup, api, batch, stepup_api, signin_api]
+    services:
+      postgres:
+        image: postgres:18-trixie
+        env:
+          # A throwaway server inside a throwaway runner: not a secret.
+          POSTGRES_PASSWORD: ci-ephemeral-superuser
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.1"   # the server's GO_VERSION (deploy/env/ec2.env.example)
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: PostgreSQL 18 client (the server's major)
+        run: |
+          sudo apt-get install -y -q postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -q postgresql-client-18
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+      - name: Env file (TARGET=local against the service container)
+        run: |
+          pw() { openssl rand -base64 24 | tr -d '/+='; }
+          umask 077
+          cat > deploy/env/ci.env <<EOF
+          TARGET=local
+          ARGON_DB=argon_test
+          PGPORT=5432
+          POSTGRES_SUPERUSER=postgres
+          POSTGRES_PASSWORD=ci-ephemeral-superuser
+          ARGON_MIGRATOR_PASSWORD=$(pw)
+          ARGON_APP_PASSWORD=$(pw)
+          ARGON_BACKUP_PASSWORD=$(pw)
+          ARGON_AUTH_PASSWORD=$(pw)
+          ARGON_CODE_KEY=$(openssl rand -hex 32)
+          BACKUP_STORE=file://./.backups
+          EOF
+          echo "ARGON_ENV=$PWD/deploy/env/ci.env" >> "$GITHUB_ENV"
+      - name: Roles
+        run: bash deploy/20-roles.sh
+      - name: Mutation run, suite ${{ matrix.suite }}
+        run: bash test/tier1/mutate.sh "${{ matrix.suite }}" --svc
+
+  deploy:
+    needs: tier1
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: argon-deploy
+      cancel-in-progress: false   # never cut a deploy off mid-migration
+    env:
+      ARGON_DEPLOY_HOST: ${{ vars.ARGON_DEPLOY_HOST }}
+      # PINNED: the server's own host key. A server answering with any other
+      # key is refused; the variable cannot redirect a deploy to another host.
+      ARGON_HOST_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM6oRp+QC30/BqW45nTgtJyJCU3Gu6+IekXxw2Xag84M
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Release archive of this commit
+        run: git archive --format=tar.gz --add-virtual-file="COMMIT:$GITHUB_SHA" -o "$RUNNER_TEMP/release.tgz" HEAD
+      - name: Deploy as argon-deploy
+        env:
+          DEPLOY_KEY: ${{ secrets.ARGON_DEPLOY_KEY }}
+        run: |
+          [[ -n $ARGON_DEPLOY_HOST ]] || { echo "::error::repository variable ARGON_DEPLOY_HOST is not set"; exit 1; }
+          [[ -n $DEPLOY_KEY ]] || { echo "::error::secret ARGON_DEPLOY_KEY is not set"; exit 1; }
+          k="$RUNNER_TEMP/argon_deploy"; kh="$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$k"' EXIT
+          (umask 077; printf '%s\n' "$DEPLOY_KEY" > "$k")
+          printf '%s %s\n' "$ARGON_DEPLOY_HOST" "$ARGON_HOST_KEY" > "$kh"
+          ssh -i "$k" -o IdentitiesOnly=yes -o IdentityAgent=none \
+              -o UserKnownHostsFile="$kh" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes \
+              -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+              "argon-deploy@$ARGON_DEPLOY_HOST" < "$RUNNER_TEMP/release.tgz"

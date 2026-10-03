@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# THE SERVER. The ONLY thing the CI deploy key can run: authorized_keys forces
+#   restrict,command="sudo /opt/argon/bin/argon-deploy"
+# and sudoers allows exactly this path. It reads a release archive (git archive
+# of a commit that passed the Tier 1 suites in CI) on stdin, and installs it
+# through the same steps as the runbook: 05 → 30 → 40 → 70.
+#
+# It does NOT start the API if it is not already running: starting it stays a
+# deliberate act. If it is running, it is recreated on the new image, and
+# healthz must answer through the API port before this reports success.
+set -Eeuo pipefail
+[[ $EUID -eq 0 ]] || { echo "argon-deploy: run through sudo" >&2; exit 1; }
+export ARGON_ENV=/etc/argon/deploy.env
+[[ -f $ARGON_ENV ]] || { echo "argon-deploy: $ARGON_ENV missing: provision the server first" >&2; exit 1; }
+
+# One deploy at a time: a second upload is refused, not queued behind a migration.
+exec 9>/run/argon-deploy.lock
+flock -n 9 || { echo "argon-deploy: another deploy is running" >&2; exit 1; }
+
+work=$(mktemp -d /opt/argon/incoming.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+# At most 200 MB of compressed release, so a runaway upload cannot fill the disk.
+head -c 200000000 > "$work/release.tgz"
+mkdir "$work/src"
+tar -xzf "$work/release.tgz" -C "$work/src" --no-same-owner
+[[ -f $work/src/deploy/lib.sh && -f $work/src/go.mod ]] || { echo "argon-deploy: not an Argon release" >&2; exit 1; }
+# CI adds COMMIT (git archive --add-virtual-file): the release id names the commit.
+commit=$(cat "$work/src/COMMIT" 2>/dev/null || true)
+[[ -z $commit || $commit =~ ^[0-9a-f]{40}$ ]] || { echo "argon-deploy: COMMIT is not a commit id" >&2; exit 1; }
+export ARGON_RELEASE=$(date -u +%Y%m%dt%H%M%Sz)${commit:+-${commit:0:12}}
+
+run() { echo "===== $1"; shift; "$@"; }
+run "install the release"   bash "$work/src/deploy/05-install-release.sh"
+cd /opt/argon/src
+run "build the API image"   bash deploy/30-install-api.sh
+run "migrate (backup first)" bash deploy/40-migrate.sh up --confirm
+run "probe"                 bash deploy/70-verify-tier1.sh
+
+source deploy/lib.sh
+if [[ -n $(dc ps -q api 2>/dev/null) ]]; then
+  run "recreate the API on the new image" dc --profile api up -d --no-deps api
+  for _ in $(seq 30); do curl -sf -o /dev/null "http://127.0.0.1:${API_PORT:-8080}/healthz" && break; sleep 2; done
+  curl -sf -o /dev/null "http://127.0.0.1:${API_PORT:-8080}/healthz" || die "the API did not answer healthz after the deploy"
+  ok "the API runs release $ARGON_RELEASE"
+else
+  info "the API is not running, and a deploy does not start it: starting it is a deliberate act (deploy/README.md)"
+fi
+bash deploy/75-assert-loopback.sh
+ok "release $ARGON_RELEASE deployed"

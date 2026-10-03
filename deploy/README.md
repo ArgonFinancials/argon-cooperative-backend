@@ -13,6 +13,8 @@ server with `ARGON_HOST=1`), or `host` (a native server install).
 | `10-start-postgres.sh` | server | The postgres:18 (Debian) container on Argon's own network, published on loopback. Asserts major and loopback. |
 | `15-install-tools.sh` | server | Go (pinned + sha256) for the drill's test binary, the migrate CLI; the AWS CLI once backups go to S3. |
 | `20-roles.sh` | all | argon_owner / argon_migrator / argon_app / argon_backup / argon_auth, the database. |
+| `25-deploy-user.sh` | server | The CI user argon-deploy: one key, one forced command (`argon-deploy`), no docker group. |
+| `argon-deploy` | server | The forced command: a release on stdin → 05, 30, 40, 70, 75. Never starts a stopped API. |
 | `30-install-api.sh` | server | The API image, the drill's test binary, the container's env file. Does not start the API. |
 | `40-migrate.sh` | all | Migrate as argon_migrator, then `sql/grants.sql`. Host: backup first, `--confirm`. |
 | `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
@@ -114,10 +116,53 @@ Part B (`AWS_REQUEST.md`) gives `BACKUP_STORE=s3://…`.
 (the step, the command, the output), rather than fixing it in place, because
 what fails says more about the scripts than what passes.
 
+## CI/CD (`.github/workflows/deploy.yml`)
+
+**tier1** runs on every push and pull request: for each of the nine suites,
+`mutate.sh <suite> --svc` against `postgres:18-trixie` in a service container
+on the runner (TARGET=local, passwords generated per run). A suite passes only
+if its tests pass on the real migrations AND turn red on every deliberately
+broken schema and service. **deploy** runs only on a push to `main`, only after
+every tier1 suite is green, one at a time, never cancelled mid-run.
+
+The deploy is `git archive` of the commit streamed over SSH to the user
+**argon-deploy**:
+- its key is its own ed25519 key, **never `prod-loan-wallet.pem`**, which opens other hosts;
+- `authorized_keys` pins it to `restrict,command="sudo /opt/argon/bin/argon-deploy"`, so there is no shell, no forwarding and no pty, whatever the client asks for;
+- sudoers allows exactly that path with no arguments; the user has no password and is not in the docker group (`25-deploy-user.sh` refuses if it is);
+- the workflow pins the server's host key, so a server answering with any other key is refused.
+
+`argon-deploy` installs the release (05), builds the image (30), migrates with
+a backup first (40 `--confirm`), runs the probe (70) and asserts loopback (75).
+**It does not start a stopped API**: starting it stays a deliberate act. A
+running API is recreated on the new image and must answer `/healthz`. The
+release id is `<UTC time>-<commit>`.
+
+One-time setup:
+```bash
+# On the laptop: a key for this purpose only. The private half goes ONLY into the GitHub secret.
+ssh-keygen -t ed25519 -N '' -C argon-deploy -f argon-deploy
+scp argon-deploy.pub ubuntu@<host>:
+# On the server, from the release:
+cd /opt/argon/src && sudo $E bash deploy/25-deploy-user.sh ~/argon-deploy.pub
+# GitHub, Settings:
+#   Secrets  ARGON_DEPLOY_KEY  = contents of argon-deploy (the private key); then delete the local copy
+#   Variables ARGON_DEPLOY_HOST = the server's hostname
+#   Environments  production   = add required reviewers to approve each deploy
+```
+If the server is rebuilt, its host key changes: update `ARGON_HOST_KEY` in the
+workflow from a fingerprint checked out of band, never from whatever the new
+server presents.
+
+Stated limits: the tier1 runner is amd64 and the server is arm64, so the
+suites prove the rules on the same major and image family, not the same CPU.
+The deploy streams source and builds on the server; it does not ship a
+CI-built image.
+
 ## One major version: 18, everywhere
 
 Local, docker and EC2 all run PostgreSQL 18 (`PG_MAJOR` in `lib.sh`;
-preflight and `10-install-postgres.sh` refuse anything else). One major
+preflight and `10-start-postgres.sh` refuse anything else). One major
 version removes a whole class of differences: an 18 `pg_dump` cannot restore
 into 16, backup manifests from different majors do not match (18 lists NOT
 NULL constraints in `pg_constraint`; 16 does not), and error wording and
@@ -156,7 +201,7 @@ boundary is **who can act as argon_owner**:
 - only `argon_migrator` can, and only migrations (`40`) and restores (`60`) use it,
 - its password lives in `/etc/argon/deploy.env` (root, 0600) and never in the API's environment,
 - the API's `DATABASE_URL` is argon_app, and the probe's P1–P8 rows prove what that role cannot do,
-- the postgres superuser is reachable only as the `postgres` OS user (peer auth), i.e. by root on the host.
+- the postgres superuser is reachable through `docker exec` on the host (root or the docker group, see above) or with its password from `/etc/argon/deploy.env`.
 
 Anyone with root on the host or the migrator password can rewrite the ledger.
 Nothing in the schema changes that. Access control on the host and backups the
