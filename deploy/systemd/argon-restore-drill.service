@@ -2,6 +2,7 @@
 Description=Argon restore drill: restore the latest backup into a scratch DB, verify, probe Tier 1, drop
 After=docker.service
 Requires=docker.service
+OnFailure=argon-alert@%n.service
 
 [Service]
 Type=oneshot

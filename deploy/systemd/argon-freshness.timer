@@ -1,0 +1,10 @@
+[Unit]
+Description=Argon freshness check (daily 08:00 WAT, and 15 min after boot)
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 UTC
+OnBootSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

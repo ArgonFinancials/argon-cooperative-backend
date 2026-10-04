@@ -1,0 +1,9 @@
+[Unit]
+Description=Argon alert: %i failed
+# Raised by OnFailure= on every Argon job. alert.sh writes the journal and an
+# open alert (shown at SSH login) whatever ALERT_CHANNEL is, then sends it.
+
+[Service]
+Type=oneshot
+Environment=ARGON_ENV=/etc/argon/deploy.env
+ExecStart=/usr/bin/bash /opt/argon/src/deploy/alert.sh unit-failed %i

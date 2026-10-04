@@ -20,7 +20,9 @@ server with `ARGON_HOST=1`), or `host` (a native server install).
 | `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
 | `60-restore.sh` | all | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
 | `70-verify-tier1.sh` | all | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
-| `80-install-timers.sh` | host | Nightly backup and weekly drill timers. Refuses until a drill has passed. |
+| `65-check-freshness.sh` | server | Newest dump, newest passing drill, timers enabled: raises an alert if any is stale. Daily via `argon-freshness.timer`. |
+| `alert.sh` | server | Raise / list / acknowledge alerts: journal, SSH login banner, and `ALERT_CHANNEL`. |
+| `80-install-timers.sh` | host | Backup, drill and freshness timers, the alert unit and login banner. Refuses until a drill has passed. |
 | `75-assert-loopback.sh` | server | Every listener and every published container port on loopback, except `PUBLIC_PORTS`. Run after anything that can open a port. |
 | `85-install-nginx.sh` | server | Nginx on loopback only: healthz proxied, everything else refused until TLS exists. |
 
@@ -87,8 +89,13 @@ sudo $E bash deploy/85-install-nginx.sh      # loopback only; asserts loopback
 sudo $E bash deploy/75-assert-loopback.sh
 
 # 4. DELIBERATELY, after the drill result has been read: start the API.
-sudo docker compose --env-file /etc/argon/deploy.env -f /opt/argon/src/deploy/compose/docker-compose.prod.yml --profile api up -d api
-curl -s 127.0.0.1:8080/healthz && curl -s 127.0.0.1/healthz   # direct, and through nginx
+#    ARGON_RELEASE names the image 30 built and the probe ran against. Without it
+#    compose looks for argon-api:local and BUILDS a new, untested image.
+#    --no-build makes that a refusal instead.
+cd /opt/argon/src
+sudo ARGON_RELEASE=$(cat RELEASE) docker compose --env-file /etc/argon/deploy.env -f deploy/compose/docker-compose.prod.yml --profile api up -d --no-build api
+curl -s -w '%{http_code}\n' 127.0.0.1:8080/healthz; curl -s -w '%{http_code}\n' 127.0.0.1/healthz   # direct, and through nginx
+# healthz pings Postgres as argon_app: 200 through nginx is nginx -> API -> Postgres; 503 if the database is unreachable.
 ```
 
 From a laptop, everything is reached through an SSH tunnel, e.g.
@@ -115,6 +122,48 @@ Part B (`AWS_REQUEST.md`) gives `BACKUP_STORE=s3://…`.
 **These host scripts are on their first runs.** Report each failure as it comes
 (the step, the command, the output), rather than fixing it in place, because
 what fails says more about the scripts than what passes.
+
+### Findings from the first runs (2026-10-02/03)
+
+| # | What failed | Lesson |
+|---|---|---|
+| 1 | `sudo -E` is ignored on Ubuntu 26.04; scripts ran without `ARGON_ENV` | Pass variables on the sudo line itself. |
+| 2 | Exit 141: `apt-cache policy \| awk '…exit'` under pipefail (SIGPIPE) | No early-exit readers in pipes under pipefail. |
+| 3 | 15 exited 1 on a trailing `command -v aws &&`; migrate's "dev" version proved nothing | A false last test is the script's exit status; assert versions from the build info. |
+| 4 | **My `apt-get autoremove` during the Postgres purge also removed `pollinate`**, an Ubuntu image default (boot-time RNG seeding), with six packages that had only come with native Postgres | **A cleanup removes more than it meant to.** On a host where we answer for not breaking anything else, read what autoremove will take before it takes it, and check the apt history afterwards. pollinate was reinstalled; the other six were ours and stay gone. |
+| 5 | `docker compose` missing ("unknown flag: --env-file") | Install and assert every tool a script calls. |
+| 6 | The forced command arrived with CRLF (`env: $'bash\r'`): `git archive` applies `core.autocrlf` and only `*.sh` was pinned | Pin every file the server reads, extension or not; 05 now refuses a release with CRLF. |
+| 7 | **The first CI run failed all nine suites with exit 1 and NO OUTPUT.** `BIN="…$( [[ $OSTYPE == msys* ]] && echo .exe )"`: on Linux the test is false, the substitution returns 1, the assignment takes that status, and `set -e` exits silently. Invisible until then because every earlier run was on Windows. | **The silence is the dangerous part.** Never assign from `$( test && echo … )` under `set -e`; use `if`. A check that has only ever run on one OS has not run. |
+| 8 | The runbook's "start the API" line omitted `ARGON_RELEASE`: compose would have built and run an untested `argon-api:local`. Caught before it ran. | Start the image that was tested, by name, with `--no-build`. |
+
+## Alerts
+
+A nightly backup that silently stops working is a backup nobody has, and a
+drill that passes weekly is worth nothing if nobody reads the result. So alerts
+are designed around the four ways that happens, and the channel is a setting
+(`ALERT_CHANNEL` in `/etc/argon/deploy.env`) that can come later without
+changing any of this:
+
+| Failure | Caught by |
+|---|---|
+| A job runs and fails (backup, drill) | `OnFailure=argon-alert@%n.service` on each unit → `alert.sh unit-failed`, with the unit's last journal lines |
+| A job stops running at all (timer disabled, unit deleted, clock wrong): nothing *fails* | `argon-freshness.timer` (daily 07:00 UTC and after boot) → `65-check-freshness.sh` reads the RESULTS: newest dump ≤ 26 h, newest passing drill ≤ 8 d, both timers enabled, neither last run failed, backup disk ≥ 5 GB free |
+| The server itself dies: nothing on it can say so | the freshness check pings `ALERT_HEARTBEAT_URL` only when all is fresh; an outside dead-man's switch (healthchecks.io, or a CloudWatch alarm on missing data) alerts when the pings stop |
+| An alert is sent and nobody reads it, or the channel is broken | every alert is ALSO kept open in `/var/lib/argon/alerts/open` and printed at every SSH login until acknowledged; a failed send is marked **UNDELIVERED** in the journal and the alert |
+
+Every alert, whatever the channel, is logged at priority `crit`
+(`journalctl -t argon-alert`). With `ALERT_CHANNEL=none` (today) the alert
+itself says **NOBODY WAS NOTIFIED**, and 80 warns at install.
+
+```bash
+sudo $E bash deploy/alert.sh list          # open alerts
+sudo $E bash deploy/alert.sh ack all       # after reading them; logged with who acknowledged
+```
+
+Choosing the channel (decide, then set three lines in `/etc/argon/deploy.env`):
+- `sns`: an SNS topic with email/SMS subscribers. Needs `sns:Publish` on that topic in the instance role, the same IAM request as the S3 bucket.
+- `webhook`: a Slack/Teams incoming webhook URL. No AWS needed.
+- `ALERT_HEARTBEAT_URL`: needed with either one. Without it, a dead server is noticed only when someone looks.
 
 ## CI/CD (`.github/workflows/deploy.yml`)
 

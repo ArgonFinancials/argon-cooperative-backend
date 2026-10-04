@@ -1,0 +1,9 @@
+[Unit]
+Description=Argon freshness: newest dump, newest passing drill, timers enabled
+After=docker.service
+OnFailure=argon-alert@%n.service
+
+[Service]
+Type=oneshot
+Environment=ARGON_ENV=/etc/argon/deploy.env
+ExecStart=/usr/bin/bash /opt/argon/src/deploy/65-check-freshness.sh

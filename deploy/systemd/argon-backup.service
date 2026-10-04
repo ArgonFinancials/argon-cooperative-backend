@@ -2,6 +2,7 @@
 Description=Argon nightly backup to BACKUP_STORE
 After=docker.service
 Requires=docker.service
+OnFailure=argon-alert@%n.service
 
 [Service]
 Type=oneshot
