@@ -1,8 +1,9 @@
-# Loans: the shape (DRAFT for review, 2026-10-05)
+# Loans: the shape (APPROVED 2026-10-05)
 
-**Status: a proposal.** No schema, no tests, no endpoint. When it is approved
-it becomes the contract the tests are written against, as LEDGER_CONTRACT.md is
-for the ledger. Each **Decision** is marked with its owner. Nothing below
+**Status: approved; the contract the loan tests are written against**, as
+LEDGER_CONTRACT.md is for the ledger. Kept in particular, at review: the
+boundary (outstanding is always derived, never stored), consent only by the
+guarantor's own step-up, and nobody marking a loan settled. Each **Decision** is marked with its owner. Nothing below
 invents a figure a society has not agreed.
 
 ## 1. The boundary: the loan says what was agreed, the ledger says what is owed
@@ -54,9 +55,15 @@ frontend's `Loan.outstandingKobo` becomes a derived read.
   condition of an active loan, not a state (§5).
 
 **Decision: interest and penalties.** *Owner: the society, with the Tier 1
-accountant and Commercial.* Neither is in the PRD, and the frontend shows no
-rate on purpose ("a figure an officer will quote to a member"). Until decided,
-**a schedule is principal only**. When a rate is agreed, it becomes a product
+accountant and Commercial (being chased).* Neither is in the PRD, and the
+frontend shows no rate on purpose ("a figure an officer will quote to a
+member"). Until decided, **a schedule is principal only**, and the rate is a
+**configuration of the product, not an assumption in the code**: each product
+carries `interest_rate_bp` (basis points, an integer, never a float). Today
+the only value the schema accepts is 0, refused otherwise by name
+(`interest_method_undecided`), because a rate without an agreed method of
+applying it is still invented policy. When the answer comes, that refusal is
+replaced by the method; no loan or code path assumed zero. When a rate is agreed, it becomes a product
 term, snapshotted onto the loan. Interest then posts as its own income line on
 each repayment (a separate line, as charges are, D-03). That leaves the
 boundary above unchanged.
@@ -91,12 +98,17 @@ supplier account, not the bank. That account does not exist in the chart yet.
   cannot record it on their behalf, or the consent is decorative.
 
 **Decision: what a guarantor is liable for.** *Owner: the society (bye-laws),
-with Legal.* Is it a share of the principal, the whole, or only what remains
-after the borrower's savings? Are the guarantor's own savings **locked**
-(withdrawable falls, as with project commitments) or only pledged? On default,
-recovery from a guarantor is a ledger movement with its own approval, never an
-automatic sweep. **Decision: may a signatory on the loan also guarantee it?**
-I propose not, by the same conflict-of-interest logic as the auditor rule.
+with Legal (being chased).* Is it a share of the principal, the whole, or only
+what remains after the borrower's savings? Are the guarantor's own savings
+**locked** (withdrawable falls, as with project commitments) or only pledged?
+On default, recovery from a guarantor is a ledger movement with its own
+approval, never an automatic sweep.
+
+**Decided 2026-10-05: a signatory on a loan may NOT also guarantee it**, in
+either order. The signatory releases the society's money; the guarantor
+pledges their own standing against the same loan. One person doing both puts
+the control that protects the society and the control that protects the loan
+on one judgement.
 
 ## 4. Who may do what (summary)
 
@@ -122,9 +134,10 @@ inbox's urgency: two clients computing it would be two answers. For example:
 "2 instalments missed: ₦41,666 due 5 August, unpaid; ₦41,667 due 5 September,
 ₦20,000 paid." The frontend's `Loan.missed` and its arrears tab read this.
 
-*Note:* the build specification's "no arrears state in the product" (§ on
-subscriptions) is about **fees**: there is no billing. It does not apply to
-loans. **Decision, Product:** confirm.
+**Decided 2026-10-05:** the build specification's "no arrears state in the
+product" means **fees**. It came from dropping society billing: there is no
+invoice, so no society can be behind on one. Loan arrears are a different
+thing and they exist. The specification now says so.
 
 ## 6. "Settled", when the ledger is the authority on the balance
 
@@ -177,8 +190,8 @@ ledger says money is owed, and it can never be set by someone typing it.
 | Charges on loan movements | Commercial |
 | In-kind disbursement account | Tier 1 accountant |
 | Guarantor liability; are their savings locked | Society bye-laws, Legal |
-| May a signatory also guarantee the same loan | Product (proposed: no) |
+| ~~May a signatory also guarantee the same loan~~ | **Decided: no**, in either order |
 | Prepayment allowed (settled early) | Society |
 | Write-off approval quorum | Society (proposed: as reversals over threshold) |
-| "No arrears state" applies to fees, not loans | Product (confirm) |
+| ~~"No arrears state" applies to fees, not loans~~ | **Decided: fees only**; spec amended |
 | Loans funding projects (requirements capture) | Later; routes through this same loan |
