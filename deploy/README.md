@@ -167,7 +167,9 @@ sudo $E bash deploy/alert.sh list          # open alerts
 sudo $E bash deploy/alert.sh ack all       # after reading them; logged with who acknowledged
 ```
 
-Choosing the channel (decide, then set three lines in `/etc/argon/deploy.env`):
+**Decided: Slack** (`ALERT_CHANNEL=webhook`), because it needs no AWS and the
+team is already there. An alert that lands where nobody looks is worse than
+none: it reads as covered. The options were:
 - `sns`: an SNS topic with email/SMS subscribers. Needs `sns:Publish` on that topic in the instance role, the same IAM request as the S3 bucket.
 - `webhook`: a Slack/Teams incoming webhook URL. No AWS needed.
 - `ALERT_HEARTBEAT_URL`: needed with either one. Without it, a dead server is noticed only when someone looks.

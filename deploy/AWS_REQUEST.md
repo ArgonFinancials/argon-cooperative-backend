@@ -76,5 +76,5 @@ Instance `i-0df0964197555cc26`, us-east-1d, t4g.medium (arm64), Ubuntu 26.04. Re
 
 ## Not needed yet (listed so none of it is a surprise)
 - DNS name and TLS certificate (ACM, or Let's Encrypt on the host), when the API is exposed. That's also when inbound 443 opens.
-- CloudWatch alarm or SNS topic for a failed backup or drill. Until then a failure shows only on the host (`systemctl --failed`).
+- ~~CloudWatch alarm or SNS topic for a failed backup or drill.~~ Not needed: alerts go to a Slack webhook (`deploy/README.md`, "Alerts"), with an outside heartbeat for a dead server. Nothing to ask AWS for.
 - **Not AWS:** an SMS provider for sign-in codes is a separate procurement item.
