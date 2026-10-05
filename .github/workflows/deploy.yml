@@ -49,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ["0002", "0003", "0004", "0005", "0006", "0007", stepup, api, batch, stepup_api, signin_api, books]
+        suite: ["0002", "0003", "0004", "0005", "0006", "0007", "0008", stepup, api, batch, stepup_api, signin_api, books]
     services:
       postgres:
         image: postgres:18-trixie

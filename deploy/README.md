@@ -188,7 +188,7 @@ none: it reads as covered. The options were:
 
 ## CI/CD (`.github/workflows/deploy.yml`)
 
-**tier1** runs on every push and pull request: for each of the twelve suites,
+**tier1** runs on every push and pull request: for each of the thirteen suites,
 `mutate.sh <suite> --svc` against `postgres:18-trixie` in a service container
 on the runner (TARGET=local, passwords generated per run). A suite passes only
 if its tests pass on the real migrations AND turn red on every deliberately
