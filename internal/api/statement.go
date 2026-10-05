@@ -125,10 +125,10 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			row.AdjustsEntryId = &u
 		}
 		if partner != 0 {
-			row.Charges = append(row.Charges, ChargeLine{Role: PartnerCharge, AmountKobo: Kobo(strconv.FormatInt(partner, 10))})
+			row.Charges = append(row.Charges, ChargeLine{Role: ChargeLineRolePartnerCharge, AmountKobo: Kobo(strconv.FormatInt(partner, 10))})
 		}
 		if margin != 0 {
-			row.Charges = append(row.Charges, ChargeLine{Role: ArgonMargin, AmountKobo: Kobo(strconv.FormatInt(margin, 10))})
+			row.Charges = append(row.Charges, ChargeLine{Role: ChargeLineRoleArgonMargin, AmountKobo: Kobo(strconv.FormatInt(margin, 10))})
 		}
 		if projection == MemberStatementProjectionOfficer {
 			pb := struct {

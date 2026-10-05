@@ -388,6 +388,178 @@ components:
           description: Ordered by postedAt, then entryId. Deterministic (§5).
           items: { $ref: '#/components/schemas/StatementRow' }
 
+    # ---- THE SOCIETY'S BOOKS (LEDGER_CONTRACT §5) ------------------------------
+    # Every figure below is §0-SIGNED: positive is a debit, negative a credit. A
+    # liability's balance (member savings) is therefore negative. These are the
+    # accountant's views; the member-side sign lives only in MemberStatement.
+    #
+    # DATE BASIS (decided 2026-10-05): the VALUE DATE, the date the movement
+    # happened in the society's books, as period close uses. A NULL value date
+    # (an opening balance "accumulated before migration") is BEFORE EVERY DATE.
+    # Rows are ordered by value date (NULL first), then postedAt, then entryId.
+
+    AccountKind:
+      type: string
+      enum: [asset, liability, equity, income, expense]
+
+    AccountRole:
+      type: string
+      description: What an account IS, independent of its society-specific code (0004).
+      enum: [member_savings, member_wallet, member_loan, bank, charges_partner,
+             charges_margin, migration_control, general]
+
+    Account:
+      type: object
+      required: [code, name, kind, role, postable]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/AccountKind' }
+        role: { $ref: '#/components/schemas/AccountRole' }
+        postable:
+          type: boolean
+          description: False for a grouping account that no line may post to.
+
+    ChartOfAccounts:
+      type: object
+      required: [societyId, accounts]
+      properties:
+        societyId: { type: string, format: uuid }
+        accounts:
+          type: array
+          description: Every account of the society, ordered by code.
+          items: { $ref: '#/components/schemas/Account' }
+
+    TrialBalanceRow:
+      type: object
+      required: [code, name, kind, debitsKobo, creditsKobo, balanceKobo]
+      description: |
+        One account's turnover and balance. debitsKobo is the sum of its debit
+        lines (>= 0), creditsKobo the sum of its credit lines (<= 0, SIGNED, so
+        debits + credits = balance is a plain sum). Both are shown even when
+        they cancel: a reversed contribution is a debit AND a credit, not nothing.
+      properties:
+        code: { type: string }
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/AccountKind' }
+        debitsKobo: { $ref: '#/components/schemas/Kobo' }
+        creditsKobo: { $ref: '#/components/schemas/Kobo' }
+        balanceKobo: { $ref: '#/components/schemas/Kobo' }
+
+    TrialBalance:
+      type: object
+      required: [societyId, asOf, rows, totalDebitsKobo, totalCreditsKobo]
+      description: |
+        Every account of the society (the same set as the chart, zero rows
+        included), as at the end of asOf by value date. totalDebitsKobo +
+        totalCreditsKobo is ZERO, by construction. If the books ever do not sum
+        to zero, the server does not return a trial balance with a variance: it
+        refuses with 500 ledger_does_not_balance. That is a defect, never a
+        figure to display.
+      properties:
+        societyId: { type: string, format: uuid }
+        asOf: { type: string, format: date }
+        rows:
+          type: array
+          description: Ordered by account code.
+          items: { $ref: '#/components/schemas/TrialBalanceRow' }
+        totalDebitsKobo: { $ref: '#/components/schemas/Kobo' }
+        totalCreditsKobo: { $ref: '#/components/schemas/Kobo' }
+
+    LedgerRow:
+      type: object
+      required: [entryId, valueDate, postedAt, kind, reference, reason, reversesEntryId,
+                 adjustsEntryId, amountKobo, balanceKobo]
+      properties:
+        entryId: { type: string, format: uuid }
+        valueDate:
+          type: string
+          format: date
+          nullable: true
+          description: NULL is "accumulated before migration". Never substitute postedAt.
+        postedAt: { type: string, format: date-time }
+        kind: { $ref: '#/components/schemas/MovementKind' }
+        reference: { type: string, nullable: true }
+        reason: { type: string, nullable: true }
+        reversesEntryId: { type: string, format: uuid, nullable: true }
+        adjustsEntryId: { type: string, format: uuid, nullable: true }
+        amountKobo:
+          description: This entry's movement on THIS account (the sum of its lines here), §0-signed.
+          allOf: [{ $ref: '#/components/schemas/Kobo' }]
+        balanceKobo:
+          description: The account's running balance after this row, §0-signed.
+          allOf: [{ $ref: '#/components/schemas/Kobo' }]
+
+    GeneralLedger:
+      type: object
+      required: [societyId, account, from, to, openingBalanceKobo, closingBalanceKobo, rows]
+      properties:
+        societyId: { type: string, format: uuid }
+        account: { $ref: '#/components/schemas/Account' }
+        from: { type: string, format: date, nullable: true }
+        to: { type: string, format: date, nullable: true }
+        openingBalanceKobo:
+          description: The balance before `from` (every NULL-dated row counts as before it). Zero with no `from`.
+          allOf: [{ $ref: '#/components/schemas/Kobo' }]
+        closingBalanceKobo:
+          description: The balance at the end of `to`. Equals the trial balance's balanceKobo for this account as at `to`.
+          allOf: [{ $ref: '#/components/schemas/Kobo' }]
+        rows:
+          type: array
+          description: Ordered by value date (NULL first), then postedAt, then entryId.
+          items: { $ref: '#/components/schemas/LedgerRow' }
+
+    JournalLine:
+      type: object
+      required: [accountCode, accountName, amountKobo, chargeRole, memberId]
+      properties:
+        accountCode: { type: string }
+        accountName: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Kobo' }
+        chargeRole:
+          description: The line's charge role (D-03), as posted; NULL when it carries none.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/ChargeRole' }]
+        memberId: { type: string, format: uuid, nullable: true }
+
+    JournalEntry:
+      type: object
+      required: [entryId, valueDate, postedAt, kind, reference, reason, reversesEntryId,
+                 adjustsEntryId, reversedBy, postedBy, lines]
+      properties:
+        entryId: { type: string, format: uuid }
+        valueDate: { type: string, format: date, nullable: true }
+        postedAt: { type: string, format: date-time }
+        kind: { $ref: '#/components/schemas/MovementKind' }
+        reference:
+          type: string
+          nullable: true
+          description: The batch reference. Filter on it to audit an import after the fact.
+        reason: { type: string, nullable: true }
+        reversesEntryId: { type: string, format: uuid, nullable: true }
+        adjustsEntryId: { type: string, format: uuid, nullable: true }
+        reversedBy:
+          type: array
+          description: |
+            The entries that reverse this one. A DERIVED read (§2): nothing is
+            written back to the original. Empty when it stands.
+          items: { type: string, format: uuid }
+        postedBy: { $ref: '#/components/schemas/PostedBy' }
+        lines:
+          type: array
+          description: Every line, debits before credits, then by account code. They sum to zero.
+          items: { $ref: '#/components/schemas/JournalLine' }
+
+    Journal:
+      type: object
+      required: [societyId, entries]
+      properties:
+        societyId: { type: string, format: uuid }
+        entries:
+          type: array
+          description: Ordered by value date (NULL first), then postedAt, then entryId.
+          items: { $ref: '#/components/schemas/JournalEntry' }
+
     Problem:
       type: object
       required: [code, message]
@@ -697,6 +869,133 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
           description: No such member — or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---- The society's books (LEDGER_CONTRACT §5). Who may read: an OFFICER of
+  # the society holding a CURRENT post (the read-only internal auditor
+  # included). Anyone else, a member of the society included, receives 404,
+  # byte-for-byte the same as for a society that does not exist.
+  /societies/{societyId}/accounts:
+    get:
+      operationId: getChartOfAccounts
+      summary: The society's chart of accounts
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The chart, ordered by code.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChartOfAccounts' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/trial-balance:
+    get:
+      operationId: getTrialBalance
+      summary: Every account's debits, credits and balance as at a date
+      description: |
+        asOf is REQUIRED and is a value date: the server never assumes "today".
+        The totals sum to zero by construction; if they ever do not, the answer
+        is 500 ledger_does_not_balance, never a trial balance with a variance.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: The trial balance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrialBalance' }
+        '500':
+          description: |
+            ledger_does_not_balance: the society's books do not sum to zero. A
+            DEFECT, surfaced loudly, never a trial balance with a variance. (Every
+            entry balances at commit, and 0006 keeps every line in its entry's
+            society, so this cannot be constructed by a test; the check stays.)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/accounts/{accountCode}/ledger:
+    get:
+      operationId: getGeneralLedger
+      summary: One account's entries with a running balance
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: accountCode, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: The account's ledger.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeneralLedger' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society (or not the caller's to read), or no such account in it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/journal:
+    get:
+      operationId: getJournal
+      summary: Entries with every line, filtered by reference, member, actor and value date
+      description: |
+        Filters combine (AND). reference is how an import is audited after the
+        fact. memberId matches entries with any line naming that member.
+        actorUserId matches who posted. from/to are value dates; with `from`
+        given, NULL-dated entries are before it and excluded.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: reference, in: query, required: false, schema: { type: string } }
+        - { name: memberId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: actorUserId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: The matching entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Journal' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller may not read. Indistinguishable by design.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
