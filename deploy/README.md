@@ -134,7 +134,14 @@ what fails says more about the scripts than what passes.
 | 5 | `docker compose` missing ("unknown flag: --env-file") | Install and assert every tool a script calls. |
 | 6 | The forced command arrived with CRLF (`env: $'bash\r'`): `git archive` applies `core.autocrlf` and only `*.sh` was pinned | Pin every file the server reads, extension or not; 05 now refuses a release with CRLF. |
 | 7 | **The first CI run failed all nine suites with exit 1 and NO OUTPUT.** `BIN="…$( [[ $OSTYPE == msys* ]] && echo .exe )"`: on Linux the test is false, the substitution returns 1, the assignment takes that status, and `set -e` exits silently. Invisible until then because every earlier run was on Windows. | **The silence is the dangerous part.** Never assign from `$( test && echo … )` under `set -e`; use `if`. A check that has only ever run on one OS has not run. |
-| 8 | The runbook's "start the API" line omitted `ARGON_RELEASE`: compose would have built and run an untested `argon-api:local`. Caught before it ran. | Start the image that was tested, by name, with `--no-build`. |
+| 8 | The runbook's "start the API" line omitted `ARGON_RELEASE`: compose would have built and run an untested `argon-api:local`. Caught before it ran. | Start the image that was tested, by name, with `--no-build`. The pinned release, the tested image and the CI gate are all defeated by one missing argument in a README: the documented command is part of the system. |
+| 9 | The production environment's required-reviewer rule did not exist: the org is on GitHub Free and the repo is private, where that rule needs Enterprise. Caught by reading the rule back through the API before setting the deploy secrets. | A control you configured is not a control until it is read back from the system that enforces it. |
+
+**Habit: a finding is a class, not a line.** After fixing the instance, find
+the rest: name the shape, search every script for it, and prove the search
+finds a planted example before trusting its silence. Finding 7's shape
+(an assignment from a failing substitution under `set -e`) turned up twice
+more that way: `65-check-freshness.sh`, `80-install-timers.sh`.
 
 ## Alerts
 
@@ -171,8 +178,20 @@ Choosing the channel (decide, then set three lines in `/etc/argon/deploy.env`):
 `mutate.sh <suite> --svc` against `postgres:18-trixie` in a service container
 on the runner (TARGET=local, passwords generated per run). A suite passes only
 if its tests pass on the real migrations AND turn red on every deliberately
-broken schema and service. **deploy** runs only on a push to `main`, only after
-every tier1 suite is green, one at a time, never cancelled mid-run.
+broken schema and service.
+
+**deploy never runs on a push.** A person deploys: GitHub → Actions →
+tier1-and-deploy → **Run workflow** on `main`, typing the first 7+ characters
+of the commit they mean to deploy. The gate refuses anyone not on
+`ARGON_DEPLOYERS`, and a commit that is not main's latest; tier1 then runs
+again in that same run, and only if every suite is green does the deploy go,
+one at a time, never cancelled mid-run.
+
+Why not required reviewers (finding 9): the ArgonFinancials org is on GitHub
+Free and the repo is private, where environment reviewers need Enterprise.
+**The limit, stated:** anyone with write access can edit the workflow to drop
+the gate, and Free has no branch protection for private repos. Write access is
+the real boundary: keep it to the people on `ARGON_DEPLOYERS`.
 
 The deploy is `git archive` of the commit streamed over SSH to the user
 **argon-deploy**:
@@ -197,7 +216,7 @@ cd /opt/argon/src && sudo $E bash deploy/25-deploy-user.sh ~/argon-deploy.pub
 # GitHub, Settings:
 #   Secrets  ARGON_DEPLOY_KEY  = contents of argon-deploy (the private key); then delete the local copy
 #   Variables ARGON_DEPLOY_HOST = the server's hostname
-#   Environments  production   = add required reviewers to approve each deploy
+#   Variables ARGON_DEPLOYERS   = GitHub logins allowed to deploy, comma-separated (admin to change)
 ```
 If the server is rebuilt, its host key changes: update `ARGON_HOST_KEY` in the
 workflow from a fingerprint checked out of band, never from whatever the new

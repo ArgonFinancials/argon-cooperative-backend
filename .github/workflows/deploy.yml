@@ -4,15 +4,24 @@
 #            against PostgreSQL 18 in a service container on the runner: the
 #            tests must pass on the real migrations AND turn red on every
 #            deliberately broken schema and service. Runs on every push and PR.
-#   deploy — main only, after tier1. Streams `git archive` of the commit to the
-#            server as the dedicated user argon-deploy, whose key can run one
-#            command (deploy/argon-deploy) and nothing else. Never the key that
-#            opens other hosts.
+#   deploy — ONLY when a person runs this workflow by hand ("Run workflow", on
+#            main) and types the commit they mean to deploy; never on a push.
+#            After tier1 passes in that same run. Streams `git archive` of the
+#            commit to the server as the dedicated user argon-deploy, whose key
+#            can run one command (deploy/argon-deploy) and nothing else. Never
+#            the key that opens other hosts.
+#
+# Why a manual trigger and not required reviewers: the org is on GitHub Free
+# and the repo is private, where environment reviewers need Enterprise. The
+# limit: anyone with WRITE access could edit this file to drop these checks
+# (Free has no branch protection for private repos). Write access is the real
+# boundary; keep it to the people on ARGON_DEPLOYERS.
 #
 # Repository settings this needs (none of them is in this file):
 #   secret   ARGON_DEPLOY_KEY   the PRIVATE half of the argon-deploy ed25519 key
 #   variable ARGON_DEPLOY_HOST  the server's hostname
-#   environment "production"    add required reviewers to gate each deploy
+#   variable ARGON_DEPLOYERS    GitHub logins allowed to deploy, comma-separated
+#                               (changing it needs repo admin)
 name: tier1-and-deploy
 
 on:
@@ -20,12 +29,21 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      confirm_commit:
+        description: "Deploy THIS commit: type the first 7+ characters of main's latest commit id"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   tier1:
+    # On push and PR the gate is skipped and tier1 runs; on a manual run it
+    # waits for the gate and does not run at all if the gate refused.
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.result != 'failure' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -79,12 +97,34 @@ jobs:
       - name: Mutation run, suite ${{ matrix.suite }}
         run: bash test/tier1/mutate.sh "${{ matrix.suite }}" --svc
 
+  # The gate: who, and which commit. Its own job so a refusal comes in seconds
+  # and the deploy job never starts. Inputs reach the script as environment
+  # variables, never as text pasted into it.
+  gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Who, and which commit
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          DEPLOYERS: ${{ vars.ARGON_DEPLOYERS }}
+          CONFIRM: ${{ inputs.confirm_commit }}
+          REF: ${{ github.ref }}
+        run: |
+          [[ $REF == refs/heads/main ]] || { echo "::error::deploys come from main only, not $REF"; exit 1; }
+          [[ -n $DEPLOYERS ]] || { echo "::error::repository variable ARGON_DEPLOYERS is not set: nobody may deploy"; exit 1; }
+          [[ ",${DEPLOYERS// /}," == *",$ACTOR,"* ]] || { echo "::error::$ACTOR is not on ARGON_DEPLOYERS"; exit 1; }
+          [[ $CONFIRM =~ ^[0-9a-f]{7,40}$ ]] || { echo "::error::confirm_commit must be 7-40 hex characters of the commit id"; exit 1; }
+          [[ $GITHUB_SHA == "$CONFIRM"* ]] || { echo "::error::you confirmed $CONFIRM, but main is at ${GITHUB_SHA:0:12}: refusing to deploy a commit nobody confirmed"; exit 1; }
+          echo "deploying ${GITHUB_SHA:0:12}, confirmed by $ACTOR"
+
   deploy:
-    needs: tier1
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [gate, tier1]
+    # Never on a push: only a person running the workflow by hand, on main.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: production
     concurrency:
       group: argon-deploy
       cancel-in-progress: false   # never cut a deploy off mid-migration
