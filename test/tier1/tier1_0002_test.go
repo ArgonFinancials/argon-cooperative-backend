@@ -53,10 +53,12 @@ func run(m *testing.M) int {
 	// second process re-creates the first one's identifiers and a collision
 	// reads like a product defect (it did: a shared member number routed a
 	// sign-in to D-21's ambiguous path, and the lockout "failed").
+	var base int64
 	if v := os.Getenv("ARGON_TEST_SEQ_BASE"); v != "" {
-		base, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || base < 0 || base > 90_000_000 {
-			fmt.Fprintf(os.Stderr, "tier1: ARGON_TEST_SEQ_BASE=%q must be 0..90000000\n", v)
+		var err error
+		base, err = strconv.ParseInt(v, 10, 64)
+		if err != nil || base < 0 || base > 99_000_000 {
+			fmt.Fprintf(os.Stderr, "tier1: ARGON_TEST_SEQ_BASE=%q must be 0..99000000\n", v)
 			os.Exit(2)
 		}
 		seq.Store(base)
@@ -147,8 +149,21 @@ func run(m *testing.M) int {
 			return 2
 		}
 	}
-	return m.Run()
+	code := m.Run()
+	// Each process owns [base, base + seqRange). Asserted, not assumed: a run
+	// that used more would re-create the next range's member numbers and
+	// phones, and that collision reads like a product defect.
+	if used := seq.Load() - base; used >= seqRange {
+		fmt.Fprintf(os.Stderr, "tier1: this run used %d fixture numbers, more than its range of %d: widen the range (deploy/lib.sh run_tier1)\n", used, seqRange)
+		return 2
+	}
+	return code
 }
+
+// seqRange: the fixture numbers one test process may use. deploy/lib.sh's
+// run_tier1 spaces the drill's suites this far apart; the phone fixtures have
+// 8 digits, so 99 ranges fit.
+const seqRange = 1_000_000
 
 // ---- harness ----------------------------------------------------------------
 

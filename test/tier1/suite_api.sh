@@ -1,7 +1,7 @@
 # Suite api — GET /members/{memberId}/statement. Sourced by mutate.sh.
 #
 # No SQL baseline: the schema is real (0001–0003) plus the 0004 interface. The
-# mutants are the 21 named breaks of the reference handler in apifake_test.go,
+# mutants are the 23 named breaks of the reference handler in apifake_test.go,
 # selected by ARGON_TEST_API_FAKE. Run with --svc.
 SUITE_INCLUDE='^TestApiStatement'
 SUITE_EXCLUDE='^$'
@@ -25,10 +25,12 @@ declare -gA SVC_TARGET_OF=(
   [value_date_filled]='TestApiStatement7_UnknownValueDateIsSentAsNull'
   [balance_contract_sign]='TestApiStatement8_BalancesAreFromTheMembersSide'
   [direction_from_bank]='TestApiStatement9_DirectionComesFromTheSavingsLine'
-  [unordered]='TestApiStatement10_RowsInPostingOrder'
+  [unordered]='TestApiStatement10_RowsInValueDateOrder'
+  [posting_order]='TestApiStatement10_RowsInValueDateOrder'
   [money_as_numbers]='TestApiStatement11_MoneyIsAStringOnTheWire'
   [nil_slices]='TestApiStatement12_EmptyListsAreArraysNotNull'
   [period_ignored]='TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance'
+  [period_by_posting]='TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance'
   [leak_other_lines]='TestApiStatement14_AnotherMembersLineNeverLeaks'
   [any_member_reads]='TestApiStatement15_AnotherMemberGetsNotFound'
   [officer_any_society]='TestApiStatement16_OfficerOfAnotherSocietyGetsNotFound'

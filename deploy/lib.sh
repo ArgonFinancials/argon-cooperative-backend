@@ -214,12 +214,14 @@ SQL
 run_tier1() {
   local db=$1 re=$2 skip=${3:-} bin rc=0 log
   assert_scratch "$db"   # the suites write fixtures that can never be deleted
-  # Each run in one database gets its own fixture-counter range (10^7 apart:
-  # the phone fixtures have 8 digits), so suites sharing a restored copy never
-  # re-create each other's member numbers, phones or device tokens.
+  # Each run in one database gets its own fixture-counter range (10^6 apart:
+  # the phone fixtures have 8 digits, so 99 ranges fit), so suites sharing a
+  # restored copy never re-create each other's member numbers, phones or
+  # device tokens. The test binary FAILS a run that overflows its range
+  # (seqRange in tier1_0002_test.go). 10^7 apart allowed only 9 suites.
   RUN_TIER1_N=$(( ${RUN_TIER1_N:-0} + 1 ))
-  ((RUN_TIER1_N <= 9)) || die "run_tier1: more than 9 suites against one database would overlap fixture ranges"
-  export ARGON_TEST_SEQ_BASE=$(( RUN_TIER1_N * 10000000 ))
+  ((RUN_TIER1_N <= 99)) || die "run_tier1: more than 99 suites against one database would overlap fixture ranges"
+  export ARGON_TEST_SEQ_BASE=$(( RUN_TIER1_N * 1000000 ))
   local args=(-test.run "$re" -test.count=1 -test.v)
   [[ -n $skip ]] && args+=(-test.skip "$skip")
   log=$(mktemp)
@@ -246,6 +248,12 @@ run_tier1() {
   # the lines since its own "=== RUN", never the next test's.
   awk '/^=== RUN/ {buf=""; next} /^--- FAIL/ {print $0 buf; buf=""; next} {buf=buf "\n" $0}' "$log" | head -60 >&2 || true
   ((passed + failed > 0)) || { tail -5 "$log" >&2; rm -f "$log"; die "run_tier1: '$re' ran no tests — a pass here would be vacuous"; }
+  # Failed with no failing test (TestMain refused, e.g. a fixture range
+  # overflowed): say why, before the log is gone.
+  if ((rc != 0 && failed == 0)); then
+    printf '  !! the test binary exited %d with no failing test:\n' "$rc" >&2
+    grep -v '^\(=== \|--- \|PASS\|ok \)' "$log" | tail -5 | sed 's/^/     /' >&2
+  fi
   rm -f "$log"
   info "run_tier1 $re${skip:+ (skipping $skip)}: $passed passed, $failed failed"
   RUN_TIER1_PASSED=$passed

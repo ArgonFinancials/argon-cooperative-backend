@@ -14,6 +14,9 @@
 //   - Balances are from the member's side (positive = owed to the member).
 //   - Anyone else gets 404, byte-identical to a member that does not exist.
 //
+// Decided 2026-10-05: periods and order are by VALUE DATE, as the society's
+// books are (tier1_api_books_test.go). Tests 10 and 13 changed with it.
+//
 // Which handler runs: default api.NewServer (internal/api, the real one);
 // ARGON_TEST_API_FAKE=<break> runs the mutation vehicle in apifake_test.go.
 package tier1
@@ -379,16 +382,24 @@ func TestApiStatement9_DirectionComesFromTheSavingsLine(t *testing.T) {
 	}
 }
 
-func TestApiStatement10_RowsInPostingOrder(t *testing.T) {
+// Value date, then posting time, then entry id (decided 2026-10-05, the
+// books' order): an entry posted LAST but dated FIRST comes straight after the
+// undated opening balance. (Changed from "posting order", approved 2026-10-01:
+// every dated entry then shared one value date, so the two orders could not
+// be told apart.)
+func TestApiStatement10_RowsInValueDateOrder(t *testing.T) {
 	wd := newWorld(t)
+	eBack, err := wd.c.s.postEntry(entry{kind: "contribution_in", valueDate: "2026-01-10"},
+		line{acct: wd.c.bank, kobo: 10000}, line{acct: wd.c.savings, kobo: -10000, member: wd.member})
+	fixture(t, err, "a contribution dated January, posted last")
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	got := []string{}
 	for _, r := range s.Rows {
 		got = append(got, r.EntryId)
 	}
-	want := []string{wd.eOpening, wd.eContrib, wd.eReversal, wd.eWallet, wd.eToOther}
+	want := []string{wd.eOpening, eBack, wd.eContrib, wd.eReversal, wd.eWallet, wd.eToOther}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("WRONG ORDER — rows are not in posting order:\n  got  %v\n  want %v", got, want)
+		t.Fatalf("WRONG ORDER — rows are not in value-date order (undated first, then by value date, posting time, id):\n  got  %v\n  want %v", got, want)
 	}
 }
 
@@ -422,9 +433,23 @@ func TestApiStatement12_EmptyListsAreArraysNotNull(t *testing.T) {
 	}
 }
 
+// The period is by VALUE DATE (decided 2026-10-05; approved 2026-10-01 by
+// posting date). Every entry was POSTED today; all but the opening balance
+// HAPPENED on 2 March 2026. A member's statement and the society's ledger
+// must agree about which entries fall in a period.
 func TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance(t *testing.T) {
 	wd := newWorld(t)
-	s := decode(t, wd.statement(t, wd.memberUser, "?from=2999-01-01"))
+	s := decode(t, wd.statement(t, wd.memberUser, "?from=2026-03-01&to=2026-03-31"))
+	if len(s.Rows) != 4 || s.OpeningSavingsBalanceKobo != "48000000" || s.ClosingSavingsBalanceKobo != "48050000" {
+		t.Fatalf("WRONG FIGURES — March 2026 by value date: %d rows, opening %s, closing %s; want 4 rows (contribution, reversal, wallet, transfer), opening 48000000 (the undated opening balance), closing 48050000",
+			len(s.Rows), s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)
+	}
+	s = decode(t, wd.statement(t, wd.memberUser, "?to=2026-02-28"))
+	if len(s.Rows) != 1 || s.Rows[0].EntryId != wd.eOpening || s.ClosingSavingsBalanceKobo != "48000000" {
+		t.Fatalf("WRONG FIGURES — to 28 February by value date: %d rows, closing %s; want only the undated opening balance, closing 48000000",
+			len(s.Rows), s.ClosingSavingsBalanceKobo)
+	}
+	s = decode(t, wd.statement(t, wd.memberUser, "?from=2999-01-01"))
 	if len(s.Rows) != 0 || s.OpeningSavingsBalanceKobo != "48050000" || s.ClosingSavingsBalanceKobo != "48050000" {
 		t.Fatalf("WRONG FIGURES — a period after every entry: %d rows, opening %s, closing %s; want 0, 48050000, 48050000",
 			len(s.Rows), s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)

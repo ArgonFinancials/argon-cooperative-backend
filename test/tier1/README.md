@@ -25,8 +25,14 @@ Each was written and mutation-tested before the code it covers.
 | `0002` | `tier1_0002_test.go` (53) | `0002_interface.sql` (M0) + `mutants/` (38) | `migrations/0002_tier1.up.sql` |
 | `0003` | `tier1_0003_test.go`, `tier1_0003_service_test.go` (84) | `mutants_0003/` (49) + the auth service fake's breaks (`--svc`) | `migrations/0003_auth.up.sql`, `internal/auth` |
 | `0004` | `tier1_0004_test.go` (11) | M0 + `mutants_0004/` (8) | `migrations/0004_roles.up.sql` |
-| `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (21, `--svc`) | `internal/api/statement.go` |
+| `0005` | `tier1_0005_test.go` (12) | `0005_interface.sql` (M0) + `mutants_0005/` (12) | `migrations/0005_step_up.up.sql` |
+| `0006` | `tier1_0006_test.go` (4) | M0 (the real 0001–0005) + `mutants_0006/` (4) | `migrations/0006_line_society.up.sql` |
+| `stepup` | `tier1_stepup_service_test.go` (9) | the step-up service fake's breaks (`--svc`) | `internal/auth/stepup.go` |
+| `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (23, `--svc`) | `internal/api/statement.go` |
 | `batch` | `tier1_api_batch_test.go` (22) | the breaks in `apifake_batch_test.go` (32, `--svc`) | `internal/api/batch.go` |
+| `stepup_api` | `tier1_api_stepup_test.go` (15) | the breaks in `apifake_stepup_test.go` (`--svc`) | `internal/api/stepup.go` |
+| `signin_api` | `tier1_api_signin_test.go` (14) | the breaks in `apifake_signin_test.go` (`--svc`) | `internal/api/signin.go` |
+| `books` | `tier1_api_books_test.go` (31) | the breaks in `apifake_books_test.go` (32, `--svc`) | `internal/api/books.go` |
 
 The restore drill (`deploy/60-restore.sh --drill`) runs every suite above (GREEN half)
 against the restored copy.
@@ -44,9 +50,34 @@ skip. A skipped Tier 1 suite reads as a green one.
 
 ## Deliberately not tested
 
-**Trial balance at period close (§5).** Every entry is forced to balance at
-commit, so an unbalanced trial balance cannot be constructed. A test for it
-could never fail. See the note above `TestP4_*` before adding one.
+**A trial balance that does not sum to zero (§5: period close; the books'
+`500 ledger_does_not_balance`).** Every entry balances at commit, and since
+**0006** every line posts to an account of its own entry's society, so a
+society's books that do not sum to zero cannot be constructed, and a test
+for them could never fail. See the note above `TestP4_*` before adding one.
+The refusals stay in the code: a check that cannot fire is still what stands
+between a future rule change and a silent breakage.
+
+**This section was wrong until 0006** (finding 10, below). It said "every
+entry balances, so it cannot be constructed", and that held per ENTRY, not per
+SOCIETY: a balanced entry with a line on another society's account broke two
+trial balances at once.
+
+## Finding 10: a line could post to another society's account (2026-10-05)
+
+0002 checked a line's **member** against the entry's society and never its
+**account**. A cross-society line passed every rule, its entry summed to zero,
+and **both** societies' trial balances broke: one missing a line, one carrying
+a foreign one. §3's "the trial balance sums to zero by construction" was not
+true, and it survived five migrations and 239 tests. Closed by 0006, suite
+`0006`.
+
+**What found it: writing the trial balance READ, not testing the write path.**
+A read that must sum to zero is a check on every rule that produced the data;
+the write-path tests each checked one rule at a time and could all pass with
+the hole between them. Habit: for every invariant a read promises (sums to
+zero, two reads agree), ask which write rule makes it true, and test THAT rule
+across the boundary the read crosses (here: per society, not per entry).
 
 ## Constraint names are part of the interface
 
@@ -59,7 +90,7 @@ could never fail. See the note above `TestP4_*` before adding one.
 `entry_not_in_closed_period`, `period_close_is_final`,
 `accounting_periods_no_overlap`, `adjustment_states_reason`,
 `ledger_entries_adjusts_id_fkey`, `correction_is_reversal_or_adjustment`,
-`correction_same_society`.
+`correction_same_society`, `ledger_line_account_in_society`.
 
 A trigger reports its name with
 `RAISE … USING ERRCODE = 'check_violation', CONSTRAINT = '<name>'`.

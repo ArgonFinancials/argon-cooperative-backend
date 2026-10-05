@@ -154,9 +154,23 @@ discovered while building.
 |---|---|---|
 | `chartOfAccounts()` | code, name, type, whether postable | Types: asset, liability, equity, income, expense. Non-postable parents exist for grouping. |
 | `trialBalance(asOf)` | every account with debit and credit totals | **Must sum to zero.** If it does not, that is a defect to surface loudly, never a variance to display. |
-| `generalLedger(accountCode, from, to)` | entries with a running balance | Ordered by posting time, then entry id. Deterministic. |
-| `journal(filter)` | entries by reference, member, date range, actor | The reference filter is how an import is audited after the fact. |
-| `memberStatement(memberId, from, to)` | entries with running balance | What a member reads as a receipt. Charges appear as their own lines. |
+| `generalLedger(accountCode, from, to)` | entries with a running balance | Ordered by **value date, then posting time, then entry id**. Deterministic, and in the books' order. |
+| `journal(filter)` | entries by reference, member, date range, actor | The reference filter is how an import is audited after the fact. Same order. |
+| `memberStatement(memberId, from, to)` | entries with running balance | What a member reads as a receipt. Charges appear as their own lines. Same date basis and order as the books. |
+
+**Every read uses the VALUE DATE (decided 2026-10-05)**: the date the movement
+happened in the society's books, the date period close uses. `asOf`, `from`
+and `to` are value dates. An undated entry (an opening balance "accumulated
+before migration") is **before every date**. A member's statement and the
+society's ledger therefore never disagree about which entries fall in a
+period. Ordering by posting time, which this table said until then, was
+deterministic and wrong: it disagreed with the books.
+
+**Known gap: no pagination.** Every read returns the whole result. That is
+right today. It becomes urgent at the **first society with a year of daily
+collections** (hundreds of members, every day, for a year), not at some row
+count: plan cursor pagination (value date, posting time, entry id, the order
+above) before that society is onboarded.
 | `reports(period)` | contributions by branch, loans outstanding, charges collected | Charges split partner vs margin — see §6. |
 
 **Balances are DERIVED from entries, never stored as the authoritative figure.**

@@ -385,7 +385,9 @@ components:
         chargedInPeriod: { $ref: '#/components/schemas/ChargedInPeriod' }
         rows:
           type: array
-          description: Ordered by postedAt, then entryId. Deterministic (§5).
+          description: |
+            Ordered by value date (NULL first), then postedAt, then entryId: the
+            books' order (decided 2026-10-05). Deterministic (§5).
           items: { $ref: '#/components/schemas/StatementRow' }
 
     # ---- THE SOCIETY'S BOOKS (LEDGER_CONTRACT §5) ------------------------------
@@ -854,8 +856,8 @@ paths:
       security: [{ session: [] }]
       parameters:
         - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: from, in: query, required: false, schema: { type: string, format: date } }
-        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: from, in: query, required: false, description: A VALUE date; undated entries are before it., schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, description: A VALUE date., schema: { type: string, format: date } }
       responses:
         '200':
           description: The statement.

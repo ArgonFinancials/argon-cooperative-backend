@@ -21,10 +21,12 @@
 //	value_date_filled        a NULL value date is sent as the posting date
 //	balance_contract_sign    balances sent §0-signed (in credit = negative)
 //	direction_from_bank      direction read from a bank line ("in" when there is none)
-//	unordered                rows ordered by entry id, not posting time
+//	unordered                rows ordered by entry id, not value date then posting time
+//	posting_order            rows ordered by posting time, not value date (pre-2026-10-05)
 //	money_as_numbers         money fields sent as JSON numbers
 //	nil_slices               empty lists sent as null
 //	period_ignored           from/to ignored
+//	period_by_posting        from/to compare the posting date, not the value date (pre-2026-10-05)
 //	leak_other_lines         every savings line of the entry is summed, other members' included
 //	any_member_reads         any member of the society may read any member's statement
 //	officer_any_society      an officer of ANY society may read
@@ -201,9 +203,12 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 	if f.brk == "two_queries" && projection == "officer" {
 		extra = `AND e.reverses_id IS NULL`
 	}
-	order := `e.posted_at, e.id`
-	if f.brk == "unordered" {
+	order := `e.value_date NULLS FIRST, e.posted_at, e.id`
+	switch f.brk {
+	case "unordered":
 		order = `e.id`
+	case "posting_order":
+		order = `e.posted_at, e.id`
 	}
 	rows, err := f.db.Query(ctx, `
 		SELECT e.id::text, e.posted_at, e.value_date::text, e.kind::text, b.reference, e.reverses_id::text, e.adjusts_id::text, e.reason,
@@ -243,14 +248,20 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason, &actor, &post, &label, &sav, &pc, &am, &bankOut); err != nil {
 			return nil, err
 		}
-		day := postedAt.Format("2006-01-02")
+		day := "" // the value date; undated is before every date
+		if valueDate != nil {
+			day = *valueDate
+		}
+		if f.brk == "period_by_posting" {
+			day = postedAt.Format("2006-01-02")
+		}
 		if f.brk != "period_ignored" {
-			if from != nil && day < from.Time.Format("2006-01-02") {
+			if from != nil && (day == "" || day < from.Time.Format("2006-01-02")) {
 				opening -= sav
 				run -= sav
 				continue
 			}
-			if to != nil && day > to.Time.Format("2006-01-02") {
+			if to != nil && day != "" && day > to.Time.Format("2006-01-02") {
 				continue
 			}
 		}

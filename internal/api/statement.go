@@ -57,7 +57,7 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		  FROM ledger_entries e LEFT JOIN ledger_batches b ON b.id = e.batch_id
 		 WHERE e.id IN (SELECT l.entry_id FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
 		                 WHERE l.member_id = $1 AND a.role = 'member_savings')
-		 ORDER BY e.posted_at, e.id`, m.id)
+		 ORDER BY e.value_date NULLS FIRST, e.posted_at, e.id`, m.id)
 	if err != nil {
 		return nil, err
 	}
@@ -81,13 +81,20 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			&actor, &post, &label, &sav, &partner, &margin); err != nil {
 			return nil, err
 		}
-		day := postedAt.Format("2006-01-02")
-		if from != nil && day < from.Time.Format("2006-01-02") {
+		// The VALUE DATE, as the society's books use (decided 2026-10-05): a
+		// member's statement and the ledger never disagree about which entries
+		// fall in a period. Undated (accumulated before migration) is before
+		// every date.
+		day := ""
+		if valueDate != nil {
+			day = *valueDate
+		}
+		if from != nil && (day == "" || day < from.Time.Format("2006-01-02")) {
 			opening -= sav
 			balance -= sav
 			continue
 		}
-		if to != nil && day > to.Time.Format("2006-01-02") {
+		if to != nil && day != "" && day > to.Time.Format("2006-01-02") {
 			continue
 		}
 		balance -= sav
