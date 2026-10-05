@@ -79,6 +79,26 @@ the hole between them. Habit: for every invariant a read promises (sums to
 zero, two reads agree), ask which write rule makes it true, and test THAT rule
 across the boundary the read crosses (here: per society, not per entry).
 
+## Finding 12: an approved test that could not hold its decision (2026-10-05)
+
+Statement test 13 was written for "a period bounds the rows and carries the
+balance", and **approved**. It asked for a period starting in 2999. That passes
+whether the statement filters by value date or by posting date, because every
+entry is before 2999 on both. So when the decision changed (posting date to
+value date), the approved test could not tell the two apart. Only implementing
+the change exposed it. Test 10 had the same flaw for ordering: every dated
+entry shared one value date, so posting order and value-date order were the
+same list. Both now fail on the other basis (`period_by_posting`,
+`posting_order`).
+
+Same shape as the fixtures that could not distinguish, except that this one
+had been reviewed.
+
+**Habit: an approval does not make a test discriminating.** For every test,
+ask what it would do if the decision had gone the other way. If the answer is
+"pass", it is documentation, not a test. Make the other way a named break and
+watch it go red.
+
 ## Constraint names are part of the interface
 
 `ledger_lines_entry_open`, `ledger_entries_posted_at_is_now`,
