@@ -27,6 +27,7 @@ Each was written and mutation-tested before the code it covers.
 | `0004` | `tier1_0004_test.go` (11) | M0 + `mutants_0004/` (8) | `migrations/0004_roles.up.sql` |
 | `0005` | `tier1_0005_test.go` (12) | `0005_interface.sql` (M0) + `mutants_0005/` (12) | `migrations/0005_step_up.up.sql` |
 | `0006` | `tier1_0006_test.go` (4) | M0 (the real 0001–0005) + `mutants_0006/` (4) | `migrations/0006_line_society.up.sql` |
+| `0007` | `tier1_0007_test.go` (35) | `0007_interface.sql` (M0) + `mutants_0007/` (36) | `migrations/0007_loans.up.sql` (after review) |
 | `stepup` | `tier1_stepup_service_test.go` (9) | the step-up service fake's breaks (`--svc`) | `internal/auth/stepup.go` |
 | `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (23, `--svc`) | `internal/api/statement.go` |
 | `batch` | `tier1_api_batch_test.go` (22) | the breaks in `apifake_batch_test.go` (32, `--svc`) | `internal/api/batch.go` |
@@ -98,6 +99,23 @@ had been reviewed.
 ask what it would do if the decision had gone the other way. If the answer is
 "pass", it is documentation, not a test. Make the other way a named break and
 watch it go red.
+
+## Open findings 14 and 15: approvals are a record, not a control (2026-10-05)
+
+Found while writing suite 0007. Not fixed; no reviewed test yet.
+
+- **14.** `approval_requests.state` is a free column. The API role holds
+  `UPDATE (state)` (grants.sql), and no rule ties it to signatures: a request
+  can be marked `approved` with none.
+- **15.** Signing checks neither the request's expiry nor its state: an
+  expired or rejected request still collects signatures.
+
+Nothing consumes `state` today. Loans do not either: suite 0007 derives a
+disbursement's approval from a quorum of signatures made before expiry, and
+test 26 sets `state = 'approved'` on an unsigned request to prove the
+derivation ignores it. A rejection, though, is recorded nowhere except
+`state`, so "not rejected" cannot be derived yet. The decision on how
+approvals record outcomes is open.
 
 ## Constraint names are part of the interface
 
