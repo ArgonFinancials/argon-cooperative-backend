@@ -137,6 +137,14 @@ what fails says more about the scripts than what passes.
 | 8 | The runbook's "start the API" line omitted `ARGON_RELEASE`: compose would have built and run an untested `argon-api:local`. Caught before it ran. | Start the image that was tested, by name, with `--no-build`. The pinned release, the tested image and the CI gate are all defeated by one missing argument in a README: the documented command is part of the system. |
 | 9 | The production environment's required-reviewer rule did not exist: the org is on GitHub Free and the repo is private, where that rule needs Enterprise. Caught by reading the rule back through the API before setting the deploy secrets. | A control you configured is not a control until it is read back from the system that enforces it. |
 
+**Habit: a control is not a control until you have read it back from the
+system that enforces it.** The click succeeding is not the control existing.
+Finding 9: a required-reviewer rule that GitHub's page accepted and never saved,
+caught one step before every push to main would have deployed unapproved.
+This applies beyond GitHub: grants (read `pg_roles` and `has_table_privilege`,
+not the script that ran), listeners (`ss`, not the config), timers
+(`systemctl is-enabled`, not the install log).
+
 **Habit: a finding is a class, not a line.** After fixing the instance, find
 the rest: name the shape, search every script for it, and prove the search
 finds a planted example before trusting its silence. Finding 7's shape
@@ -306,5 +314,28 @@ Both rows were reproduced on a scratch database on 2026-10-01.
 
 ## Known limits
 - Nightly `pg_dump`, so RPO is up to 24 h. WAL archiving (pgBackRest/WAL-G) is the next step for a funds ledger.
-- A failed timer shows in `systemctl --failed` and nowhere else until an alert channel is wired.
-- The API binds `:PORT` on all interfaces (`cmd/api/main.go`). The security group is the only thing keeping 8080 private.
+- Alerts reach nobody until the Slack webhook and heartbeat URLs are set on the server (`ALERT_CHANNEL=none` says so in every alert).
+- Inside its container the API binds `:PORT` on all interfaces (`cmd/api/main.go`); compose publishes it on `127.0.0.1` only, and `75-assert-loopback.sh` asserts that after every step that can open a port.
+
+### Known gap: write access can remove the deploy gate
+
+**Stated, understood, not fixable on the current plan.** The deploy gate (the
+`ARGON_DEPLOYERS` list and the typed commit) lives in
+`.github/workflows/deploy.yml`, on `main`. Anyone with write access can change
+that file on `main` and remove the gate; nothing stops them, because the
+ArgonFinancials org is on **GitHub Free**, and Free has no branch protection or
+rulesets for private repositories. Today **three accounts** have that access
+(`samuelmohel`, `dayowole`, `Argon-Financials`, all admin), and **only one**
+(`samuelmohel`) is on `ARGON_DEPLOYERS`. So the gate stops a mistaken or
+unlisted click; it does not stop a writer who means to deploy.
+
+**Remedy: a paid org plan.**
+- **GitHub Team** adds branch protection for private repos. Protect `main` so
+  every change needs a reviewed pull request, with a CODEOWNERS rule making a
+  deployer's review mandatory for `.github/`. The gate can then only be removed
+  with a deployer's approval.
+- **GitHub Enterprise** adds required reviewers on environments: the original
+  design, a named approver for every deploy (finding 9).
+
+Until then, keep write access to the people on `ARGON_DEPLOYERS`. That leaves
+the remaining risk with the deployers themselves.
