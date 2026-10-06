@@ -35,7 +35,7 @@ Each was written and mutation-tested before the code it covers.
 | `stepup_api` | `tier1_api_stepup_test.go` (15) | the breaks in `apifake_stepup_test.go` (`--svc`) | `internal/api/stepup.go` |
 | `signin_api` | `tier1_api_signin_test.go` (14) | the breaks in `apifake_signin_test.go` (`--svc`) | `internal/api/signin.go` |
 | `books` | `tier1_api_books_test.go` (31) | the breaks in `apifake_books_test.go` (32, `--svc`) | `internal/api/books.go` |
-| `0009` | `tier1_0009_test.go` (18, write-offs) | `0009_interface.sql` (M0) + `mutants_0009/` (18) | `migrations/0009_write_offs.up.sql` (after review) |
+| `0009` | `tier1_0009_test.go` (18, write-offs) | `0009_interface.sql` (M0) + `mutants_0009/` (18) | `migrations/0009_write_offs.up.sql` |
 | `loans_api` | `tier1_api_loans_test.go` (23) | the breaks in `apifake_loans_test.go` (24, `--svc`) | `internal/api/loans.go` |
 
 The restore drill (`deploy/60-restore.sh --drill`) runs every suite above (GREEN half)
@@ -179,6 +179,40 @@ it has not been tested in. Before relying on it, run it against a restored
 copy of the live database (the drill's restore gives one) and compare each
 request's rebuilt `state` with `approval_status` taken before going down.
 
+## Finding 19: a borrower could sign out their own loan (2026-10-06)
+
+0008 barred a loan's guarantors from signing any request for it, and never
+its borrower. A treasurer who borrowed could sign the disbursement of their
+own loan: the clearest possible failure of the multi-signatory control. It
+survived until the write-off rules (which bar the borrower) made someone look
+at the disbursement next to them. **Decided:** the borrower never signs ANY
+request for their own loan (suite 0009, test 6).
+
+## Finding 20: a broken version caught in setup reads as a broken fixture
+
+Writing suite 0009, an over-strict mutant (only loans past their schedule may
+be written off) refused the write-off REQUEST, which a control raised through
+a fixture helper. The runner reported "BROKEN FIXTURE", not a control that
+caught an over-strict rule. Fixed by raising the request inside the control's
+own `accepted(...)`. The same reading problem as a test red for the wrong
+reason, one phase earlier. **Habit:** a statement a control exists to prove
+must be asserted, not run as setup; anything an over-strict rule could refuse
+belongs in the assertion.
+
+## Finding 21: a rollback that left residue its own re-apply tripped on (2026-10-06)
+
+0009 adds two enum values. Its down cannot remove them (PostgreSQL cannot drop
+an enum value), and says so. But nobody had re-applied 0009 after its down:
+the round trip (up, down, up) failed at the first statement, `enum label
+"loan_write_off" already exists`. A rollback followed by a fix-forward, the
+usual sequence under pressure, would have died there. Fixed with
+`ADD VALUE IF NOT EXISTS`. Round trip now tested 9 → down → up → down, then
+8 and 7 down, then 7, 8, 9 up again, on scratch.
+
+**Habit: a down-migration is tested by re-applying the up after it, not by
+the down succeeding.** Whatever a down cannot undo is exactly what the next
+up meets.
+
 ## Constraint names are part of the interface
 
 `ledger_lines_entry_open`, `ledger_entries_posted_at_is_now`,
@@ -205,7 +239,11 @@ request's rebuilt `state` with `approval_status` taken before going down.
 `loan_guarantees_immutable`, `loan_request_matches_loan`, `loan_guarantors_met`,
 `loan_movement_names_loan`, `loan_id_only_on_loan_movements`, `loan_same_society`,
 `loan_disbursement_approved`, `loan_disbursed_once`, `loan_disbursement_is_principal`,
-`loan_line_is_borrowers`, `loan_repaid_after_disbursement`.
+`loan_line_is_borrowers`, `loan_repaid_after_disbursement`, and for write-offs (0009)
+`write_off_quorum_unset`, `write_off_quorum_is_societys`, `write_off_needs_money_owed`,
+`write_off_request_is_outstanding`, `write_off_states_reason`, `borrower_never_signs_own_loan`,
+`write_off_approved`, `write_off_once`, `write_off_is_outstanding`, `write_off_to_loss_account`,
+`loan_written_off`, `recovery_needs_write_off`, `recovery_never_reopens_loan`, `write_off_quorum_sane`.
 
 A trigger reports its name with
 `RAISE … USING ERRCODE = 'check_violation', CONSTRAINT = '<name>'`.
