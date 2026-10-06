@@ -5,8 +5,8 @@
 # No SQL baseline: the schema is the real 0001–0008. The mutants are the named
 # breaks of the reference handlers in apifake_loans_test.go.
 SUITE_INCLUDE='^TestApiLoans'
-SUITE_EXCLUDE='^$'
-SUITE_SKIP=''
+SUITE_EXCLUDE='^TestApiLoansWrittenOff'   # its own suite until approved
+SUITE_SKIP='^TestApiLoansWrittenOff'
 SUITE_RUN='^TestApiLoans'
 SVC_RUN='^TestApiLoans'
 SVC_ENV='ARGON_TEST_API_FAKE'

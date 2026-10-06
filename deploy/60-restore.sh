@@ -123,7 +123,7 @@ if [[ $mode == drill ]]; then
     "books API|^TestApiBooks|"
     "approvals (0007)|^TestApproval|"
     "loans (0008)|^TestLoan|"
-    "loan reads API|^TestApiLoans|"
+    "loan reads API|^TestApiLoans|^TestApiLoansWrittenOff"
     "write-offs (0009)|^TestWriteOff|"
   )
   for suite in "${suites[@]}"; do

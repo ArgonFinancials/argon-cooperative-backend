@@ -37,6 +37,13 @@
 //	loans_overpaid_clamped           an overpayment clamped to zero, reading settled
 //	loans_condition_filter_ignored   ?condition= ignored
 //
+// Breaks — written off (suite loans_api_wo):
+//
+//	loans_written_off_reads_settled  a written-off loan (nothing left owing) reads settled
+//	loans_write_off_reason_dropped   the sentence leaves out the reason the society gave
+//	loans_write_off_ignores_date     a write-off counts whatever its value date
+//	loans_recovery_as_repayment      money recovered is counted as a repayment of the loan
+//
 // Shared with the statement fake: money_as_numbers, nil_slices.
 package tier1
 
@@ -244,6 +251,32 @@ func (f *fakeAPI) loanPosition(ctx context.Context, loanID string, asOf time.Tim
 		p.DaysInArrears = int(asOf.Sub(missed[0].due).Hours() / 24)
 	}
 
+	// A write-off as at asOf (its value date), the society's reason, and money
+	// recovered since (to recovery income, never to the loan).
+	woDate := `e.value_date <= $2::date`
+	if f.brk == "loans_write_off_ignores_date" {
+		woDate = `$2::date IS NOT NULL`
+	}
+	var writtenOn *time.Time
+	var writtenOff int64
+	f.db.QueryRow(ctx, `SELECT e.value_date, -coalesce((SELECT sum(l.amount_kobo) FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
+		       WHERE l.entry_id = e.id AND a.role = 'member_loan'), 0)
+		  FROM ledger_entries e WHERE e.loan_id = $1 AND e.kind::text = 'loan_write_off' AND `+woDate, lid, day).Scan(&writtenOn, &writtenOff)
+	var woReason string
+	f.db.QueryRow(ctx, `SELECT coalesce(reason, '') FROM approval_requests WHERE loan_id = $1 AND kind::text = 'loan_write_off'
+		AND approval_status(id) = 'approved' ORDER BY raised_at DESC LIMIT 1`, lid).Scan(&woReason)
+	var recovered int64
+	f.db.QueryRow(ctx, `SELECT -coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l JOIN ledger_entries e ON e.id = l.entry_id
+		JOIN accounts a ON a.id = l.account_id
+		WHERE e.loan_id = $1 AND e.kind::text = 'loan_recovery' AND a.role = 'loan_recovery_income' AND e.value_date <= $2::date`, lid, day).Scan(&recovered)
+	if f.brk == "loans_recovery_as_repayment" {
+		paid += recovered
+		outstanding -= recovered
+		p.PaidToDateKobo = api.Magnitude(strconv.FormatInt(paid, 10))
+		p.OutstandingKobo = api.Kobo(strconv.FormatInt(outstanding, 10))
+		recovered = 0
+	}
+
 	// The condition, in this order, and its sentence.
 	ended := !lastDue.After(asOf)
 	cond, kind := "", ""
@@ -254,6 +287,15 @@ func (f *fakeAPI) loanPosition(ctx context.Context, loanID string, asOf time.Tim
 			p.Reason = fmt.Sprintf("Agreed on %s; not yet disbursed. No disbursement request has been raised.", longDate(agreed))
 		} else {
 			p.Reason = fmt.Sprintf("Agreed on %s; not yet disbursed. The disbursement request is %s.", longDate(agreed), *st)
+		}
+	case writtenOn != nil && f.brk != "loans_written_off_reads_settled":
+		cond = "written_off"
+		p.Reason = fmt.Sprintf("Written off on %s: %s was not recovered.", longDate(*writtenOn), naira(writtenOff))
+		if woReason != "" && f.brk != "loans_write_off_reason_dropped" {
+			p.Reason += " " + strings.TrimRight(woReason, ".") + "."
+		}
+		if recovered > 0 {
+			p.Reason += fmt.Sprintf(" Since recovered: %s.", naira(recovered))
 		}
 	case outstanding < 0:
 		cond, kind = "disagreement", "overpaid"

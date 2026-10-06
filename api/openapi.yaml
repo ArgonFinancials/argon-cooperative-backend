@@ -576,8 +576,12 @@ components:
         the schedule has ended. settled_early: nothing owed before the schedule
         ended, on a product that allows prepayment. disagreement: the schedule
         and the ledger do not agree (see disagreement.kind); it needs a person,
-        and the loan is never edited to agree.
-      enum: [agreed, active, in_arrears, settled, settled_early, disagreement]
+        and the loan is never edited to agree. written_off: the society decided
+        (LOAN_SHAPE.md section 6a) that what was owed will not be recovered; the
+        loss is recorded, the debt did not disappear, and it never reads
+        settled. Money recovered later is reported in the reason, never as a
+        repayment.
+      enum: [agreed, active, in_arrears, settled, settled_early, disagreement, written_off]
 
     LoanDisagreement:
       type: object
