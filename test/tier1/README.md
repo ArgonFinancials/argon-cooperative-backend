@@ -143,6 +143,40 @@ approves" first went in as a control; on M0 nothing ever reads `approved`, so
 it failed there, and it became rule test 16. Same family as controls that go
 red because a rule broke.
 
+## Finding 17: a sabotage that removed its own precondition (2026-10-06)
+
+To prove the new loan probe cases could fail, two permissions were broken in
+one run: the app lost INSERT on `loan_instalments` (K19 must fail) and gained
+UPDATE on `loans` (P21 must fail). K19 failed, so no loan was created, so
+P21's `UPDATE loans …` matched zero rows and "succeeded". P21 reported a pass
+that proved nothing: the same sabotage had removed the row it needed. Run alone,
+the P21 sabotage failed the probe as it should (and the immutability rule
+still refused underneath).
+
+Same family as the test lister that found zero tests and the suite that ran
+against a broken fixture: a check that passes because its precondition is
+gone. P21 now carries a note that it needs K19's loan.
+
+**Habit: when sabotaging, break ONE thing.** With two broken at once, the
+result is about their interaction, not about the rule under test.
+
+**Kept deliberately: P21 holds at two layers.** The app has no UPDATE on
+`loans` (the grant), and `loan_agreement_immutable` refuses an UPDATE from
+anyone (the rule). Either alone is enough; both mean a future grant change
+does not silently open it.
+
+## Stated gap: 0007's rollback has never carried real approvals
+
+`0007_approvals.down.sql` rebuilds the old `state` column from the derived
+status, so a rollback does not reset every request to `awaiting`. It was run
+once, on a scratch database with almost nothing in it (2026-10-06): it
+applied, and 0007 re-applied after it. The step that rebuilds `state` from
+real signatures and rejections has never had any to carry. A rollback is run
+exactly once, under pressure, on a full database, which is the one condition
+it has not been tested in. Before relying on it, run it against a restored
+copy of the live database (the drill's restore gives one) and compare each
+request's rebuilt `state` with `approval_status` taken before going down.
+
 ## Constraint names are part of the interface
 
 `ledger_lines_entry_open`, `ledger_entries_posted_at_is_now`,
