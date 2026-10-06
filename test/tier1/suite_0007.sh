@@ -27,6 +27,11 @@ declare -gA TARGET_OF=(
   [m_reject_unless_expired]='TestApproval13_RejectingAnApprovedRequestIsRefused'
   [m_reject_unless_approved]='TestApproval14_RejectingAnExpiredRequestIsRefused'
   [m_rejection_update_only]='TestApproval15_RejectionsAreImmutable'
-  [c_quorum_needs_one_more]='TestApproval16_TwoOfThreeApproves'
+  [c_quorum_needs_one_more]='TestApproval_Control_TwoOfThreeApproves'
   [c_fraud_reason_refused]='TestApproval_Control_EachOfTheFourReasons'
+  [m_signer_may_reject]='TestApproval17_ASignerCannotThenReject'
+  [m_note_not_null_only]='TestApproval18_LooksWrongRequiresANote'
+  [m_resubmits_same_society_only]='TestApproval19_ResubmissionPointsAtARejectedRequest'
+  [c_note_for_every_reason]='TestApproval_Control_NoNoteNeededExceptForLooksWrong'
+  [c_resubmission_refused]='TestApproval_Control_ResubmittingARejectedRequest'
 )

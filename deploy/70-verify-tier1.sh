@@ -243,6 +243,16 @@ probe req P17 argon_app '42501.*permission denied for table auth_codes' "app rea
   "SELECT code_digest FROM auth_codes LIMIT 1;"
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
+# Finding 14's privilege half: the status is derived (0007), and the app has no
+# path to move a request or rewrite a rejection.
+probe req P18 argon_app '42501.*permission denied for table approval_requests' "app extends a request's expiry (a request is never updated)" \
+  "UPDATE approval_requests SET expires_at = now() + interval '30 days' WHERE id = $R1;"
+probe req P19 argon_app '42501.*permission denied for table approval_rejections' "app supplies a rejection's time (no INSERT privilege on the column)" \
+  "INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, rejected_at) VALUES ($R1, $M3, $U1, 'chairman', 'amount_wrong', '2026-01-01');"
+probe req P20 argon_app '42501.*permission denied for table approval_rejections' "app deletes a rejection to reopen a request" \
+  "DELETE FROM approval_rejections;"
+probe ctl K18 argon_app '' "control: app reads a request's derived status" \
+  "SELECT approval_status($R1);"
 probe req P12 argon_app '42501.*permission denied for table sign_in_attempts' "app records a sign-in success (would end a lockout run)" \
   "INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), true);"
 if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then

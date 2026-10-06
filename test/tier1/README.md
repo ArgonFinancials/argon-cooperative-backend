@@ -27,7 +27,7 @@ Each was written and mutation-tested before the code it covers.
 | `0004` | `tier1_0004_test.go` (11) | M0 + `mutants_0004/` (8) | `migrations/0004_roles.up.sql` |
 | `0005` | `tier1_0005_test.go` (12) | `0005_interface.sql` (M0) + `mutants_0005/` (12) | `migrations/0005_step_up.up.sql` |
 | `0006` | `tier1_0006_test.go` (4) | M0 (the real 0001–0005) + `mutants_0006/` (4) | `migrations/0006_line_society.up.sql` |
-| `0007` | `tier1_0007_test.go` (17, approvals) | `0007_interface.sql` (M0: today's writable status) + `mutants_0007/` (17) | `migrations/0007_approvals.up.sql` (after review) |
+| `0007` | `tier1_0007_test.go` (22, approvals) | `0007_interface.sql` (M0: the old writable status) + `mutants_0007/` (22) | `migrations/0007_approvals.up.sql` |
 | `0008` | `tier1_0008_test.go` (36, loans) | `0008_interface.sql` (M0, on 0007's interface) + `mutants_0008/` (36) | `migrations/0008_loans.up.sql` (after review) |
 | `stepup` | `tier1_stepup_service_test.go` (9) | the step-up service fake's breaks (`--svc`) | `internal/auth/stepup.go` |
 | `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (23, `--svc`) | `internal/api/statement.go` |
@@ -120,6 +120,29 @@ own row (author, post, server time, one of Stage 5's four reasons); signing
 refuses an expired or rejected request. Loans (now suite 0008) trust
 `approval_status`.
 
+## Finding 16: a rule that worked as the owner and broke the app (2026-10-06)
+
+0007's signing trigger locks the request row (`SELECT … FOR UPDATE`) so a
+signature and a rejection cannot race. A row lock needs UPDATE privilege; the
+trigger ran with the caller's rights; and 0007 had just removed the app's only
+UPDATE grant on that table. **After 0007 the API could not sign at all.**
+Suite 0007 was green, because the suites run as the owner. The probe, which
+seeds and runs as `argon_app`, refused it on its first line. Fixed as 0005's
+rules are: `SECURITY DEFINER` with a pinned `search_path`, so the lock is the
+rule's need and the app still holds no UPDATE. The probe gained P18–P20 (the
+app cannot move a request or rewrite a rejection) and K18, and P18 was shown
+to fail when the grant is put back.
+
+**Habit: a suite run as the owner proves the rule, not that the app can live
+with it.** Whenever a migration changes grants, or a rule takes a lock or
+reads a table the app cannot, run the probe as the app before calling it green.
+
+**Also from 0007 (a test of mine):** a control that cannot pass against M0 is
+not a control; it is a rule test in the wrong column. "Two of three
+approves" first went in as a control; on M0 nothing ever reads `approved`, so
+it failed there, and it became rule test 16. Same family as controls that go
+red because a rule broke.
+
 ## Constraint names are part of the interface
 
 `ledger_lines_entry_open`, `ledger_entries_posted_at_is_now`,
@@ -131,7 +154,11 @@ refuses an expired or rejected request. Loans (now suite 0008) trust
 `entry_not_in_closed_period`, `period_close_is_final`,
 `accounting_periods_no_overlap`, `adjustment_states_reason`,
 `ledger_entries_adjusts_id_fkey`, `correction_is_reversal_or_adjustment`,
-`correction_same_society`, `ledger_line_account_in_society`.
+`correction_same_society`, `ledger_line_account_in_society`, `signature_before_expiry`,
+`signature_on_open_request`, `rejection_reason_known`, `rejection_note_for_looks_wrong`,
+`rejection_rejected_at_is_now`, `rejecter_user_is_member_user`, `rejecter_holds_signing_post`,
+`rejection_on_open_request`, `rejecter_has_not_signed`, `approval_rejections_immutable`,
+`resubmits_a_rejected_request`.
 
 A trigger reports its name with
 `RAISE … USING ERRCODE = 'check_violation', CONSTRAINT = '<name>'`.

@@ -1,7 +1,7 @@
 -- 0008's INTERFACE, with NO RULES: "M0" for suite 0008, the maximally broken
 -- loan book (LOAN_SHAPE.md). The tables and columns exist so the tests can be
 -- written and run; nothing refuses anything. Applied on top of the real
--- 0001–0006 and the 0007 (approvals) interface.
+-- 0001–0007 (approvals: the status is approval_status, never a column).
 --
 --   loan_products      a society's products; terms are CONFIGURATION, the rate included
 --   loans              the AGREEMENT: borrower, product, principal, term, terms snapshotted

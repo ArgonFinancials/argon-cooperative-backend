@@ -6,7 +6,8 @@
 -- trigger layer: SELECT and INSERT, never UPDATE, DELETE or TRUNCATE.
 --
 -- Server-generated facts (ledger_entries.posted_at, posting_xid;
--- signatory_approvals.signed_at) are left OUT of the INSERT column lists: the
+-- signatory_approvals.signed_at, approval_rejections.rejected_at) are left OUT
+-- of the INSERT column lists: the
 -- app has no path to set them at all. The triggers refuse them too, for every
 -- other role — the capability does not exist rather than being checked.
 
@@ -36,10 +37,16 @@ GRANT UPDATE (full_name) ON users TO argon_app;
 GRANT SELECT, INSERT ON appointments TO argon_app;
 GRANT UPDATE (held_until) ON appointments TO argon_app;
 
--- An approval request moves through its states; its amount, kind and quorum
--- are fixed when raised.
+-- An approval request is raised and never updated: its status is DERIVED
+-- (approval_status, 0007) from signatures, rejections and expiry, so there is
+-- no status to write. (Until 0007 the app held UPDATE (state): finding 14.)
 GRANT SELECT, INSERT ON approval_requests TO argon_app;
-GRANT UPDATE (state) ON approval_requests TO argon_app;
+
+-- A rejection is an append-only, attributable row; rejected_at is the
+-- server's, left out of the INSERT list as signed_at is.
+GRANT SELECT ON approval_rejections TO argon_app;
+GRANT INSERT (id, request_id, member_id, user_id, post_at_rejection, reason, note)
+  ON approval_rejections TO argon_app;
 
 -- A period is opened, then closed; period_close_is_final refuses anything after.
 GRANT SELECT, INSERT ON accounting_periods TO argon_app;

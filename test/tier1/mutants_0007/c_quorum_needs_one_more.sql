@@ -1,6 +1,6 @@
 -- DELIBERATELY WRONG. OVER-STRICT: approval needs one signature more than required (every signatory, in a 2-of-3).
 --
--- Must turn red: TestApproval16_TwoOfThreeApproves.
+-- Must turn red: TestApproval_Control_TwoOfThreeApproves.
 ALTER TABLE approval_requests DROP COLUMN state;
 CREATE OR REPLACE FUNCTION approval_status(p_request UUID, p_at TIMESTAMPTZ DEFAULT now()) RETURNS approval_state AS $$
   SELECT (CASE

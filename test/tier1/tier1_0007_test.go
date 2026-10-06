@@ -66,8 +66,19 @@ func (w *aworld) expired(t *testing.T) string {
 }
 
 func (w *aworld) reject(req, member, user, post, reason string) error {
+	return w.rejectNote(req, member, user, post, reason, "The supporting payslip is not attached")
+}
+
+// rejectNote: note "" is sent as NULL.
+func (w *aworld) rejectNote(req, member, user, post, reason, note string) error {
 	return one(`INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, note)
-		VALUES ($1, $2, $3, $4, $5, 'The supporting payslip is not attached')`, req, member, user, post, reason)
+		VALUES ($1, $2, $3, $4, $5, $6)`, req, member, user, post, reason, nz(note))
+}
+
+// resubmit raises a new request that points at `original`.
+func (w *aworld) resubmit(society, original string) error {
+	return one(`INSERT INTO approval_requests (society_id, reference, kind, amount_kobo, required, expires_at, resubmits_id)
+		VALUES ($1, $2, 'withdrawal_out', 50000000, 2, now() + interval '1 day', $3)`, society, "APR-R-"+digest()[:12], original)
 }
 
 // status reads THE status, as at `at` ("" = now).
@@ -215,6 +226,40 @@ func TestApproval15_RejectionsAreImmutable(t *testing.T) {
 		"deleting a rejection to reopen the request", refusedAs("approval_rejections_immutable"))
 }
 
+// Decided 2026-10-05: a signatory who signed may not then reject. They have
+// already answered, attributably; a signature and a rejection by one person
+// on one request would leave the status to arbitrate between them. If they
+// have changed their mind, the request lapses or a new one is raised.
+func TestApproval17_ASignerCannotThenReject(t *testing.T) {
+	w := newApprovals(t)
+	req := w.s.request()
+	fixture(t, w.s.sign(req, w.tMem, "treasurer"), "the treasurer signs")
+	refused(t, w.reject(req, w.tMem, w.treasurer, "treasurer", "amount_wrong"),
+		"the treasurer rejecting a request they signed", refusedAs("rejecter_has_not_signed"))
+}
+
+// Decided 2026-10-05: the fraud path escalates to the committee and the
+// auditor; it does not go onward as a feeling nobody wrote down.
+func TestApproval18_LooksWrongRequiresANote(t *testing.T) {
+	w := newApprovals(t)
+	refused(t, w.rejectNote(w.s.request(), w.tMem, w.treasurer, "treasurer", "looks_wrong", ""),
+		"'looks wrong' with no note", refusedAs("rejection_note_for_looks_wrong"))
+	refused(t, w.rejectNote(w.s.request(), w.tMem, w.treasurer, "treasurer", "looks_wrong", "   "),
+		"'looks wrong' with a note of spaces", refusedAs("rejection_note_for_looks_wrong"))
+}
+
+// A resubmission points at a REJECTED request of its own society.
+func TestApproval19_ResubmissionPointsAtARejectedRequest(t *testing.T) {
+	w := newApprovals(t)
+	refused(t, w.resubmit(w.s.id, w.s.request()), "resubmitting a request that was never rejected",
+		refusedAs("resubmits_a_rejected_request"))
+	other := newApprovals(t)
+	rejected := other.s.request()
+	fixture(t, other.reject(rejected, other.tMem, other.treasurer, "treasurer", "documents_missing"), "a rejection in another society")
+	refused(t, w.resubmit(w.s.id, rejected), "resubmitting another society's rejected request",
+		refusedAs("resubmits_a_rejected_request"))
+}
+
 // =============================================================================
 // CONTROLS
 // =============================================================================
@@ -234,4 +279,19 @@ func TestApproval_Control_EachOfTheFourReasons(t *testing.T) {
 	for _, r := range []string{"documents_missing", "amount_wrong", "not_eligible", "looks_wrong"} {
 		accepted(t, w.reject(w.s.request(), w.tMem, w.treasurer, "treasurer", r), "a rejection for "+r)
 	}
+}
+
+// The other three reasons explain themselves: no note required.
+func TestApproval_Control_NoNoteNeededExceptForLooksWrong(t *testing.T) {
+	w := newApprovals(t)
+	for _, r := range []string{"documents_missing", "amount_wrong", "not_eligible"} {
+		accepted(t, w.rejectNote(w.s.request(), w.tMem, w.treasurer, "treasurer", r, ""), "a "+r+" rejection with no note")
+	}
+}
+
+func TestApproval_Control_ResubmittingARejectedRequest(t *testing.T) {
+	w := newApprovals(t)
+	req := w.s.request()
+	fixture(t, w.reject(req, w.tMem, w.treasurer, "treasurer", "documents_missing"), "rejected for missing documents")
+	accepted(t, w.resubmit(w.s.id, req), "the resubmission, pointing at the rejected original")
 }

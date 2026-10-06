@@ -26,6 +26,11 @@ CREATE TABLE approval_rejections (
   rejected_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- A resubmission points at the request it replaces (decided 2026-10-05).
+-- Nothing reads it yet: the inbox will, to let "documents_missing" keep its
+-- place in the queue. Carried now, because a link added later means backfilling.
+ALTER TABLE approval_requests ADD COLUMN resubmits_id UUID REFERENCES approval_requests(id);
+
 CREATE FUNCTION approval_status(p_request UUID, p_at TIMESTAMPTZ DEFAULT now()) RETURNS approval_state AS $$
   SELECT state FROM approval_requests WHERE id = p_request;
 $$ LANGUAGE sql STABLE;
