@@ -35,7 +35,7 @@ Each was written and mutation-tested before the code it covers.
 | `stepup_api` | `tier1_api_stepup_test.go` (15) | the breaks in `apifake_stepup_test.go` (`--svc`) | `internal/api/stepup.go` |
 | `signin_api` | `tier1_api_signin_test.go` (14) | the breaks in `apifake_signin_test.go` (`--svc`) | `internal/api/signin.go` |
 | `books` | `tier1_api_books_test.go` (31) | the breaks in `apifake_books_test.go` (32, `--svc`) | `internal/api/books.go` |
-| `loans_api` | `tier1_api_loans_test.go` (23) | the breaks in `apifake_loans_test.go` (24, `--svc`) | `internal/api/loans.go` (after review) |
+| `loans_api` | `tier1_api_loans_test.go` (23) | the breaks in `apifake_loans_test.go` (24, `--svc`) | `internal/api/loans.go` |
 
 The restore drill (`deploy/60-restore.sh --drill`) runs every suite above (GREEN half)
 against the restored copy.
