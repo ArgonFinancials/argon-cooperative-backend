@@ -20,7 +20,7 @@ GRANT SELECT ON
 TO argon_app;
 GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_app;
 GRANT INSERT (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post,
-              actor_post_label, reverses_id, adjusts_id, reason, source_line)
+              actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id)
   ON ledger_entries TO argon_app;
 GRANT INSERT (id, request_id, member_id, post_at_signing, user_id)
   ON signatory_approvals TO argon_app;
@@ -47,6 +47,21 @@ GRANT SELECT, INSERT ON approval_requests TO argon_app;
 GRANT SELECT ON approval_rejections TO argon_app;
 GRANT INSERT (id, request_id, member_id, user_id, post_at_rejection, reason, note)
   ON approval_rejections TO argon_app;
+
+-- Loans (0008). A product's terms are configuration the society may change
+-- (agreed loans keep their snapshot); the rate is not in the list: it is
+-- refused above zero until a method is agreed, and opened when it is. An
+-- agreement, its schedule and every guarantee are append-only, and their
+-- server facts (agreed_at, agreed_xid, at) are not in the INSERT lists.
+GRANT SELECT, INSERT ON loan_products TO argon_app;
+GRANT UPDATE (name, max_term_months, guarantors_required, savings_multiple_pct, allows_prepayment)
+  ON loan_products TO argon_app;
+GRANT SELECT ON loans, loan_instalments, loan_guarantees, loan_guarantee_withdrawals TO argon_app;
+GRANT INSERT (id, society_id, member_id, product_id, principal_kobo, term_months, purpose, guarantors_required,
+              savings_multiple_pct, interest_rate_bp, allows_prepayment, supersedes_id) ON loans TO argon_app;
+GRANT INSERT ON loan_instalments TO argon_app;
+GRANT INSERT (id, loan_id, guarantor_member_id, guarantor_user_id, act_id) ON loan_guarantees TO argon_app;
+GRANT INSERT (guarantee_id, act_id) ON loan_guarantee_withdrawals TO argon_app;
 
 -- A period is opened, then closed; period_close_is_final refuses anything after.
 GRANT SELECT, INSERT ON accounting_periods TO argon_app;

@@ -28,7 +28,7 @@ Each was written and mutation-tested before the code it covers.
 | `0005` | `tier1_0005_test.go` (12) | `0005_interface.sql` (M0) + `mutants_0005/` (12) | `migrations/0005_step_up.up.sql` |
 | `0006` | `tier1_0006_test.go` (4) | M0 (the real 0001–0005) + `mutants_0006/` (4) | `migrations/0006_line_society.up.sql` |
 | `0007` | `tier1_0007_test.go` (22, approvals) | `0007_interface.sql` (M0: the old writable status) + `mutants_0007/` (22) | `migrations/0007_approvals.up.sql` |
-| `0008` | `tier1_0008_test.go` (36, loans) | `0008_interface.sql` (M0, on 0007's interface) + `mutants_0008/` (36) | `migrations/0008_loans.up.sql` (after review) |
+| `0008` | `tier1_0008_test.go` (36, loans) | `0008_interface.sql` (M0, on the real 0007) + `mutants_0008/` (36) | `migrations/0008_loans.up.sql` |
 | `stepup` | `tier1_stepup_service_test.go` (9) | the step-up service fake's breaks (`--svc`) | `internal/auth/stepup.go` |
 | `api` | `tier1_api_statement_test.go` (19) | the breaks in `apifake_test.go` (23, `--svc`) | `internal/api/statement.go` |
 | `batch` | `tier1_api_batch_test.go` (22) | the breaks in `apifake_batch_test.go` (32, `--svc`) | `internal/api/batch.go` |
@@ -158,7 +158,18 @@ red because a rule broke.
 `signature_on_open_request`, `rejection_reason_known`, `rejection_note_for_looks_wrong`,
 `rejection_rejected_at_is_now`, `rejecter_user_is_member_user`, `rejecter_holds_signing_post`,
 `rejection_on_open_request`, `rejecter_has_not_signed`, `approval_rejections_immutable`,
-`resubmits_a_rejected_request`.
+`resubmits_a_rejected_request`, and for loans (0008) `interest_method_undecided`,
+`loan_terms_are_products`, `loan_term_within_product`, `loan_within_savings_multiple`,
+`loan_borrower_in_society`, `loan_product_in_society`, `loan_agreement_immutable`,
+`loan_schedule_sums_to_principal`, `loan_schedule_matches_term`, `loan_schedule_in_order`,
+`loan_schedule_immutable`, `loan_schedule_closed`, `guarantee_is_own_act`,
+`guarantee_act_is_guarantee`, `guarantor_user_is_member_user`, `guarantor_not_borrower`,
+`loan_guarantees_one_per_person`, `guarantor_member_of_society`, `signatory_not_guarantor`,
+`guarantee_withdrawal_is_own_act`, `guarantee_withdrawn_before_disbursement`,
+`loan_guarantees_immutable`, `loan_request_matches_loan`, `loan_guarantors_met`,
+`loan_movement_names_loan`, `loan_id_only_on_loan_movements`, `loan_same_society`,
+`loan_disbursement_approved`, `loan_disbursed_once`, `loan_disbursement_is_principal`,
+`loan_line_is_borrowers`, `loan_repaid_after_disbursement`.
 
 A trigger reports its name with
 `RAISE … USING ERRCODE = 'check_violation', CONSTRAINT = '<name>'`.

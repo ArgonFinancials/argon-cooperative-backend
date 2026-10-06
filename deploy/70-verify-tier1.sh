@@ -42,7 +42,7 @@ fi
 U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
-R1=$(U 61) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
+R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
 # Written for the schema at migration 0005 (users, line-level member_id, no
 # ledger_batches.as_of; account roles, so every savings line names its member;
@@ -253,6 +253,13 @@ probe req P20 argon_app '42501.*permission denied for table approval_rejections'
   "DELETE FROM approval_rejections;"
 probe ctl K18 argon_app '' "control: app reads a request's derived status" \
   "SELECT approval_status($R1);"
+# Loans (0008). Finding 16's question asked up front: what the app still needs
+# to do, it can (K19), and what it must never do, it cannot (P21, P22).
+probe ctl K19 argon_app '' "control: app agrees a loan on a product, with its schedule (what its handlers need)"   "BEGIN; INSERT INTO loan_products (id, society_id, code, name, max_term_months, guarantors_required, savings_multiple_pct, allows_prepayment) VALUES ($LP, $S, 'K19', 'Probe loan', 12, 0, 300, true); INSERT INTO loans (id, society_id, member_id, product_id, principal_kobo, term_months, purpose, guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment) VALUES ($LN, $S, $M1, $LP, 20000, 1, 'probe', 0, 300, 0, true); INSERT INTO loan_instalments (loan_id, n, due_on, amount_kobo) VALUES ($LN, 1, '2026-12-01', 20000); COMMIT;"
+# P21 needs K19's loan: an UPDATE of zero rows succeeds whatever the grants.
+# (If K19 fails, the probe already fails on it.)
+probe req P21 argon_app '42501.*permission denied for table loans' "app raises an agreed loan's principal"   "UPDATE loans SET principal_kobo = principal_kobo * 2;"
+probe req P22 argon_app '42501.*permission denied for table loans' "app back-dates a loan's agreement (no INSERT privilege on agreed_at)"   "INSERT INTO loans (society_id, member_id, product_id, principal_kobo, term_months, purpose, guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment, agreed_at) VALUES ($S, $M1, $LP, 100, 1, 'x', 0, 300, 0, true, '2020-01-01');"
 probe req P12 argon_app '42501.*permission denied for table sign_in_attempts' "app records a sign-in success (would end a lockout run)" \
   "INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($U1, repeat('a', 64), true);"
 if [[ -n ${ARGON_AUTH_PASSWORD:-} ]]; then

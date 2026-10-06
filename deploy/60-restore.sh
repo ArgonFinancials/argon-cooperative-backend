@@ -122,6 +122,7 @@ if [[ $mode == drill ]]; then
     "line society (0006)|^TestLineSociety|"
     "books API|^TestApiBooks|"
     "approvals (0007)|^TestApproval|"
+    "loans (0008)|^TestLoan|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"
