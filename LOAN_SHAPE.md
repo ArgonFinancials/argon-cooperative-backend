@@ -167,6 +167,50 @@ Each of those is an attributable ledger act with a reason. After it, the
 condition follows by derivation. So "settled" can never be true while the
 ledger says money is owed, and it can never be set by someone typing it.
 
+## 6a. Write-off: the shape (PROPOSED 2026-10-06, for review; no tests yet)
+
+A write-off is the society's decision that money owed **will not be
+recovered**. It doesn't make the debt vanish. It records where the loss went,
+who decided, and why, and it leaves the loan exactly as agreed.
+
+**The quorum is a setting, not a number.** Each society sets
+`societies.write_off_signatures_required` from its bye-laws. It is a number
+from 1 to 9 with **no default**. Until a society has set it, every write-off is
+refused by name (`write_off_quorum_unset`). Leaving it unset doesn't fall back
+to some other number; it simply means "this society hasn't decided". This is
+the same posture as the interest rate and the reversal charge. The number is
+copied onto each write-off request when it's raised, so changing the setting
+later never re-judges a decision already taken.
+
+**The decision is an approval request** of a new kind, `loan_write_off`,
+naming the loan:
+- It is approved by `approval_status`, with signatures, rejections and expiry as built in 0007.
+- The rejection reasons are Stage 5's four. `looks_wrong` is the natural one when a write-off itself seems wrong.
+- **The borrower and the loan's guarantors never sign it.** The guarantors have a stake in whether the debt is written off; their liability is undecided, but the stake exists either way.
+- A **reason** is required on the request itself, in words. A write-off is recorded only with the reason the society gave for it.
+
+**The money:** a `loan_write_off` entry (a new movement kind) naming the loan.
+- It debits a bad-debt expense account (a new account role, `loan_loss`) and credits the borrower's `member_loan` line.
+- It is **for exactly the outstanding balance** at its value date: never partial, never more. A partial loss is a decision this shape doesn't make.
+- It needs the approved write-off request, and **once** per loan.
+
+**After a write-off:**
+- **The condition reads `written_off`**, with its reason: *"Written off on {date}: {amount} was not recovered. {reason given}."* It is not "settled": the money was lost, not paid.
+- **Repayments to the loan are refused** (`loan_written_off`).
+- Money recovered later (from the borrower, or under a guarantee once that liability is decided) is posted as its **own movement**, `loan_recovery`, to a recovery income account. It does not reopen the loan or quietly turn the write-off into an overpayment.
+- **A mistaken write-off is undone the way any entry is**, by a reversal with its own approval. Nothing is ever deleted.
+
+**Proposed rules (database-enforced, each to get a test):** quorum set and
+snapshotted; request names a disbursed loan with a positive balance; borrower
+and guarantors never sign; reason required; entry exactly the outstanding,
+once, only on an approved request; no repayment after; recovery only on a
+written-off loan.
+
+**Decisions this needs from you:**
+1. **May an in-arrears loan be written off, or only one whose schedule has ended?** I propose any disbursed loan with money owed. A borrower who has died or left the country shouldn't wait out the schedule.
+2. **Should the guarantors, not just the borrower, be barred from signing the write-off?** I propose yes, as above.
+3. **Should the quorum apply to every write-off, or rise with the amount?** I propose one number per society now. Amount bands are a bye-law refinement that can be added as more settings later.
+
 ## 7. What the tests would hold (once approved)
 
 - **Schema:**
