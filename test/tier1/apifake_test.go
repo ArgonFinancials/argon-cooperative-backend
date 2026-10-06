@@ -95,7 +95,9 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		// books_asof_optional: a trial balance with no asOf is served as at
 		// "today" instead of refused. (The router refuses a missing required
 		// parameter before any handler, so the break has to act before it.)
-		if f.brk == "books_asof_optional" && strings.HasSuffix(r.URL.Path, "/trial-balance") && r.URL.Query().Get("asOf") == "" {
+		isLoans := strings.HasPrefix(r.URL.Path, "/loans/") || strings.HasSuffix(r.URL.Path, "/loans")
+		if ((f.brk == "books_asof_optional" && strings.HasSuffix(r.URL.Path, "/trial-balance")) ||
+			(f.brk == "loans_asof_optional" && isLoans)) && r.URL.Query().Get("asOf") == "" {
 			q := r.URL.Query()
 			q.Set("asOf", time.Now().Format("2006-01-02"))
 			r.URL.RawQuery = q.Encode()

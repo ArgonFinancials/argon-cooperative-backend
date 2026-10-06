@@ -141,9 +141,12 @@ func (w *lworld) agree(lt loanTerms) (string, error) {
 	}
 	var id string
 	err := tx(func(x pgx.Tx) error {
+		// The snapshot is the product's own terms, read from its row; only the
+		// guarantor count can be overridden (test 2 snapshots a wrong one).
 		if err := x.QueryRow(bg(), `INSERT INTO loans (society_id, member_id, product_id, principal_kobo, term_months, purpose,
 			guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment)
-			VALUES ($1, $2, $3, $4, $5, 'School fees', $6, 300, 0, true) RETURNING id`,
+			SELECT $1, $2, $3, $4, $5, 'School fees', $6, p.savings_multiple_pct, p.interest_rate_bp, p.allows_prepayment
+			  FROM loan_products p WHERE p.id = $3 RETURNING id`,
 			w.c.s.id, lt.member, lt.product, lt.principal, lt.term, lt.guarantors).Scan(&id); err != nil {
 			return err
 		}
@@ -244,16 +247,22 @@ func (w *lworld) ready(t *testing.T) (loan, req string) {
 	return loan, req
 }
 
-// move posts a loan movement: one entry naming `loan`, with its lines.
+// move posts a loan movement: one entry naming `loan`, with its lines, on
+// value date 5 October 2026.
 func (w *lworld) move(kind, loan, society string, ls ...line) (string, error) {
+	return w.moveOn("2026-10-05", kind, loan, society, ls...)
+}
+
+// moveOn: the same, on a stated value date (arrears depend on it).
+func (w *lworld) moveOn(valueDate, kind, loan, society string, ls ...line) (string, error) {
 	if society == "" {
 		society = w.c.s.id
 	}
 	var id string
 	err := tx(func(x pgx.Tx) error {
 		if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, loan_id)
-			VALUES ($1, $2, '2026-10-05', $3, 'treasurer', 'Treasurer', $4) RETURNING id`,
-			society, kind, w.c.s.actor, nz(loan)).Scan(&id); err != nil {
+			VALUES ($1, $2, $3, $4, 'treasurer', 'Treasurer', $5) RETURNING id`,
+			society, kind, valueDate, w.c.s.actor, nz(loan)).Scan(&id); err != nil {
 			return err
 		}
 		return w.c.s.insertLines(x, id, ls...)

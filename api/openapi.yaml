@@ -562,6 +562,112 @@ components:
           description: Ordered by value date (NULL first), then postedAt, then entryId.
           items: { $ref: '#/components/schemas/JournalEntry' }
 
+    # ---- LOANS: the read side (LOAN_SHAPE.md sections 1, 5, 6) -------------------
+    # The loan says what was AGREED; every figure of what is OWED comes from the
+    # ledger (the loan's own entries, by VALUE DATE, as at asOf). Nothing here is
+    # stored on the loan. `reason` is the server's sentence for the condition:
+    # clients show it, never compose their own.
+
+    LoanCondition:
+      type: string
+      description: |
+        As at asOf. agreed: not disbursed. active: owed, on schedule.
+        in_arrears: owed, instalments due and not covered. settled: nothing owed,
+        the schedule has ended. settled_early: nothing owed before the schedule
+        ended, on a product that allows prepayment. disagreement: the schedule
+        and the ledger do not agree (see disagreement.kind); it needs a person,
+        and the loan is never edited to agree.
+      enum: [agreed, active, in_arrears, settled, settled_early, disagreement]
+
+    LoanDisagreement:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [underpaid, overpaid, prepaid_against_terms]
+          description: |
+            underpaid: the schedule has ended and the ledger still shows money
+            owed. overpaid: the ledger shows more repaid than lent; the society
+            owes the member. prepaid_against_terms: nothing is owed, but before the
+            schedule ended, on a product that does not allow early repayment.
+
+    LoanInstalmentPosition:
+      type: object
+      required: [n, dueOn, amountKobo, paidKobo, state]
+      description: Repayments are allocated to the OLDEST instalment first.
+      properties:
+        n: { type: integer }
+        dueOn: { type: string, format: date }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        paidKobo: { $ref: '#/components/schemas/Magnitude' }
+        state:
+          type: string
+          enum: [paid, part_paid, missed, due]
+          description: "missed: its due date has passed and it is not fully covered. due: not yet due."
+
+    LoanPosition:
+      type: object
+      required: [loanId, societyId, memberId, productCode, productName, principalKobo, termMonths, purpose,
+                 agreedAt, asOf, approvalStatus, disbursedOn, outstandingKobo, dueToDateKobo, paidToDateKobo,
+                 arrearsKobo, missedInstalments, daysInArrears, condition, disagreement, reason, instalments]
+      properties:
+        loanId: { type: string, format: uuid }
+        societyId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        productCode: { type: string }
+        productName: { type: string }
+        principalKobo: { $ref: '#/components/schemas/Magnitude' }
+        termMonths: { type: integer }
+        purpose: { type: string }
+        agreedAt: { type: string, format: date-time }
+        asOf: { type: string, format: date }
+        approvalStatus:
+          type: string
+          nullable: true
+          enum: [awaiting, approved, rejected, expired]
+          description: "The disbursement request's approval_status NOW (an approval is not value-dated); null when none has been raised."
+        disbursedOn:
+          type: string
+          format: date
+          nullable: true
+          description: "The disbursement's value date; null when not disbursed by asOf."
+        outstandingKobo:
+          description: |
+            From the LEDGER: the loan's lines on member_loan, value date on or
+            before asOf. Section-0 signed: positive is owed to the society;
+            NEGATIVE is an overpayment, owed to the member.
+          allOf: [{ $ref: '#/components/schemas/Kobo' }]
+        dueToDateKobo: { $ref: '#/components/schemas/Magnitude' }
+        paidToDateKobo: { $ref: '#/components/schemas/Magnitude' }
+        arrearsKobo:
+          description: dueToDate minus paidToDate, when positive; else zero.
+          allOf: [{ $ref: '#/components/schemas/Magnitude' }]
+        missedInstalments: { type: integer }
+        daysInArrears:
+          type: integer
+          description: "Days from the due date of the oldest instalment not fully covered to asOf; 0 when none."
+        condition: { $ref: '#/components/schemas/LoanCondition' }
+        disagreement:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/LoanDisagreement' }]
+        reason:
+          type: string
+          description: The server's sentence for the condition. Shown as given.
+        instalments:
+          type: array
+          items: { $ref: '#/components/schemas/LoanInstalmentPosition' }
+
+    LoanBook:
+      type: object
+      required: [asOf, loans]
+      properties:
+        asOf: { type: string, format: date }
+        loans:
+          type: array
+          description: Ordered by agreedAt, then loanId.
+          items: { $ref: '#/components/schemas/LoanPosition' }
+
     Problem:
       type: object
       required: [code, message]
@@ -991,6 +1097,89 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Journal' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---- Loans: the read side. Who reads a loan: its BORROWER, and an officer of
+  # its society holding a current post (the internal auditor included). Anyone
+  # else: 404, byte-identical to a loan that does not exist. asOf is REQUIRED,
+  # a value date: the server never assumes "today".
+  /loans/{loanId}:
+    get:
+      operationId: getLoan
+      summary: One loan's position as at a value date
+      security: [{ session: [] }]
+      parameters:
+        - { name: loanId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanPosition' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such loan, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/loans:
+    get:
+      operationId: getMemberLoans
+      summary: A member's loans as at a value date (the member, or an officer of their society)
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanBook' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such member, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/loans:
+    get:
+      operationId: getSocietyLoans
+      summary: The society's loan book as at a value date (officers only)
+      description: |
+        condition=disagreement is the officers' list of loans whose schedule
+        and ledger do not agree, each with its reason. (The inbox will rank them.)
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: asOf, in: query, required: true, schema: { type: string, format: date } }
+        - { name: condition, in: query, required: false, schema: { $ref: '#/components/schemas/LoanCondition' } }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanBook' }
         '401':
           description: No session, or one that is not valid.
           content:
