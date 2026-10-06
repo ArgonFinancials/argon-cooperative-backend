@@ -167,7 +167,7 @@ Each of those is an attributable ledger act with a reason. After it, the
 condition follows by derivation. So "settled" can never be true while the
 ledger says money is owed, and it can never be set by someone typing it.
 
-## 6a. Write-off: the shape (PROPOSED 2026-10-06, for review; no tests yet)
+## 6a. Write-off: the shape (APPROVED 2026-10-06)
 
 A write-off is the society's decision that money owed **will not be
 recovered**. It doesn't make the debt vanish. It records where the loss went,
@@ -206,10 +206,24 @@ and guarantors never sign; reason required; entry exactly the outstanding,
 once, only on an approved request; no repayment after; recovery only on a
 written-off loan.
 
-**Decisions this needs from you:**
-1. **May an in-arrears loan be written off, or only one whose schedule has ended?** I propose any disbursed loan with money owed. A borrower who has died or left the country shouldn't wait out the schedule.
-2. **Should the guarantors, not just the borrower, be barred from signing the write-off?** I propose yes, as above.
-3. **Should the quorum apply to every write-off, or rise with the amount?** I propose one number per society now. Amount bands are a bye-law refinement that can be added as more settings later.
+**Decided 2026-10-06:**
+1. **Any disbursed loan with money owed** can be written off, not only one
+   whose schedule has ended. Carrying a debt known to be lost until a calendar
+   date is bookkeeping theatre.
+2. **The guarantors are barred from signing, alongside the borrower.** Their
+   liability is undecided, which is exactly why they must not vote on whether
+   the debt survives.
+3. **One quorum per society, for now.** A single number is what a bye-law
+   says today. Amount bands will come, as more settings, once someone
+   specifies them.
+
+**Held while building:**
+- An unset quorum refuses **in words that say so**: "this society has not
+  decided how many signatures a write-off needs". A bare refusal sends
+  someone hunting a bug.
+- The quorum is **copied onto the request when it is raised** and never
+  re-read. The same point-in-time rule as the officer's post at posting; the
+  code says so, because reading the current setting looks simpler.
 
 ## 7. What the tests would hold (once approved)
 
@@ -234,6 +248,7 @@ written-off loan.
 | Charges on loan movements | Commercial |
 | In-kind disbursement account | Tier 1 accountant |
 | Guarantor liability; are their savings locked | Society bye-laws, Legal |
+| May a guarantor read the loan they back? Built as **no** (borrower and officers only), recorded as a question, not a rule: defensible on privacy, arguable on fairness. Answered with guarantor liability. | Society, with the liability question |
 | ~~May a signatory also guarantee the same loan~~ | **Decided: no**, in either order |
 | Prepayment allowed (settled early) | Society |
 | Write-off approval quorum | Society (proposed: as reversals over threshold) |
