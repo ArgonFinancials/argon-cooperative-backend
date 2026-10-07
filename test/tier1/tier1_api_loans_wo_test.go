@@ -1,9 +1,8 @@
 //go:build tier1
 
 // Acceptance tests for the loan read side's WRITTEN OFF condition — a reviewed
-// addition to tier1_api_loans_test.go, written before the handler change.
-// Their own suite (loans_api_wo) until approved and built, so the approved
-// loan read suite stays green meanwhile; then they merge into it.
+// addition to tier1_api_loans_test.go (approved 2026-10-07), part of suite
+// loans_api. Kept in their own suite until built, so CI stayed honest.
 //
 // A write-off records where the loss went; the debt did not disappear. So the
 // loan reads written_off, never settled, with the society's reason in the

@@ -5,12 +5,12 @@
 # No SQL baseline: the schema is the real 0001–0008. The mutants are the named
 # breaks of the reference handlers in apifake_loans_test.go.
 SUITE_INCLUDE='^TestApiLoans'
-SUITE_EXCLUDE='^TestApiLoansWrittenOff'   # its own suite until approved
-SUITE_SKIP='^TestApiLoansWrittenOff'
+SUITE_EXCLUDE='^$'
+SUITE_SKIP=''
 SUITE_RUN='^TestApiLoans'
 SVC_RUN='^TestApiLoans'
 SVC_ENV='ARGON_TEST_API_FAKE'
-SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql'
 SUITE_MUTDIR='mutants_api_none'
 SUITE_GREEN_NEEDS='internal/api/loans.go'          # the real handlers, written after review
 CONTROL_RE='^$'
@@ -40,4 +40,9 @@ declare -gA SVC_TARGET_OF=(
   [loans_condition_filter_ignored]='TestApiLoans21_OfficersListTheDisagreements'
   [money_as_numbers]='TestApiLoans22_MoneyIsAStringOnTheWire'
   [nil_slices]='TestApiLoans23_EmptyListsAreArraysNotNull'
+  # "written off" (approved 2026-10-07; tier1_api_loans_wo_test.go)
+  [loans_written_off_reads_settled]='TestApiLoansWrittenOff1_AWrittenOffLoanSaysSoAndWhy|TestApiLoansWrittenOff2_ARecoveryIsReportedNotRepaid'
+  [loans_write_off_reason_dropped]='TestApiLoansWrittenOff1_AWrittenOffLoanSaysSoAndWhy'
+  [loans_recovery_as_repayment]='TestApiLoansWrittenOff2_ARecoveryIsReportedNotRepaid'
+  [loans_write_off_ignores_date]='TestApiLoansWrittenOff3_AWriteOffIsAsAtItsValueDate'
 )

@@ -165,8 +165,36 @@ func (s *server) loanPosition(ctx context.Context, loanID string, asOf time.Time
 		p.DaysInArrears = int(asOf.Sub(missed[0].due).Hours() / 24)
 	}
 
+	// A write-off as at asOf (by its value date), the reason the society gave,
+	// and money recovered since. A recovery is money the society got back, not
+	// money the borrower repaid: it is reported, never counted as paid.
+	var writtenOn *time.Time
+	var writtenOff int64
+	if err := s.db.QueryRow(ctx, `SELECT e.value_date, -coalesce((SELECT sum(l.amount_kobo) FROM ledger_lines l
+		       JOIN accounts a ON a.id = l.account_id WHERE l.entry_id = e.id AND a.role = 'member_loan'), 0)
+		  FROM ledger_entries e WHERE e.loan_id = $1 AND e.kind::text = 'loan_write_off' AND e.value_date <= $2::date`, lid, day).
+		Scan(&writtenOn, &writtenOff); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return p, err
+	}
+	var woReason string
+	var recovered int64
+	if writtenOn != nil {
+		if err := s.db.QueryRow(ctx, `SELECT coalesce(reason, '') FROM approval_requests WHERE loan_id = $1
+			AND kind::text = 'loan_write_off' AND approval_status(id) = 'approved' ORDER BY raised_at DESC LIMIT 1`, lid).
+			Scan(&woReason); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return p, err
+		}
+		if err := s.db.QueryRow(ctx, `SELECT -coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l
+			JOIN ledger_entries e ON e.id = l.entry_id JOIN accounts a ON a.id = l.account_id
+			WHERE e.loan_id = $1 AND e.kind::text = 'loan_recovery' AND a.role = 'loan_recovery_income' AND e.value_date <= $2::date`,
+			lid, day).Scan(&recovered); err != nil {
+			return p, err
+		}
+	}
+
 	// The condition, in this order: "not yet disbursed" first, because an
-	// undisbursed loan also has a zero balance.
+	// undisbursed loan also has a zero balance; "written off" next, because a
+	// written-off loan has nothing left owing and must never read settled.
 	ended := !lastDue.After(asOf)
 	cond, kind := "", ""
 	switch {
@@ -176,6 +204,15 @@ func (s *server) loanPosition(ctx context.Context, loanID string, asOf time.Time
 			p.Reason = fmt.Sprintf("Agreed on %s; not yet disbursed. No disbursement request has been raised.", longDate(p.AgreedAt))
 		} else {
 			p.Reason = fmt.Sprintf("Agreed on %s; not yet disbursed. The disbursement request is %s.", longDate(p.AgreedAt), *status)
+		}
+	case writtenOn != nil:
+		cond = "written_off"
+		p.Reason = fmt.Sprintf("Written off on %s: %s was not recovered.", longDate(*writtenOn), naira(writtenOff))
+		if woReason != "" {
+			p.Reason += " " + strings.TrimRight(woReason, ".") + "."
+		}
+		if recovered > 0 {
+			p.Reason += fmt.Sprintf(" Since recovered: %s.", naira(recovered))
 		}
 	case outstanding < 0:
 		cond, kind = "disagreement", "overpaid"
