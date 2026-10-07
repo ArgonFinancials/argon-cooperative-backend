@@ -126,6 +126,7 @@ if [[ $mode == drill ]]; then
     "loan reads API|^TestApiLoans|"
     "write-offs (0009)|^TestWriteOff|"
     "signing step-up (0010)|^TestSignStep|"
+    "approvals API|^TestApiApprovals|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"
