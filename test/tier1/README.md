@@ -153,6 +153,19 @@ to fail when the grant is put back.
 with it.** Whenever a migration changes grants, or a rule takes a lock or
 reads a table the app cannot, run the probe as the app before calling it green.
 
+**The habit did not hold: finding 25 is finding 16 recurring (2026-10-07).**
+0010's new `act_id` column was not in argon_app's INSERT lists, and a mutant
+read a column the app may not read. The cause and shape were the same: the
+suites run as the owner, so a correct rule the app cannot execute passed
+everything. It was caught only because the probe happened to be run. So it is
+now a STEP: when a suite's GREEN target is a migration, `mutate.sh` runs the
+probe as argon_app after GREEN, and a probe failure fails the run, as a
+surviving mutant does. Proved: with the app's INSERT grant on
+`signatory_approvals` removed, suite 0009 went 18/18 GREEN and the run FAILED
+on `permission denied for table signatory_approvals`. With the grant back, it
+passed. A migration that adds a column, trigger or function the app depends on
+also adds the probe cases that exercise it as argon_app.
+
 **Also from 0007 (a test of mine):** a control that cannot pass against M0 is
 not a control; it is a rule test in the wrong column. "Two of three
 approves" first went in as a control; on M0 nothing ever reads `approved`, so

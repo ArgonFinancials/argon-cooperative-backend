@@ -34,5 +34,6 @@ declare -gA SVC_TARGET_OF=(
   [appr_signed_reject_as_closed]='TestApiApprovals14_ASignerCannotThenReject'
   [appr_member_sees_rejecter]='TestApiApprovals15_TheMemberSeesWhyNotWho'
   [appr_fraud_path_shown]='TestApiApprovals16_TheFraudPathIsNotShownToTheMember'
+  [appr_referred_no_next_step]='TestApiApprovals16_TheFraudPathIsNotShownToTheMember'
   [money_as_numbers]='TestApiApprovals18_MoneyIsAStringOnTheWire'
 )

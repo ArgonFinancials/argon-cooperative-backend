@@ -722,7 +722,7 @@ components:
     ApprovalView:
       type: object
       required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
-                 projection, status, signedCount, signatures, rejection, escalated]
+                 projection, status, signedCount, signatures, rejection, escalated, nextStep]
       properties:
         requestId: { type: string, format: uuid }
         societyId: { type: string, format: uuid }
@@ -756,6 +756,15 @@ components:
         escalated:
           type: boolean
           description: True when rejected as looks_wrong (to the committee and the auditor). Always false in the member projection.
+        nextStep:
+          type: string
+          nullable: true
+          description: |
+            What the member should do now, as a sentence to show as written. Set
+            ONLY in the member projection of a referred request: "Speak to your
+            secretary." Referred alone says something happened and invites a
+            guess; this routes the member to ask, without saying what was
+            suspected or by whom. NULL everywhere else.
 
     SignApproval:
       type: object

@@ -12,6 +12,7 @@
 //	appr_member_sees_names        the member projection lists who signed
 //	appr_member_sees_rejecter     the member projection names who rejected
 //	appr_fraud_path_shown         the member is told a request was rejected as looks_wrong
+//	appr_referred_no_next_step    the member sees "referred" and not what to do next
 //	appr_any_member_reads         any member of the society reads any request
 //	appr_officer_any_society      an officer of ANY society reads
 //	appr_not_found_says_why       a refusal says "not permitted"
@@ -149,6 +150,10 @@ func (f *fakeAPI) apprView(ctx context.Context, r apprRow, projection string) (a
 			v.Rejection, v.Escalated = &rj, fraud
 		case fraud && f.brk != "appr_fraud_path_shown":
 			v.Status, v.Rejection = "referred", nil // the fraud path does not go back to the requester
+			if f.brk != "appr_referred_no_next_step" {
+				ns := "Speak to your secretary."
+				v.NextStep = &ns
+			}
 		default:
 			if f.brk == "appr_member_sees_rejecter" {
 				u, p := uuidOf(by), api.OfficerPost(post)

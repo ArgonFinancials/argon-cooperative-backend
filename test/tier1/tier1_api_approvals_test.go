@@ -100,7 +100,8 @@ type aView struct {
 		Note     *string `json:"note"`
 		ByUserId *string `json:"byUserId"`
 	} `json:"rejection"`
-	Escalated bool `json:"escalated"`
+	Escalated bool    `json:"escalated"`
+	NextStep  *string `json:"nextStep"`
 }
 
 func (w *aapi) view(t *testing.T, as, req string) aView {
@@ -276,8 +277,12 @@ func TestApiApprovals15_TheMemberSeesWhyNotWho(t *testing.T) {
 	}
 }
 
+const referredNextStep = "Speak to your secretary."
+
 // The fraud path does not go back to the requester: the member sees
-// "referred" and nothing else; officers and the auditor see it escalated.
+// "referred" and what to do next, nothing else; officers and the auditor see
+// it escalated. "Referred" alone invites a guess; the next step routes the
+// member to ask (decided 2026-10-07).
 func TestApiApprovals16_TheFraudPathIsNotShownToTheMember(t *testing.T) {
 	w := newApprovalAPI(t)
 	req := w.memberRequest(t, "")
@@ -287,7 +292,13 @@ func TestApiApprovals16_TheFraudPathIsNotShownToTheMember(t *testing.T) {
 		t.Fatalf("ACCEPTED — the member's view of a looks_wrong rejection: status %q, rejection %+v, escalated %v; want referred, none, false",
 			m.Status, m.Rejection, m.Escalated)
 	}
+	if m.NextStep == nil || *m.NextStep != referredNextStep {
+		t.Fatalf("ACCEPTED — the member is told a request was referred and not what to do: nextStep %v; want %q", m.NextStep, referredNextStep)
+	}
 	a := w.view(t, w.auditor, req)
+	if a.NextStep != nil {
+		t.Fatalf("ACCEPTED — the officers' view carries the member's next step %q; it is the member's, and NULL elsewhere", *a.NextStep)
+	}
 	if a.Status != "rejected" || !a.Escalated || a.Rejection == nil || a.Rejection.Reason != "looks_wrong" {
 		t.Fatalf("ACCEPTED — the auditor's view of the fraud path: %+v; want rejected, escalated, looks_wrong", a)
 	}

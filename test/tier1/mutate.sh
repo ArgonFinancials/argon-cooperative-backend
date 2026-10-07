@@ -124,6 +124,20 @@ if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
     else printf '   \033[31m%s ✗\033[0m %s — %s\n' "${st:-NOT RUN}" "$t" "$(detail_of "$t" GREEN)"; fail=1; fi
   done
   printf '   %d/%d pass against the real schema\n' "$green_n" "${#ALL[@]}"
+  # A STEP, not a habit (findings 16 and 25, the same failure twice): the suites
+  # run as the owner, the API as argon_app, and a correct rule the app cannot
+  # execute passes every suite and dies in production. A migration is not done
+  # until the probe, which seeds and runs as argon_app, passes on it.
+  if [[ $SUITE_GREEN_NEEDS == migrations/* ]]; then
+    info "GREEN as the app: the Tier 1 probe (deploy/70-verify-tier1.sh), as argon_app"
+    if bash "$REPO_DIR/deploy/70-verify-tier1.sh" > "$out/probe.log" 2>&1; then
+      printf '   \033[32mprobe passes as argon_app ✓\033[0m\n'
+    else
+      printf '   \033[31mPROBE FAILED as argon_app ✗\033[0m — the rule may be right and the app unable to live with it:\n'
+      sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | grep -E 'ERROR|✗ [^G]|FAILED|die' | grep -v '✗ GAP' | head -15 | sed 's/^/     /'
+      fail=1
+    fi
+  fi
 else
   printf '\n\033[33mGREEN NOT RUN\033[0m — %s does not exist yet (tests first). The red half below is all this run proves.\n' "$SUITE_GREEN_NEEDS"
 fi
