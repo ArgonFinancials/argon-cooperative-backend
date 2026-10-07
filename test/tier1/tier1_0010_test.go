@@ -124,7 +124,11 @@ func TestSignStep5_OneStepUpSignsOnce(t *testing.T) {
 
 func TestSignStep6_ARejectionRestsOnAStepUp(t *testing.T) {
 	w := newApprovals(t)
-	refused(t, w.reject(w.s.request(), w.tMem, w.treasurer, "treasurer", "amount_wrong"),
+	// Written out, not through w.reject: since the fixtures moved onto step-up
+	// acts, w.reject supplies one, and this test would send what the rule
+	// accepts (finding 27).
+	refused(t, one(`INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, note)
+		VALUES ($1, $2, $3, 'treasurer', 'amount_wrong', 'The payslip is not attached')`, w.s.request(), w.tMem, w.treasurer),
 		"a rejection with no step-up behind it", refusedAs("rejection_needs_step_up"))
 }
 

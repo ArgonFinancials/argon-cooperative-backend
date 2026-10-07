@@ -92,6 +92,17 @@ jobs:
           BACKUP_STORE=file://./.backups
           EOF
           echo "ARGON_ENV=$PWD/deploy/env/ci.env" >> "$GITHUB_ENV"
+      # The probe (run by mutate.sh after GREEN, as argon_app) builds its scratch
+      # database with migrate, as the server does. Same version as the server
+      # (deploy/env/ec2.env.example); read back from the binary, not `-version`.
+      - name: migrate CLI (the server's version)
+        run: |
+          MIGRATE_VERSION=v4.18.1
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install -tags postgres "github.com/golang-migrate/migrate/v4/cmd/migrate@$MIGRATE_VERSION"
+          got=$(go version -m "$RUNNER_TEMP/bin/migrate" | awk '$1 == "mod" && $2 == "github.com/golang-migrate/migrate/v4" {print $3}')
+          [[ $got == "$MIGRATE_VERSION" ]] || { echo "migrate is module version '${got:-unknown}', not $MIGRATE_VERSION"; exit 1; }
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Roles
         run: bash deploy/20-roles.sh
       - name: Mutation run, suite ${{ matrix.suite }}

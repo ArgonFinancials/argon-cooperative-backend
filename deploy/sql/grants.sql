@@ -22,7 +22,10 @@ GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_ap
 GRANT INSERT (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post,
               actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id)
   ON ledger_entries TO argon_app;
-GRANT INSERT (id, request_id, member_id, post_at_signing, user_id)
+-- act_id (0010): the signer's own step-up act, written by the app in the
+-- signature's transaction. Without it in this list the app cannot sign at all
+-- (finding 25), however right the rule.
+GRANT INSERT (id, request_id, member_id, post_at_signing, user_id, act_id)
   ON signatory_approvals TO argon_app;
 
 -- Mutable reference state. No DELETE: a society, member or user is ended by a
@@ -45,7 +48,7 @@ GRANT SELECT, INSERT ON approval_requests TO argon_app;
 -- A rejection is an append-only, attributable row; rejected_at is the
 -- server's, left out of the INSERT list as signed_at is.
 GRANT SELECT ON approval_rejections TO argon_app;
-GRANT INSERT (id, request_id, member_id, user_id, post_at_rejection, reason, note)
+GRANT INSERT (id, request_id, member_id, user_id, post_at_rejection, reason, note, act_id)
   ON approval_rejections TO argon_app;
 
 -- Loans (0008). A product's terms are configuration the society may change

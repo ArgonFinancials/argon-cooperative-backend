@@ -134,7 +134,11 @@ if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
       printf '   \033[32mprobe passes as argon_app ✓\033[0m\n'
     else
       printf '   \033[31mPROBE FAILED as argon_app ✗\033[0m — the rule may be right and the app unable to live with it:\n'
-      sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | grep -E 'ERROR|✗ [^G]|FAILED|die' | grep -v '✗ GAP' | head -15 | sed 's/^/     /'
+      sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | grep -E 'ERROR|✗ [^G]|FAILED|FATAL' | grep -v '✗ GAP' | head -15 | sed 's/^/     /'
+      # Always the last lines too: a probe that dies before its report (a
+      # missing tool, a fixture) matches none of the above, and a failure
+      # with no reason shown is the dangerous kind.
+      echo '     … last lines of the probe:'; sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | tail -5 | sed 's/^/     /'
       fail=1
     fi
   fi

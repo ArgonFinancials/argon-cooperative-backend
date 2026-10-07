@@ -43,7 +43,7 @@ U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
 R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91)
-SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
+R2=$(U 62) SP5=$(U 115) SA5=$(U 125) SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
 # Written for the schema at migration 0005 (users, line-level member_id, no
 # ledger_batches.as_of; account roles, so every savings line names its member;
@@ -85,7 +85,8 @@ if [[ $has_sig_acts == 1 ]]; then
   require_env ARGON_AUTH_PASSWORD
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
     ($SP1, $U1, 'pin', 'approval_signature'), ($SP2, $U1, 'pin', 'approval_signature'),
-    ($SP3, $U1, 'pin', 'approval_signature'), ($SP4, $U3, 'pin', 'approval_signature');" </dev/null >/dev/null
+    ($SP3, $U1, 'pin', 'approval_signature'), ($SP4, $U3, 'pin', 'approval_signature'),
+    ($SP5, $U1, 'pin', 'approval_rejection');" </dev/null >/dev/null
 fi
 pg_as argon_app "$db" -q <<SQL >/dev/null
 BEGIN;
@@ -109,13 +110,14 @@ INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, me
   ($L1, $E1, $A1,  10000, 'principal', NULL),
   ($L2, $E1, $A2, -10000, 'principal', $M1);
 INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-  VALUES ($R1, $S, 'APR-PROBE-1', $M1, 'withdrawal_out', 50000000, 2, now() + interval '1 day');
+  VALUES ($R1, $S, 'APR-PROBE-1', $M1, 'withdrawal_out', 50000000, 2, now() + interval '1 day'),
+         ($R2, $S, 'APR-PROBE-2', $M2, 'withdrawal_out', 50000000, 2, now() + interval '1 day');
 $(sign_sql "$SP1" "$SA1" "$U1" "$M1" treasurer)
 COMMIT;
 SQL
 n=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM ledger_lines WHERE entry_id = $E1" </dev/null)
 [[ $n == 2 ]] || die "fixtures not in place (ledger_lines for E1 = '$n') — every result below would be meaningless"
-ok "fixtures committed: 1 posted entry with 2 lines, 1 approval request with 1 signature"
+ok "fixtures committed: 1 posted entry with 2 lines, 2 approval requests, 1 signature"
 
 # ---- harness -----------------------------------------------------------------
 declare -a ROWS; req_fail=0; gaps=0
@@ -202,13 +204,24 @@ probe ctl K4 argon_app '' "control: same appointment with is_signatory = false c
 
 # 5. One member, one signature per request.
 # Each with its own fresh step-up where the schema has them, so the refusal is
-# the one-per-person rule's, not the step-up's.
+# the one-per-person rule's, not the step-up's. BEGIN/COMMIT: the probe runs a
+# case statement by statement, and the act and the signature are one event.
 probe req C5 argon_app '23505.*signatory_approvals_one_per_user' "same member signs the same approval request twice" \
-  "$(sign_sql "$SP2" "$SA2" "$U1" "$M1" treasurer)"
+  "BEGIN; $(sign_sql "$SP2" "$SA2" "$U1" "$M1" treasurer) COMMIT;"
 probe req C5b argon_app '23505.*signatory_approvals_one_per_user' "…twice, under a different post label" \
-  "$(sign_sql "$SP3" "$SA3" "$U1" "$M1" chairman)"
+  "BEGIN; $(sign_sql "$SP3" "$SA3" "$U1" "$M1" chairman) COMMIT;"
 probe ctl K5 argon_app '' "control: a different person, the current chairman, signs the same request" \
-  "$(sign_sql "$SP4" "$SA4" "$U3" "$M3" chairman)"
+  "BEGIN; $(sign_sql "$SP4" "$SA4" "$U3" "$M3" chairman) COMMIT;"
+# 0010 as the app (findings 16 and 25): the step-up rules refuse the app's
+# unauthorised signature and rejection (P23, P24), and the app can reject on
+# the rejecter's own act (K23), with the grants it has. P24 runs before K23 on
+# the same request: refused, it changes nothing.
+if [[ $has_sig_acts == 1 ]]; then
+probe req P23 argon_app '23514.*a signature rests on the signer' "app signs with no step-up behind it"   "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R2, $M1, 'treasurer');"
+probe req P24 argon_app '23514.*a rejection rests on the rejecter' "app rejects with no step-up behind it"   "INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason) VALUES ($R2, $M1, $U1, 'treasurer', 'amount_wrong');"
+probe ctl K23 argon_app '' "control: app rejects on the rejecter's own step-up, in one transaction"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA5, 'approval_rejection', $U1, $SP5);
+   INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, act_id) VALUES ($R2, $M1, $U1, 'treasurer', 'amount_wrong', $SA5); COMMIT;"
+fi
 
 # == Privilege layer: what argon_app cannot even attempt =======================
 probe req P1 argon_app '42501.*permission denied for table ledger_entries' "app UPDATE on ledger_entries" \
