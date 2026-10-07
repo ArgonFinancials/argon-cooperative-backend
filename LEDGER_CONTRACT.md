@@ -343,3 +343,40 @@ So you know what is already tested and need not be re-litigated:
   refuses rather than partially posting, freezes every line — 20 tests
 - No edit action offered on anything posted, anywhere in the interface
 - The as-at date asked once and carried, never defaulted to today
+
+---
+
+## 8. Decided 2026-10-07: what a member may withdraw, charges, and who authorises
+
+**Withdrawable (D-10)** = savings − guarantees given − account floor − project
+commitments. Two of its terms had no value, so:
+- **The account floor is a society setting with no default.** Until a society
+  sets it, withdrawable is not stated, and the reason says why: "this society
+  has not set its account floor". The savings balance is always shown.
+- **Guarantees given: a CONSERVATIVE DEFAULT, pending the guarantor-liability
+  decision, not the answer.** Until liability is decided, the FULL outstanding
+  balance of every loan the member guarantees is held back. It is the most
+  conservative reading, it is a real number, and it can only move in the
+  member's favour when the decision lands. The member sees a smaller figure
+  with its reason ("₦X is held while you guarantee {name}'s loan"), never "no
+  figure": a figure withheld because of someone else's undecided question
+  reads as the product being broken.
+- **Project commitments read zero, stated,** until projects exist.
+
+**Charges on a movement are configuration with no default, refused until set.**
+The server computes them; it never accepts a client-computed charge amount.
+That is the weakest point in a money path. **Known gap, to close when the Board
+decides (q4):** `postAll` today accepts charge lines computed by the client
+and checks only their structure. It is the exception to narrow, not the
+pattern to copy.
+
+**Every withdrawal that moves money out of the society needs its signatories**
+(PRD 8.4). The guard threshold is interface friction: it decides what a person
+is asked to type or hold, not who must authorise. Conflating the two would let
+a society set a high threshold and quietly make most withdrawals unilateral.
+**Possible refinement, a bye-law decision we do not invent:** a lower signature
+count below an amount, as with the write-off quorum bands.
+
+**Signing and rejecting a request need the signer's own PIN step-up**,
+consistent with imports and guarantees. A signature is the most attributable
+act in the product.
