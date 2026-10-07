@@ -92,11 +92,18 @@ const (
 	ActSignatoryResetRequest ActKind = "signatory_reset_request"
 	ActSignatoryPhoneRequest ActKind = "signatory_phone_request"
 	ActSignatoryApproval     ActKind = "signatory_approval"
+	ActGuarantee             ActKind = "guarantee"            // 0008: a guarantor's own consent
+	ActGuaranteeWithdrawal   ActKind = "guarantee_withdrawal" // 0008
+	ActApprovalSignature     ActKind = "approval_signature"   // 0010: signing a request
+	ActApprovalRejection     ActKind = "approval_rejection"   // 0010: rejecting one
 )
 
 // ActKinds is every kind a proof can be minted for: credential_acts.kind.
+// (Finding 24: 0008's guarantee kinds were missing here, so no client could
+// obtain a proof for a guarantee through the API.)
 var ActKinds = []ActKind{ActLedgerBatch, ActPinChange, ActMemberReset, ActPhoneChange, ActLockRelease,
-	ActSignatoryResetRequest, ActSignatoryPhoneRequest, ActSignatoryApproval}
+	ActSignatoryResetRequest, ActSignatoryPhoneRequest, ActSignatoryApproval,
+	ActGuarantee, ActGuaranteeWithdrawal, ActApprovalSignature, ActApprovalRejection}
 
 // Proof is a minted step-up. Its id is what the act names; it is spent by the
 // act, inside the act's own transaction, and by nothing else.

@@ -71,8 +71,8 @@ func (w *aworld) reject(req, member, user, post, reason string) error {
 
 // rejectNote: note "" is sent as NULL.
 func (w *aworld) rejectNote(req, member, user, post, reason, note string) error {
-	return one(`INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, note)
-		VALUES ($1, $2, $3, $4, $5, $6)`, req, member, user, post, reason, nz(note))
+	return onStepUp(w.s.t, "approval_rejections", "approval_rejection", user,
+		"request_id, member_id, user_id, post_at_rejection, reason, note", req, member, user, post, reason, nz(note))
 }
 
 // resubmit raises a new request that points at `original`.
@@ -173,8 +173,8 @@ func TestApproval8_RejectionGivesOneOfTheFourReasons(t *testing.T) {
 
 func TestApproval9_RejectionTimeIsTheServers(t *testing.T) {
 	w := newApprovals(t)
-	refused(t, one(`INSERT INTO approval_rejections (request_id, member_id, user_id, post_at_rejection, reason, rejected_at)
-		VALUES ($1, $2, $3, 'treasurer', 'amount_wrong', '2026-01-15')`, w.s.request(), w.tMem, w.treasurer),
+	refused(t, onStepUp(t, "approval_rejections", "approval_rejection", w.treasurer,
+		"request_id, member_id, user_id, post_at_rejection, reason, rejected_at", w.s.request(), w.tMem, w.treasurer, "treasurer", "amount_wrong", "2026-01-15"),
 		"a rejection back-dated by its author", refusedAs("rejection_rejected_at_is_now"))
 }
 

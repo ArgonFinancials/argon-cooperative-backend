@@ -37,6 +37,20 @@ Each was written and mutation-tested before the code it covers.
 | `books` | `tier1_api_books_test.go` (31) | the breaks in `apifake_books_test.go` (32, `--svc`) | `internal/api/books.go` |
 | `0009` | `tier1_0009_test.go` (18, write-offs) | `0009_interface.sql` (M0) + `mutants_0009/` (18) | `migrations/0009_write_offs.up.sql` |
 | `loans_api` | `tier1_api_loans_test.go` (23), `tier1_api_loans_wo_test.go` (3, written off) | the breaks in `apifake_loans_test.go` (28, `--svc`) | `internal/api/loans.go` |
+| `0010` | `tier1_0010_test.go` (12, a signature and a rejection rest on a step-up) | `0010_interface.sql` (M0) + `mutants_0010/` (12) | `migrations/0010_sign_step_up.up.sql` |
+| `approvals_api` | `tier1_api_approvals_test.go` (18, view, sign, reject; the fraud path) | the breaks in `apifake_approvals_test.go` (`--svc`) | `internal/api/approvals.go` |
+
+Signatures and rejections in every fixture go through `onStepUp`
+(`tier1_0002_test.go`): where the schema has `act_id` (0010), each rests on
+the person's own step-up act, taken in the same transaction, so only the rule
+a test is about can refuse it. A member record with no person behind it can
+take no step-up and signs with none (TestU3). There, 0002's "no person"
+refusal must win, so 0010's triggers must be named to sort AFTER the existing
+ones (`signatory_approvals_step_up`, `approval_rejections_step_up`). The
+mutants' `m_t` sorts first, and against them TestU3 sees the step-up refusal.
+Proved 2026-10-07: run with 0010's "reusable" mutants, the 0002/0007/0008/0009
+tests pass except TestU3 (the ordering above). With the helper sabotaged to
+skip acts, 50 go red under the signature rule and 9 under the rejection rule.
 
 The restore drill (`deploy/60-restore.sh --drill`) runs every suite above (GREEN half)
 against the restored copy.

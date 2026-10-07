@@ -42,7 +42,8 @@ fi
 U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
-R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
+R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91)
+SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
 # Written for the schema at migration 0005 (users, line-level member_id, no
 # ledger_batches.as_of; account roles, so every savings line names its member;
@@ -65,6 +66,26 @@ INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count,
 else
   BATCH_SQL="INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo)
   VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000);"
+fi
+# A signature rests on the signer's own step-up act (0010), where the schema has
+# them: argon_auth mints each proof in its own transaction; the act that spends
+# it is argon_app's, in the same statement as the signature. Before 0010 a
+# signature names no act.
+has_sig_acts=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
+  WHERE table_name = 'signatory_approvals' AND column_name = 'act_id'" </dev/null)
+sign_sql() {  # sign_sql PROOF ACT USER MEMBER POST: one signature on R1
+  if [[ $has_sig_acts == 1 ]]; then
+    echo "INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($2, 'approval_signature', $3, $1);
+INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($R1, $4, '$5', $2);"
+  else
+    echo "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $4, '$5');"
+  fi
+}
+if [[ $has_sig_acts == 1 ]]; then
+  require_env ARGON_AUTH_PASSWORD
+  pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+    ($SP1, $U1, 'pin', 'approval_signature'), ($SP2, $U1, 'pin', 'approval_signature'),
+    ($SP3, $U1, 'pin', 'approval_signature'), ($SP4, $U3, 'pin', 'approval_signature');" </dev/null >/dev/null
 fi
 pg_as argon_app "$db" -q <<SQL >/dev/null
 BEGIN;
@@ -89,7 +110,7 @@ INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, me
   ($L2, $E1, $A2, -10000, 'principal', $M1);
 INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
   VALUES ($R1, $S, 'APR-PROBE-1', $M1, 'withdrawal_out', 50000000, 2, now() + interval '1 day');
-INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $M1, 'treasurer');
+$(sign_sql "$SP1" "$SA1" "$U1" "$M1" treasurer)
 COMMIT;
 SQL
 n=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM ledger_lines WHERE entry_id = $E1" </dev/null)
@@ -180,12 +201,14 @@ probe ctl K4 argon_app '' "control: same appointment with is_signatory = false c
      VALUES ($S, $M2, 'internal_auditor', false, '2026-01-01');"
 
 # 5. One member, one signature per request.
+# Each with its own fresh step-up where the schema has them, so the refusal is
+# the one-per-person rule's, not the step-up's.
 probe req C5 argon_app '23505.*signatory_approvals_one_per_user' "same member signs the same approval request twice" \
-  "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $M1, 'treasurer');"
+  "$(sign_sql "$SP2" "$SA2" "$U1" "$M1" treasurer)"
 probe req C5b argon_app '23505.*signatory_approvals_one_per_user' "…twice, under a different post label" \
-  "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $M1, 'chairman');"
+  "$(sign_sql "$SP3" "$SA3" "$U1" "$M1" chairman)"
 probe ctl K5 argon_app '' "control: a different person, the current chairman, signs the same request" \
-  "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $M3, 'chairman');"
+  "$(sign_sql "$SP4" "$SA4" "$U3" "$M3" chairman)"
 
 # == Privilege layer: what argon_app cannot even attempt =======================
 probe req P1 argon_app '42501.*permission denied for table ledger_entries' "app UPDATE on ledger_entries" \

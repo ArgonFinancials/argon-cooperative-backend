@@ -152,7 +152,8 @@ components:
       type: string
       description: The attributable act a PIN proof is minted FOR (credential_acts.kind).
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
-             signatory_reset_request, signatory_phone_request, signatory_approval]
+             signatory_reset_request, signatory_phone_request, signatory_approval,
+             guarantee, guarantee_withdrawal, approval_signature, approval_rejection]
 
     PinProofRequest:
       type: object
@@ -671,6 +672,112 @@ components:
           type: array
           description: Ordered by agreedAt, then loanId.
           items: { $ref: '#/components/schemas/LoanPosition' }
+
+    # ---- APPROVALS over HTTP (PRD 8.4; 0007, 0010) ---------------------------------
+    # The status is DERIVED by the server (approval_status), never stored. One
+    # record, two projections. The officer projection (any current post, the
+    # auditor included) shows who signed and who rejected. The member projection
+    # (the request's member) shows progress and why, never who. On the FRAUD
+    # PATH (looks_wrong) it shows "referred" and no reason at all: Stage 5's rule
+    # is that it does not go back to the requester, who may be part of it.
+
+    ApprovalStatus:
+      type: string
+      enum: [awaiting, approved, rejected, expired, referred]
+      description: |
+        referred appears ONLY in the member projection, for a request rejected as
+        looks_wrong: the member learns it is with the society's committee,
+        nothing more.
+
+    RejectionReason:
+      type: string
+      description: Stage 5's four reasons, four different outcomes (frontend lib/approvals.ts).
+      enum: [documents_missing, amount_wrong, not_eligible, looks_wrong]
+
+    ApprovalSignature:
+      type: object
+      required: [userId, memberId, post, signedAt]
+      properties:
+        userId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        post: { $ref: '#/components/schemas/OfficerPost' }
+        signedAt: { type: string, format: date-time }
+
+    ApprovalRejection:
+      type: object
+      required: [reason, note, rejectedAt, byUserId, byPost]
+      properties:
+        reason: { $ref: '#/components/schemas/RejectionReason' }
+        note: { type: string, nullable: true }
+        rejectedAt: { type: string, format: date-time }
+        byUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: NULL in the member projection. The member is told why, never by whom.
+        byPost:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/OfficerPost' }]
+
+    ApprovalView:
+      type: object
+      required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
+                 projection, status, signedCount, signatures, rejection, escalated]
+      properties:
+        requestId: { type: string, format: uuid }
+        societyId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/MovementKind' }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        memberId: { type: string, format: uuid, nullable: true }
+        loanId: { type: string, format: uuid, nullable: true }
+        reason:
+          type: string
+          nullable: true
+          description: Why the request was raised (a write-off's stated reason).
+        required: { type: integer }
+        raisedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        projection:
+          type: string
+          enum: [member, officer]
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        signedCount:
+          type: integer
+          description: Distinct people who have signed. Both projections.
+        signatures:
+          type: array
+          nullable: true
+          description: Who signed, in what post, when. NULL in the member projection.
+          items: { $ref: '#/components/schemas/ApprovalSignature' }
+        rejection:
+          nullable: true
+          description: NULL until rejected; NULL in the member projection on the fraud path.
+          allOf: [{ $ref: '#/components/schemas/ApprovalRejection' }]
+        escalated:
+          type: boolean
+          description: True when rejected as looks_wrong (to the committee and the auditor). Always false in the member projection.
+
+    SignApproval:
+      type: object
+      required: [pinProofId]
+      properties:
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof from POST /auth/pin-proofs with act approval_signature, minted by the signer.
+
+    RejectApproval:
+      type: object
+      required: [pinProofId, reason]
+      properties:
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof from POST /auth/pin-proofs with act approval_rejection, minted by the rejecter.
+        reason: { $ref: '#/components/schemas/RejectionReason' }
+        note:
+          type: string
+          description: Required for looks_wrong; optional otherwise.
 
     Problem:
       type: object
@@ -1191,6 +1298,127 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
           description: No such society, or one the caller may not read. Indistinguishable by design.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---- Approvals. Who reads a request: an officer of its society holding a
+  # current post (the auditor included), or the request's member. Anyone else:
+  # 404, byte-identical to a request that does not exist. Signing and
+  # rejecting: a current SIGNATORY, with their own PIN step-up.
+  /approvals/{requestId}:
+    get:
+      operationId: getApproval
+      summary: One approval request, in the caller's projection
+      security: [{ session: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalView' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such request, or one the caller may not read. Indistinguishable by design."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /approvals/{requestId}/signatures:
+    post:
+      operationId: signApproval
+      summary: Sign a request, resting on the signer's own PIN step-up
+      security: [{ session: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignApproval' }
+      responses:
+        '201':
+          description: Signed. The request, officer projection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalView' }
+        '400':
+          description: "bad_request: the body is malformed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for approval_signature, the caller's own, unspent); not_a_signatory (no current signing post here, the auditor included); conflict_of_interest (the borrower or a guarantor of the loan the request is for)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such request, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "request_closed (expired or rejected); already_signed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /approvals/{requestId}/rejections:
+    post:
+      operationId: rejectApproval
+      summary: Reject a request with one of the four reasons, resting on the rejecter's own PIN step-up
+      security: [{ session: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectApproval' }
+      responses:
+        '201':
+          description: Rejected. The request, officer projection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalView' }
+        '400':
+          description: "bad_request: the body is malformed, or the reason is not one of the four."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_a_signatory."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such request, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "request_closed (approved, expired or already rejected); signed_cannot_reject (the caller signed it)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "note_required: looks_wrong goes to the committee and the auditor with the words that sent it."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

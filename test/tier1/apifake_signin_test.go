@@ -51,7 +51,7 @@ func (f *fakeAPI) expiry(ctx context.Context, token string, surface *api.SignInR
 		THEN interval '8 hours' ELSE interval '30 days' END FROM auth_sessions WHERE token_digest = $1`, sha(token)).Scan(&at); err != nil {
 		return nil
 	}
-	if f.brk == "expiry_from_surface" && surface != nil && *surface == api.SignInRequestSurfaceMember {
+	if f.brk == "expiry_from_surface" && surface != nil && *surface == api.SignInRequestSurface("member") {
 		at = time.Now().Add(30 * 24 * time.Hour)
 	}
 	return &at

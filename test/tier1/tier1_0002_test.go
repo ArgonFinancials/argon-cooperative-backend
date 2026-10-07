@@ -350,7 +350,49 @@ func (s *soc) request() string {
 }
 
 func (s *soc) sign(req, member, post string) error {
-	return one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($1, $2, $3)`, req, member, post)
+	return onStepUp(s.t, "signatory_approvals", "approval_signature", userOf(s.t, member),
+		"request_id, member_id, post_at_signing", req, member, post)
+}
+
+// userOf: the person behind a member record, "" for none.
+func userOf(t *testing.T, member string) string {
+	var u *string
+	fixture(t, db.QueryRow(bg(), `SELECT user_id FROM members WHERE id = $1`, member).Scan(&u), "the member's user")
+	if u == nil {
+		return ""
+	}
+	return *u
+}
+
+// onStepUp inserts one signature or rejection resting on `actor`'s own
+// step-up act of `kind`, taken in the same transaction, where the schema has
+// them (0010). Before 0010 a row names no act; nor does one by a member record
+// with no person behind it, who can take no step-up. A fixture that carries
+// its act is refused only by the rule its test is about.
+func onStepUp(t *testing.T, table, kind, actor, cols string, args ...any) error {
+	ph := func(n int) string {
+		p := make([]string, n)
+		for i := range p {
+			p[i] = fmt.Sprintf("$%d", i+1)
+		}
+		return strings.Join(p, ", ")
+	}
+	var acts bool
+	fixture(t, db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'act_id')`, table).Scan(&acts), "information_schema")
+	if !acts || actor == "" {
+		return one(fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, table, cols, ph(len(args))), args...)
+	}
+	proof := stepUp(t, actor, kind)
+	return tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ($1, $2, $3) RETURNING id`,
+			kind, actor, proof).Scan(&act); err != nil {
+			return fmt.Errorf("FIXTURE: the step-up act: %w", err)
+		}
+		_, err := x.Exec(bg(), fmt.Sprintf(`INSERT INTO %s (%s, act_id) VALUES (%s)`, table, cols, ph(len(args)+1)), append(args, act)...)
+		return err
+	})
 }
 
 type entry struct {
@@ -593,7 +635,7 @@ func TestU2_SuppliedUserMustBeTheMembersUser(t *testing.T) {
 	p, q := s.user("P"), s.user("Q")
 	a := s.signatory(p, "treasurer")
 	req := s.request()
-	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, user_id) VALUES ($1, $2, 'treasurer', $3)`, req, a, q),
+	refused(t, onStepUp(t, "signatory_approvals", "approval_signature", p, "request_id, member_id, post_at_signing, user_id", req, a, "treasurer", q),
 		"a signature by P's member record recorded as user Q",
 		want{codes: []string{"23514"}, constraint: "signatory_user_is_member_user"})
 }
@@ -603,7 +645,7 @@ func TestU2_Control_SuppliedMatchingUserIsAccepted(t *testing.T) {
 	p := s.user("P")
 	a := s.signatory(p, "treasurer")
 	req := s.request()
-	accepted(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, user_id) VALUES ($1, $2, 'treasurer', $3)`, req, a, p),
+	accepted(t, onStepUp(t, "signatory_approvals", "approval_signature", p, "request_id, member_id, post_at_signing, user_id", req, a, "treasurer", p),
 		"a signature whose supplied user matches the member record's user")
 }
 
@@ -787,7 +829,7 @@ func TestS2_NotYetStartedAppointmentCannotSign(t *testing.T) {
 func TestS3_CallerCannotSupplySignedAt(t *testing.T) {
 	s := newSociety(t)
 	a := s.signatory(s.user("Treasurer"), "treasurer")
-	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, signed_at) VALUES ($1, $2, 'treasurer', '2026-01-15')`, s.request(), a),
+	refused(t, onStepUp(t, "signatory_approvals", "approval_signature", userOf(t, a), "request_id, member_id, post_at_signing, signed_at", s.request(), a, "treasurer", "2026-01-15"),
 		"a current signatory's signature with a caller-supplied signed_at", wSignedAtIsNow)
 }
 
@@ -797,7 +839,7 @@ func TestS3_EndedSignatoryCannotBackdateIntoTheirTerm(t *testing.T) {
 	s := newSociety(t)
 	a := s.member(s.user("Former treasurer"))
 	fixture(t, s.appoint(a, "treasurer", true, "2020-01-01", "2020-12-31"), "treasurer term that ended in 2020")
-	refused(t, one(`INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, signed_at) VALUES ($1, $2, 'treasurer', '2020-06-01')`, s.request(), a),
+	refused(t, onStepUp(t, "signatory_approvals", "approval_signature", userOf(t, a), "request_id, member_id, post_at_signing, signed_at", s.request(), a, "treasurer", "2020-06-01"),
 		"an ex-treasurer's signature back-dated to June 2020, inside their old term", wSignedAtIsNow, wHoldsSigningPost)
 }
 
