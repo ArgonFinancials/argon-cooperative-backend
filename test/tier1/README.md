@@ -166,6 +166,45 @@ on `permission denied for table signatory_approvals`. With the grant back, it
 passed. A migration that adds a column, trigger or function the app depends on
 also adds the probe cases that exercise it as argon_app.
 
+**The same step one layer up (2026-10-08): the API suites' GREEN runs the real
+server as the roles production gives it.** Hand-checking the handlers' reads
+as argon_app was how findings 16 and 25 got through, so it is replaced, not
+relied on. Now in GREEN:
+- grants.sql is applied to the test database;
+- the real handlers run on an argon_app connection, and the real auth service
+  on an argon_auth connection, as cmd/api does (`roles_test.go`);
+- each role is read back from the server (`current_user`), not taken from the
+  URL;
+- fixtures are still written as the owner, because they are the world the
+  server finds, not what it does;
+- the fakes keep the owner's connection, because grants.sql fits only the
+  real schema.
+
+There is no quiet fallback: a real-server test with no role connections fails
+as a broken fixture, naming what to set. The drill does the same against its
+restored copy's grants.
+
+Proved in the commit that adds it, one fault at a time:
+- **(a)** argon_app loses SELECT on `approval_rejections`. approvals_api GREEN
+  goes red, signing and reading answer 500, and the run fails. The owner-run
+  suite had been 18/18 against the same grants.
+- **(b)** No role URLs. 144 API tests fail, each naming what to set. The one
+  that passes tests the SMS refusal and uses no server.
+- **(c)** A broken grants.sql. The run says "GREEN SETUP FAILED" and gives the
+  database's error.
+
+It found one fixture the owner had been covering for. The batch suite's
+fault injector counted its hits in sequences only the owner may use, and the
+fault now fires inside argon_app's transaction. The instrument now runs with
+its creator's rights (SECURITY DEFINER); the app's grants are unchanged.
+
+**And a defect in the instrument, as every new one has had:** GREEN's setup
+failing (the first attempt: grants.sql revokes on migrate's `schema_migrations`,
+which the file-by-file schema did not have) printed "NOT RUN" once per test and
+no reason. M0 and the mutants already said "SCHEMA DID NOT APPLY" with the
+reason; GREEN now says "GREEN SETUP FAILED" with it (proved by (c)). The test
+database now gets `schema_migrations` as migrate creates it.
+
 **Also from 0007 (a test of mine):** a control that cannot pass against M0 is
 not a control; it is a rule test in the wrong column. "Two of three
 approves" first went in as a control; on M0 nothing ever reads `approved`, so

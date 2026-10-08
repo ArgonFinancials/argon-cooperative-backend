@@ -311,7 +311,11 @@ func inject(t *testing.T, society, member, action string) *fault {
 		   ELSIF NEW.member_id = '%s' THEN
 		     PERFORM nextval('%s'); %s;
 		   END IF;
-		   RETURN NEW; END $f$ LANGUAGE plpgsql`, f.name, society, f.seen, member, f.hits, action),
+		   RETURN NEW; END $f$ LANGUAGE plpgsql
+		   -- The instrument runs with its creator's rights: the real server
+		   -- writes as argon_app (roles_test.go), which is granted nothing on
+		   -- a test's counters, and should not be.
+		   SECURITY DEFINER SET search_path = public, pg_temp`, f.name, society, f.seen, member, f.hits, action),
 		fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON ledger_lines FOR EACH ROW EXECUTE FUNCTION %s()`, f.name, f.name),
 		fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON ledger_entries FOR EACH ROW EXECUTE FUNCTION %s()`, f.name, f.name),
 	} {

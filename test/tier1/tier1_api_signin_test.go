@@ -45,21 +45,26 @@ import (
 
 // ---- servers ----------------------------------------------------------------
 
-// authServer: the API with an auth service whose SMS is sms, on pool (nil:
-// the test database as it is; else e.g. a pool whose clock is set ahead).
-func authServer(t *testing.T, sms auth.SMS, pool *pgxpool.Pool) *httptest.Server {
+// authServer: the API with an auth service whose SMS is sms, its clock
+// `ahead` of now (0: now; later: "the same server, later"). The real server
+// runs on the roles production gives it (roles_test.go); a fake on the owner.
+func authServer(t *testing.T, sms auth.SMS, ahead time.Duration) *httptest.Server {
 	t.Helper()
-	if pool == nil {
-		pool = db
-	}
-	deps := auth.Deps{DB: pool, SMS: sms, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon}
+	deps := auth.Deps{SMS: sms, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon}
 	var h http.Handler
 	if brk, ok := os.LookupEnv("ARGON_TEST_API_FAKE"); ok {
+		pool := db
+		if ahead != 0 {
+			pool = poolAt(t, ahead)
+		}
+		deps.DB = pool
 		h = newFakeAPIWith(&fakeAPI{db: pool, brk: brk, deps: deps})
 	} else {
+		app, authp := rolePools(t, ahead)
+		deps.DB = authp
 		svc, err := auth.New(deps)
 		fixture(t, err, "the auth service")
-		h, err = api.NewServer(api.Deps{DB: pool, Auth: svc})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc})
 		fixture(t, err, "the API")
 	}
 	srv := httptest.NewServer(h)
@@ -191,7 +196,7 @@ func statementOf(t *testing.T, srv *httptest.Server, member, token string) resp 
 // =============================================================================
 
 func TestApiSignIn01_KnownDeviceSignsInAndReachesTheMembersOwnStatement(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	tok, _ := signedIn(t, signInAs(t, srv, p.number, signPIN, p.device, "member"))
 	if r := statementOf(t, srv, p.member, tok); r.status != http.StatusOK {
@@ -200,7 +205,7 @@ func TestApiSignIn01_KnownDeviceSignsInAndReachesTheMembersOwnStatement(t *testi
 }
 
 func TestApiSignIn02_WithoutASessionNothingIsReachable(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	s := newSociety(t)
 	p := newSigner(t, s, "Member", "", false)
 	for _, token := range []string{"", "not-a-session-" + digest()} {
@@ -218,7 +223,7 @@ func TestApiSignIn02_WithoutASessionNothingIsReachable(t *testing.T) {
 }
 
 func TestApiSignIn03_SignedOutSessionReachesNothing(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	tok, _ := signedIn(t, signInAs(t, srv, p.number, signPIN, p.device, ""))
 	if r := postJSON(t, srv, "/auth/sign-out", tok, nil); r.status != http.StatusNoContent {
@@ -235,18 +240,18 @@ func TestApiSignIn03_SignedOutSessionReachesNothing(t *testing.T) {
 // A member's session lasts 30 days: reachable at day 29, not at day 31.
 func TestApiSignIn04_ExpiredSessionReachesNothing(t *testing.T) {
 	p := newSigner(t, newSociety(t), "Member", "", false)
-	tok, _ := signedIn(t, signInAs(t, authServer(t, &fakeSMS{}, nil), p.number, signPIN, p.device, ""))
-	if r := statementOf(t, authServer(t, &fakeSMS{}, poolAt(t, 29*24*time.Hour)), p.member, tok); r.status != http.StatusOK {
+	tok, _ := signedIn(t, signInAs(t, authServer(t, &fakeSMS{}, 0), p.number, signPIN, p.device, ""))
+	if r := statementOf(t, authServer(t, &fakeSMS{}, 29*24*time.Hour), p.member, tok); r.status != http.StatusOK {
 		t.Fatalf("FIXTURE: a member's session did not reach day 29: %d %s", r.status, r.body)
 	}
-	if r := statementOf(t, authServer(t, &fakeSMS{}, poolAt(t, 31*24*time.Hour)), p.member, tok); r.status != http.StatusUnauthorized {
+	if r := statementOf(t, authServer(t, &fakeSMS{}, 31*24*time.Hour), p.member, tok); r.status != http.StatusUnauthorized {
 		t.Fatalf("REACHED — a member's session still worked at day 31: %d", r.status)
 	}
 }
 
 // A valid session, for the wrong society: as if the society did not exist.
 func TestApiSignIn05_SessionDoesNotReachAnotherSociety(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	here, there := newSociety(t), newSociety(t)
 	p := newSigner(t, here, "Secretary", "secretary", true)
 	theirs := there.member("")
@@ -270,7 +275,7 @@ func TestApiSignIn05_SessionDoesNotReachAnotherSociety(t *testing.T) {
 // =============================================================================
 
 func TestApiSignIn06_UnknownCredentialAndWrongPinAnswerIdentically(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	a := signInAs(t, srv, unregistered(), "0000", "", "")
 	b := signInAs(t, srv, p.number, "0000", p.device, "")
@@ -282,7 +287,7 @@ func TestApiSignIn06_UnknownCredentialAndWrongPinAnswerIdentically(t *testing.T)
 // The identical answer proves nothing if the real account takes measurably
 // longer because it hashed a PIN: the timing says which numbers exist.
 func TestApiSignIn07_RefusalTimingDoesNotRevealRegistration(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	s := newSociety(t)
 	var known, unknown []time.Duration
 	for i := 0; i < 11; i++ {
@@ -312,7 +317,7 @@ func TestApiSignIn07_RefusalTimingDoesNotRevealRegistration(t *testing.T) {
 // Shared family phones are common: two members, two societies, one number.
 // The right PIN for either routes to an officer; nobody is signed in.
 func TestApiSignIn08_SharedPhoneAcrossSocietiesSignsNobodyIn(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	a := newSigner(t, newSociety(t), "Parent", "", false)
 	there := newSociety(t)
 	var bUser, bMember string
@@ -337,7 +342,7 @@ func TestApiSignIn08_SharedPhoneAcrossSocietiesSignsNobodyIn(t *testing.T) {
 // An approver is also a member. Signing in on the member surface must not
 // grant a member's 30 days: 8 hours, as for any post held.
 func TestApiSignIn09_ApproversSessionIsEightHoursOnAnySurface(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	s := newSociety(t)
 	approver := newSigner(t, s, "Treasurer", "treasurer", true)
 	member := newSigner(t, s, "Member", "", false)
@@ -349,7 +354,7 @@ func TestApiSignIn09_ApproversSessionIsEightHoursOnAnySurface(t *testing.T) {
 	if d := time.Until(mExp); d < 29*24*time.Hour {
 		t.Fatalf("FIXTURE: a plain member's session was reported to last %s, not 30 days", d.Round(time.Hour))
 	}
-	later := authServer(t, &fakeSMS{}, poolAt(t, 9*time.Hour))
+	later := authServer(t, &fakeSMS{}, 9*time.Hour)
 	if r := statementOf(t, later, approver.member, at); r.status != http.StatusUnauthorized {
 		t.Fatalf("OVERLONG — the approver's member-surface session still worked after 9 hours: %d", r.status)
 	}
@@ -405,7 +410,7 @@ func refusingSMS(buf *bytes.Buffer) auth.SMS {
 
 func TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy(t *testing.T) {
 	var logs bytes.Buffer
-	srv := authServer(t, refusingSMS(&logs), nil)
+	srv := authServer(t, refusingSMS(&logs), 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	o := outcome(t, signInAs(t, srv, p.number, signPIN, "", ""), "see_officer") // no device token: a new device
 	if o.Reason == nil || *o.Reason != "sms_unavailable" || o.Message == nil || !strings.Contains(strings.ToLower(*o.Message), "temporar") {
@@ -439,7 +444,7 @@ func TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary(t *testing.T) 
 
 func TestApiSignIn12_NewDeviceCodeCompletesSignIn(t *testing.T) {
 	sms := &fakeSMS{}
-	srv := authServer(t, sms, nil)
+	srv := authServer(t, sms, 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	o := outcome(t, signInAs(t, srv, p.number, signPIN, "", ""), "code_sent")
 	if o.Challenge == nil || strings.Contains(*o.Challenge, sms.lastCode(t)) {
@@ -461,7 +466,7 @@ func TestApiSignIn12_NewDeviceCodeCompletesSignIn(t *testing.T) {
 }
 
 func TestApiSignIn13_LockedAccountIsTryLaterEvenWithTheRightPin(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	for i := 0; i < 5; i++ {
 		signInAs(t, srv, p.number, "0000", p.device, "")
@@ -483,7 +488,7 @@ func TestApiSignIn13_LockedAccountIsTryLaterEvenWithTheRightPin(t *testing.T) {
 // uuid) answer in the same JSON Problem as every other refusal. Two error
 // formats is two contracts: the frontend parses one and breaks on the other.
 func TestApiSignIn14_MalformedRequestsAnswerTheOneErrorFormat(t *testing.T) {
-	srv := authServer(t, &fakeSMS{}, nil)
+	srv := authServer(t, &fakeSMS{}, 0)
 	s := newSociety(t)
 	p := newSigner(t, s, "Secretary", "secretary", true)
 	tok, _ := signedIn(t, signInAs(t, srv, p.number, signPIN, p.device, ""))

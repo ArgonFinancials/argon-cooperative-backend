@@ -225,20 +225,25 @@ run_tier1() {
   local args=(-test.run "$re" -test.count=1 -test.v)
   [[ -n $skip ]] && args+=(-test.skip "$skip")
   log=$(mktemp)
-  require_env ARGON_MIGRATOR_PASSWORD
+  require_env ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD
   local mig="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+  # The real server's roles (test/tier1/roles_test.go): the API suites run the
+  # real handlers as argon_app and the auth service as argon_auth, against the
+  # grants the restored copy carries.
+  local app="postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+  local authu="postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
   if [[ $TARGET == docker || $TARGET == local ]]; then
     bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$EXE}"
     if [[ -z ${TIER1_BIN:-} ]]; then
       (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
     fi
     ARGON_TEST_ADMIN_URL="$(admin_url)" \
-    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
+    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu"     ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
   else
     bin="${TIER1_BIN:-/opt/argon/bin/tier1.test}"
     [[ -x $bin ]] || die "$bin missing — run 30-install-api.sh"
     sudo -u postgres env ARGON_TEST_ADMIN_URL="postgres://postgres@/postgres?host=/var/run/postgresql" \
-      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
+      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu"       ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?   # argv: finding 30
   fi
   # A test binary prints PASS when its filter matches NOTHING. Count what ran.
   local passed failed

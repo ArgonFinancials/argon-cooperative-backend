@@ -47,12 +47,14 @@ func apiServer(t *testing.T) *httptest.Server {
 	} else {
 		var err error
 		// The real server, with the real auth service for the step-up (its
-		// SMS and notifier are the service tests' fakes; nothing here sends).
-		svc, serr := auth.New(auth.Deps{DB: db, SMS: &fakeSMS{}, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon})
+		// SMS and notifier are the service tests' fakes; nothing here sends),
+		// each on the role production gives it (roles_test.go).
+		app, authp := rolePools(t, 0)
+		svc, serr := auth.New(auth.Deps{DB: authp, SMS: &fakeSMS{}, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon})
 		if serr != nil {
 			t.Fatalf("FIXTURE: cannot construct the auth service: %v", serr)
 		}
-		h, err = api.NewServer(api.Deps{DB: db, Auth: svc})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc})
 		if err != nil {
 			t.Fatalf("FIXTURE: cannot construct the API: %v", err)
 		}

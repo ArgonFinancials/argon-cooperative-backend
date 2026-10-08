@@ -149,6 +149,14 @@ func run(m *testing.M) int {
 			return 2
 		}
 	}
+	// The real server's connections, as in production (cmd/api): the API as
+	// argon_app, the auth service as argon_auth (findings 16 and 25, one layer
+	// up). Made only where the database carries the real grants: grants.sql
+	// applied here (ARGON_TEST_GRANTS, GREEN), or a restored copy (the drill).
+	if code := openRolePools(ctx, ac, name, existing != ""); code != 0 {
+		return code
+	}
+	defer closeRolePools()
 	code := m.Run()
 	// Each process owns [base, base + seqRange). Asserted, not assumed: a run
 	// that used more would re-create the next range's member numbers and

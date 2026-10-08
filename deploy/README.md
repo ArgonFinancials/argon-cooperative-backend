@@ -148,6 +148,31 @@ what fails says more about the scripts than what passes.
 | 26 | Tracing the probe with `bash -x` printed the local `ARGON_AUTH_PASSWORD` into a session transcript: `require_env` tests `[[ -n "${!v}" ]]`, and the trace shows the expanded value. Local development database only. | The trace was the right diagnostic move; the exposure came from tracing WITH THE ENVIRONMENT LOADED. That is the specific trap: never trace a script that has loaded an env file. Use the script's own error output, or capture stderr of the failing statement. The local password was rotated 2026-10-07 (new accepted, old refused, neither printed). |
 | 27 | Moving the fixtures onto step-up acts changed what TestSignStep6 sent: `w.reject` now supplies the rejecter's act, so "a rejection with no step-up" carried one. The mutation run still reported the test red on its mutant, because red means "the refusal did not come", and an accepted rejection is red for any implementation, the correct one included. Only GREEN, which could not run until 0010 existed, showed it (11/12). | A refusal test whose fixture satisfies the rule is red on every mutant and looks proved. When a fixture helper changes, re-read every refusal test that goes through it and ask what it now sends. Test 6 now writes its rejection out with no act, as test 1 does. |
 | 28 | The step added for finding 25 failed in CI on every migration suite, and said nothing. The runner had no `migrate` CLI (the suites apply SQL directly; the probe builds its database with migrate), and mutate.sh showed only the probe lines matching its filter. The probe's own death message matched none of them. My local proof had been run where the tool exists. | Finding 23's class, in the instrument I had just built: a failure with no reason shown. mutate.sh now always shows the probe's last lines on a failure, proved by making migrate unavailable (it shows "migrate not found"). CI installs the server's pinned migrate version and reads the version back from the binary. |
+| 29 | **UNEXPLAINED, NOT RESOLVED.** On 2026-10-07 one local run of suite 0002 (`mutate.sh 0002 --svc`, inside a loop over every suite) printed GREEN 53/53 and "probe passes", then no verdict line at all: neither the all-clear nor "mutation run FAILED". Every other suite in the same loop printed one. A rerun printed the full all-clear. The cause is not known. | An unexplained quiet run in a verification suite is the shape that has bitten repeatedly (findings 11, 23, 28). "A rerun was fine" is not a diagnosis. Open until the cause is found. If it recurs, keep the whole output, not a filtered summary: the loop that hit it kept only grep matches, which is why there is nothing to read. |
+| 30 | **Open gap.** On the server, the drill's `run_tier1` starts the test binary through `sudo -u postgres env VAR=… bin`, and the database URLs it passes carry passwords. `env`'s arguments are visible in the process list to any local user for the run's duration. This was already true of the migrator's URL; the app-role step (2026-10-07) follows the same pattern for argon_app and argon_auth, because a different mechanism on the server path cannot be tested from here. | Fix on the server path, tested there: pass the URLs through the environment (`sudo --preserve-env=…` or a 0600 env file read by a wrapper), never argv, then confirm with `ps` during a drill that no password appears. Same family as finding 26: a secret's exposure that comes from the mechanism, not the intent. |
+
+**Habit: when a shared fixture changes, re-read every test that depends on it
+before trusting the run (finding 27).** A mutation run proves a test fails
+against a BROKEN implementation. It cannot prove the test still tests what it
+says, because a test asserting nothing also fails against a broken one. Only
+the GREEN half catches that, and GREEN runs last; for a migration not yet
+written, it does not run at all. Moving the fixtures onto step-up acts disarmed
+TestSignStep6, the mutation run counted it as proved, and only GREEN caught it.
+
+**Rule: a new check is not trusted until it has been made to fail on purpose,
+in the same commit that adds it.** Every new instrument in this project has
+had a defect, and each looked like success:
+- the deploy watcher, which took an old run for a new one (finding 18), and a
+  second watcher on 2026-10-07 whose lookup never matched, so it would have
+  polled silently for an hour;
+- the crawler;
+- the test lister, which found zero tests;
+- probe case P21, which passed on an UPDATE of zero rows;
+- the drill, which said FAILED without a reason (finding 11);
+- the app-role probe step, which failed in CI and said nothing (finding 28).
+
+So the commit that adds a check also shows it failing: a planted fault, the
+failure it produces, and the reason it gives.
 
 **Habit: a control is not a control until you have read it back from the
 system that enforces it.** The click succeeding is not the control existing.

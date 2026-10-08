@@ -21,7 +21,7 @@
 # counting an absent half as a pass.
 source "$(dirname "$0")/../../deploy/lib.sh"
 [[ $TARGET != host ]] || die "the mutation suite runs on a local server (TARGET=docker or local), never the EC2 host"
-require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD
+require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
@@ -40,6 +40,10 @@ BIN="$REPO_DIR/bin/tier1.test$EXE"
 REPO_DIR="$(native "$REPO_DIR")"
 export ARGON_TEST_ADMIN_URL="$(admin_url)"
 export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+# The real server's roles (test/tier1/roles_test.go). Used only where the real
+# grants are applied: GREEN, below. Exported, never argv: they carry passwords.
+export ARGON_TEST_APP_URL="postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+export ARGON_TEST_AUTH_URL="postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
 
 # shellcheck disable=SC1090
 source "$HERE/suite_$SUITE.sh"
@@ -116,8 +120,15 @@ if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
   REAL=$(ls "$REPO_DIR"/migrations/*.up.sql | sort | tr '\n' ',' | sed 's/,$//')
   info "GREEN: the real migrations"
   # The real code: the fake's variable must be UNSET here, or GREEN would test the fake.
-  run "$REAL" GREEN "${SUITE_GREEN_RUN:-$SUITE_RUN}" -u "$SVC_ENV"
+  # And as the roles production uses: grants.sql applied, the real server on
+  # argon_app and argon_auth connections (findings 16 and 25, one layer up).
+  run "$REAL" GREEN "${SUITE_GREEN_RUN:-$SUITE_RUN}" -u "$SVC_ENV" ARGON_TEST_GRANTS="$(native "$REPO_DIR/deploy/sql/grants.sql")"
   green_n=0
+  # A setup that died (schema, grants, the role connections) runs no test:
+  # say why, not "NOT RUN" once per test.
+  if grep -q '^__SETUP__' "$out/GREEN.status"; then
+    printf '   \033[31mGREEN SETUP FAILED\033[0m %s\n' "$(cut -d' ' -f3- "$out/GREEN.status" | sed -E 's#postgres://[^ ]*#<url>#g')"; fail=1
+  fi
   for t in "${ALL[@]}"; do
     st=$(status_of "$t" GREEN)
     if [[ $st == PASS ]]; then green_n=$((green_n+1))
