@@ -195,6 +195,9 @@ func newWorld(t *testing.T) *world {
 	fixture(t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Officer elsewhere') RETURNING id`).Scan(&wd.elsewhere), "user")
 	em = elsewhere.member(wd.elsewhere)
 	fixture(t, elsewhere.appoint(em, "chairman", true, "2020-01-01", ""), "officer of another society")
+	// The contribution below carries §7a's charges: the society charges them
+	// (0011: an entry carries the schedule's charge, not one it was given).
+	wd.c.chargesLike7a(t)
 
 	post := func(e entry, ls ...line) string {
 		id, err := s.postEntry(e, ls...)
@@ -391,8 +394,11 @@ func TestApiStatement9_DirectionComesFromTheSavingsLine(t *testing.T) {
 // be told apart.)
 func TestApiStatement10_RowsInValueDateOrder(t *testing.T) {
 	wd := newWorld(t)
+	// Charged as its society charges (§7a's split; 0011 requires the
+	// schedule's charge). This test is about order, not amounts.
 	eBack, err := wd.c.s.postEntry(entry{kind: "contribution_in", valueDate: "2026-01-10"},
-		line{acct: wd.c.bank, kobo: 10000}, line{acct: wd.c.savings, kobo: -10000, member: wd.member})
+		line{acct: wd.c.bank, kobo: 10000}, line{acct: wd.c.savings, kobo: -9965, member: wd.member},
+		line{acct: wd.c.partner, kobo: -20, role: "partner_charge"}, line{acct: wd.c.margin, kobo: -15, role: "argon_margin"})
 	fixture(t, err, "a contribution dated January, posted last")
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	got := []string{}

@@ -59,9 +59,9 @@ func newApprovals(t *testing.T) *aworld {
 func (w *aworld) expired(t *testing.T) string {
 	t.Helper()
 	var id string
-	fixture(t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, 'withdrawal_out', 50000000, 2, now() - interval '1 day') RETURNING id`,
-		w.s.id, "APR-X-"+digest()[:12]).Scan(&id), "an expired request")
+	fixture(t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
+		VALUES ($1, $2, $3, 'withdrawal_out', 50000000, 2, now() - interval '1 day') RETURNING id`,
+		w.s.id, "APR-X-"+digest()[:12], w.s.holder()).Scan(&id), "an expired request")
 	return id
 }
 
@@ -77,8 +77,10 @@ func (w *aworld) rejectNote(req, member, user, post, reason, note string) error 
 
 // resubmit raises a new request that points at `original`.
 func (w *aworld) resubmit(society, original string) error {
-	return one(`INSERT INTO approval_requests (society_id, reference, kind, amount_kobo, required, expires_at, resubmits_id)
-		VALUES ($1, $2, 'withdrawal_out', 50000000, 2, now() + interval '1 day', $3)`, society, "APR-R-"+digest()[:12], original)
+	// The resubmission is for the same member as the original.
+	return one(`INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at, resubmits_id)
+		VALUES ($1, $2, (SELECT member_id FROM approval_requests WHERE id = $3), 'withdrawal_out', 50000000, 2, now() + interval '1 day', $3)`,
+		society, "APR-R-"+digest()[:12], original)
 }
 
 // status reads THE status, as at `at` ("" = now).

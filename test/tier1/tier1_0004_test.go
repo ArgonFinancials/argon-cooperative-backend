@@ -116,6 +116,7 @@ func TestRoleR5_RoleIsFinalOnceUsed(t *testing.T) {
 
 func TestRole_Control_ContributionWithEveryRoleRight(t *testing.T) {
 	c := newChart(t)
+	c.chargesLike7a(t) // 0011: the charge is the schedule's, so the society has one
 	accepted(t, c.post(
 		line{acct: c.bank, kobo: 2500000},
 		line{acct: c.savings, kobo: -2491250, member: c.member},

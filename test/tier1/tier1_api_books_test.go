@@ -94,6 +94,9 @@ func newBooks(t *testing.T) *books {
 	b.abroad = b.t.s.user("Chairman of another society")
 	fixture(t, b.t.s.appoint(b.t.s.member(b.abroad), "chairman", true, "2020-01-01", ""), "officer elsewhere")
 	b.otherActor = s.user("Secretary (actor)")
+	// The contributions below carry §7a's charges: the society charges them
+	// (0011: an entry carries the schedule's charge, not one it was given).
+	b.c.chargesLike7a(t)
 
 	post := func(e entry, ls ...line) string {
 		id, err := s.postEntry(e, ls...)

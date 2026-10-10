@@ -195,6 +195,8 @@ does not sum to zero.
 | Partner charge vs Argon margin recorded separately | Commercial | **Must be separate.** See below. |
 | VFD balance vs Argon ledger: which is the record of account | Legal + Product | **DISPUTED** (2026-10-02): two contradicting claims in this project, the original source unavailable. See below. Blocks anything that reconciles against VFD. |
 | Does a reversal refund the Argon charge? | **Commercial** | **D-02: answered, assumed-pending.** The charge is refunded with the principal. Assumed until Commercial confirms; **blocks shipping.** See below. |
+| **Argon's margin on a regulated fee** | **Legal** | **OPEN (2026-10-09).** If the CBN guide sets a CEILING on what may be charged for a transfer, the question is not "may Argon add a margin on top" but "is Argon's total charge within the cap". That depends on whether Argon charges as a financial institution in its own right, or passes through VFD's fee as the licensed entity. The two have different answers, and the second is our structure. Until answered, a margin can be configured and is refused until set (§9). |
+| Loan interest calculation method | The loan rate's owner | **OPEN (2026-10-09).** Flat on the principal, or on the reducing balance. Separate from movement charges (§9). Until decided, 0008 refuses any rate above zero. |
 | Opening balance contra account | Tier 1 accountant | `opening_balance` posts at zero charge as its own movement kind. What it debits is §7's assumption, not a decision. |
 
 ### The reversal charge is a fairness question before it is an accounting one
@@ -380,3 +382,30 @@ count below an amount, as with the write-off quorum bands.
 **Signing and rejecting a request need the signer's own PIN step-up**,
 consistent with imports and guarantees. A signature is the most attributable
 act in the product.
+
+## 9. Decided 2026-10-09: how charges are configured, who bears them, when a withdrawal is posted
+
+**Charges are banded configuration with no default, refused until set.**
+- **Per society and movement kind:** a schedule, effective from a date, of amount bands. Each band has a flat fee and an optional rate and cap (the cap limits the rate part), for the partner and for Argon's margin **separately**.
+- **Rounding:** a rate rounds half up to the kobo.
+- **The edition is a required field:** a schedule names the edition of the regulation its figures were taken from (for example "CBN Guide to Charges, 2020 edition"), so a later reviewer can see what the numbers came from and whether it still applies.
+- **Nothing is seeded:** a default that becomes stale regulation is worse than a refusal, because nobody reviews a value that is already there.
+- **Who sets it:** an operator, as the owner, until the platform's Finance role exists. The app only reads it.
+- **Corrections:** a schedule is never edited; a correction is a new schedule.
+
+**Sourced-and-unverified:** the CBN figures cited when this was decided were never confirmed:
+- electronic transfers ₦10 below ₦5,000, ₦25 to ₦50,000, ₦50 above;
+- over-the-counter cash withdrawals free within limits;
+- a 2026 revision in draft (circular of 21 April 2026).
+
+They appear only as illustrative test data, marked so, pending the compliance owner confirming the edition and the bands. The shape is right regardless of whether the numbers are.
+
+**Argon's margin can be expressed and is refused until set.** It is never assumed to be zero, nor any figure. That waits on Legal (§6).
+
+**The fee is ON TOP for withdrawals and transfers.** The member receives what they asked for, and amount plus fee must fit within withdrawable. Deducting it would make a member asking for ₦50,000 receive ₦49,950: the undisclosed-gap problem in a different place.
+
+**Contributions carry no charge by default.** A society with no contribution schedule charges none, though the configuration can charge them. §7a assumed a charge; the regulation does not require one.
+
+**An approved withdrawal is posted when an officer records the payout,** on the officer's own PIN step-up, naming the transfer that paid it. Approval authorises; nothing is posted for money not yet paid. A single contribution rests on its poster's own step-up, as an import does.
+
+**Two rates, kept apart.** The movement charge above is not the loan interest rate. The loan rate belongs to loan writes and still needs a calculation method, flat on the principal or on the reducing balance, from the loan rate's owner.

@@ -110,7 +110,7 @@ if [[ $mode == drill ]]; then
   # against what the restore brought back.)
   covered=()
   suites=(
-    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep)"
+    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney)"
     "auth (0003)|^TestAuth|"
     "roles (0004)|^TestRole|"
     "statement API|^TestApiStatement|"

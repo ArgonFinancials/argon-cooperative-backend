@@ -1,0 +1,176 @@
+-- DELIBERATELY WRONG. The act may be of any kind.
+--
+-- Must turn red: TestMoney18_TheActIsForThisMovement.
+BEGIN;
+ALTER TABLE charge_schedules ADD CONSTRAINT charge_schedule_names_edition CHECK (edition IS NOT NULL AND btrim(edition) <> '');
+
+ALTER TABLE charge_bands ADD CONSTRAINT charge_component_whole CHECK (
+  (partner_flat_kobo IS NULL) = (partner_bp IS NULL) AND (partner_cap_kobo IS NULL OR partner_bp IS NOT NULL)
+  AND (margin_flat_kobo IS NULL) = (margin_bp IS NULL) AND (margin_cap_kobo IS NULL OR margin_bp IS NOT NULL));
+
+CREATE FUNCTION charge_configuration_immutable() RETURNS trigger AS $$
+BEGIN
+  PERFORM auth_refuse('charge_configuration_immutable', 'charge configuration is never edited: a correction is a new schedule, effective from a date');
+  RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER charge_schedules_immutable BEFORE UPDATE OR DELETE ON charge_schedules
+  FOR EACH ROW EXECUTE FUNCTION charge_configuration_immutable();
+CREATE TRIGGER charge_bands_immutable BEFORE UPDATE OR DELETE ON charge_bands
+  FOR EACH ROW EXECUTE FUNCTION charge_configuration_immutable();
+
+CREATE FUNCTION charge_bands_disjoint() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM 1 FROM charge_schedules WHERE id = NEW.schedule_id FOR UPDATE;
+  IF EXISTS (SELECT 1 FROM charge_bands b WHERE b.schedule_id = NEW.schedule_id
+              AND b.from_kobo <= coalesce(NEW.to_kobo, 9223372036854775807)
+              AND NEW.from_kobo <= coalesce(b.to_kobo, 9223372036854775807)) THEN
+    PERFORM auth_refuse('charge_bands_do_not_overlap', format('a band from %s kobo overlaps another band of this schedule: an amount would have two charges', NEW.from_kobo));
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER charge_bands_disjoint BEFORE INSERT ON charge_bands FOR EACH ROW EXECUTE FUNCTION charge_bands_disjoint();
+
+CREATE OR REPLACE FUNCTION charge_quote(p_society UUID, p_kind movement_kind, p_amount BIGINT, p_on DATE)
+RETURNS TABLE (partner_kobo BIGINT, margin_kobo BIGINT) SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  s_id UUID;
+  b    charge_bands%ROWTYPE;
+BEGIN
+  SELECT id INTO s_id FROM charge_schedules WHERE society_id = p_society AND kind = p_kind AND effective_from <= p_on
+   ORDER BY effective_from DESC, recorded_at DESC, id DESC LIMIT 1;
+  IF s_id IS NULL THEN
+    IF p_kind = 'contribution_in' THEN partner_kobo := 0; margin_kobo := 0; RETURN NEXT; RETURN; END IF;
+    PERFORM auth_refuse('charge_schedule_unset', format('this society has no %s charge schedule in force on %s', p_kind, p_on));
+  END IF;
+  SELECT * INTO b FROM charge_bands WHERE schedule_id = s_id AND from_kobo <= p_amount AND (to_kobo IS NULL OR to_kobo >= p_amount);
+  IF NOT FOUND THEN
+    PERFORM auth_refuse('charge_band_missing', format('no band of this society''s %s schedule covers %s kobo', p_kind, p_amount));
+  END IF;
+  IF b.partner_bp IS NULL THEN
+    PERFORM auth_refuse('charge_partner_unset', 'the partner''s charge for this band has not been set');
+  END IF;
+  IF b.margin_bp IS NULL THEN
+    PERFORM auth_refuse('charge_margin_unset', 'Argon''s margin for this band has not been set: it waits on Legal, and is never assumed to be zero');
+  END IF;
+  partner_kobo := b.partner_flat_kobo + CASE WHEN b.partner_cap_kobo IS NULL THEN ((p_amount * b.partner_bp + 5000) / 10000) ELSE least(((p_amount * b.partner_bp + 5000) / 10000), b.partner_cap_kobo) END;
+  margin_kobo := b.margin_flat_kobo + CASE WHEN b.margin_cap_kobo IS NULL THEN ((p_amount * b.margin_bp + 5000) / 10000) ELSE least(((p_amount * b.margin_bp + 5000) / 10000), b.margin_cap_kobo) END;
+  RETURN NEXT;
+END $$ LANGUAGE plpgsql STABLE;
+
+CREATE FUNCTION withdrawal_names_its_authority() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NEW.kind <> 'withdrawal_out' OR NEW.reverses_id IS NOT NULL OR NEW.adjusts_id IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.request_id IS NULL THEN PERFORM auth_refuse('withdrawal_names_request', 'money leaves a members savings only on an approved withdrawal request: this payout names none'); END IF;
+  IF NEW.request_id IS NOT NULL AND approval_status(NEW.request_id) <> 'approved' THEN PERFORM auth_refuse('withdrawal_request_approved', format('request %s is %s, not approved', NEW.request_id, approval_status(NEW.request_id))); END IF;
+  IF NEW.payout_reference IS NULL OR btrim(NEW.payout_reference) = '' THEN PERFORM auth_refuse('withdrawal_names_payout_reference', 'a payout names the transfer that paid it'); END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER ledger_entries_w_withdrawal BEFORE INSERT ON ledger_entries
+  FOR EACH ROW EXECUTE FUNCTION withdrawal_names_its_authority();
+
+CREATE UNIQUE INDEX withdrawal_posted_once ON ledger_entries (request_id) WHERE kind = 'withdrawal_out';
+
+CREATE UNIQUE INDEX entry_act_once ON ledger_entries (act_id);
+
+CREATE FUNCTION ledger_entry_settles() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  e        ledger_entries%ROWTYPE;
+  a        RECORD;
+  q        RECORD;
+  r        approval_requests%ROWTYPE;
+  base     BIGINT;
+  p        BIGINT;
+  m        BIGINT;
+  v_debit  BIGINT;
+  v_floor  BIGINT;
+  v_before BIGINT;
+  v_held   BIGINT;
+  v_person UUID;
+BEGIN
+  SELECT * INTO e FROM ledger_entries WHERE id = NEW.id;
+  IF e.kind NOT IN ('contribution_in', 'withdrawal_out') OR e.reverses_id IS NOT NULL OR e.adjusts_id IS NOT NULL THEN
+    RETURN NULL;
+  END IF;
+  IF e.batch_id IS NULL THEN
+    IF e.act_id IS NULL THEN
+      PERFORM auth_refuse('entry_needs_step_up', 'a single contribution or payout rests on its poster''s own PIN step-up: it names its act');
+    ELSE
+      SELECT kind, actor_user_id, act_xid INTO a FROM credential_acts WHERE id = e.act_id;
+      IF a.actor_user_id IS DISTINCT FROM e.actor_user_id THEN PERFORM auth_refuse('entry_act_is_actors', 'an entry rests on its posters own step-up, not someone elses'); END IF;
+      IF a.act_xid IS DISTINCT FROM pg_current_xact_id() THEN PERFORM auth_refuse('entry_act_same_transaction', 'the act and the entry are one event: the act is written in the entrys transaction'); END IF;
+    END IF;
+  END IF;
+
+  SELECT coalesce(abs(sum(l.amount_kobo)), 0) INTO base
+    FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id WHERE l.entry_id = e.id AND ac.role = 'bank';
+  SELECT * INTO q FROM charge_quote(e.society_id, e.kind, base, e.value_date);
+  SELECT coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'partner_charge'), 0),
+         coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'argon_margin'), 0) INTO p, m
+    FROM ledger_lines WHERE entry_id = e.id;
+  IF p <> q.partner_kobo OR m <> q.margin_kobo THEN
+    PERFORM auth_refuse('entry_charge_is_the_schedules', format('by the schedule this %s of %s kobo is charged %s to the partner and %s to Argon; the entry carries %s and %s', e.kind, base, q.partner_kobo, q.margin_kobo, p, m));
+  END IF;
+  IF e.kind = 'contribution_in' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT * INTO r FROM approval_requests WHERE id = e.request_id;
+  SELECT coalesce(sum(l.amount_kobo), 0) INTO v_debit
+    FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id WHERE l.entry_id = e.id AND ac.role = 'member_savings';
+  IF r.kind IS DISTINCT FROM 'withdrawal_out' OR r.society_id IS DISTINCT FROM e.society_id OR base IS DISTINCT FROM r.amount_kobo OR EXISTS (SELECT 1 FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id
+                 WHERE l.entry_id = e.id AND ac.role = 'member_savings' AND l.member_id IS DISTINCT FROM r.member_id) THEN
+    PERFORM auth_refuse('withdrawal_matches_request', format('this payout of %s kobo is not request %s (%s kobo, for member %s)', base, r.id, r.amount_kobo, r.member_id));
+  END IF;
+
+  SELECT account_floor_kobo INTO v_floor FROM societies WHERE id = e.society_id;
+  IF v_floor IS NULL THEN
+    PERFORM auth_refuse('account_floor_unset', 'this society has not set its account floor');
+  END IF;
+  
+  PERFORM 1 FROM members WHERE id = r.member_id FOR UPDATE;   -- one withdrawal at a time per member
+  SELECT coalesce(-sum(l.amount_kobo), 0) INTO v_before
+    FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id
+   WHERE ac.role = 'member_savings' AND l.member_id = r.member_id AND l.entry_id <> e.id;
+  SELECT user_id INTO v_person FROM members WHERE id = r.member_id;
+  SELECT coalesce(sum(greatest(loan_owed(g.loan_id), 0)), 0) INTO v_held
+    FROM loan_guarantees g JOIN loans lo ON lo.id = g.loan_id
+   WHERE (g.guarantor_member_id = r.member_id OR g.guarantor_user_id = v_person) AND NOT EXISTS (SELECT 1 FROM loan_guarantee_withdrawals gw WHERE gw.guarantee_id = g.id);
+  IF r.amount_kobo + q.partner_kobo + q.margin_kobo > v_before - v_held - v_floor THEN
+    PERFORM auth_refuse('withdrawal_within_withdrawable', format('%s kobo out (the amount and its charge) against %s withdrawable: savings %s, held for guarantees %s, floor %s', r.amount_kobo + q.partner_kobo + q.margin_kobo, v_before - v_held - v_floor, v_before, v_held, v_floor));
+  END IF;
+  RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE CONSTRAINT TRIGGER ledger_entries_settle AFTER INSERT ON ledger_entries
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ledger_entry_settles();
+
+CREATE FUNCTION withdrawal_request_admissible() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  q SMALLINT;
+BEGIN
+  IF NEW.kind <> 'withdrawal_out' THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.member_id IS NULL THEN PERFORM auth_refuse('withdrawal_request_names_member', 'a withdrawal request names the member whose savings it moves'); END IF;
+  SELECT withdrawal_signatures_required INTO q FROM societies WHERE id = NEW.society_id;
+  IF q IS NULL THEN PERFORM auth_refuse('withdrawal_quorum_unset', 'this society has not decided how many signatures a withdrawal needs'); END IF;
+  IF q IS NOT NULL AND NEW.required <> q THEN PERFORM auth_refuse('withdrawal_quorum_is_societys', format('this societys withdrawals need %s signatures, not %s', q, NEW.required)); END IF;
+  
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER approval_requests_withdrawal BEFORE INSERT ON approval_requests
+  FOR EACH ROW EXECUTE FUNCTION withdrawal_request_admissible();
+
+CREATE FUNCTION signature_not_requester() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM approval_requests r JOIN members rm ON rm.id = r.member_id
+              WHERE r.id = NEW.request_id AND r.kind = 'withdrawal_out'
+                AND (r.member_id = NEW.member_id OR rm.user_id = (SELECT user_id FROM members WHERE id = NEW.member_id))) THEN
+    PERFORM auth_refuse('requester_never_signs_own_withdrawal', 'the member a withdrawal is for never signs it');
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER signatory_approvals_not_requester BEFORE INSERT ON signatory_approvals
+  FOR EACH ROW EXECUTE FUNCTION signature_not_requester();
+COMMIT;

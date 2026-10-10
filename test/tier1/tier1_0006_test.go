@@ -41,6 +41,7 @@ func TestLineSociety3_MemberLineCannotPostToAnotherSocietysSavings(t *testing.T)
 
 func TestLineSociety_Control_OwnAccountsAccepted(t *testing.T) {
 	s := newChart(t)
+	s.chargesContributions(t, 600, 400, "test data: 6% and 4%, the figures below") // 0011: the charge is the schedule's
 	accepted(t, s.post(line{acct: s.bank, kobo: 10000}, line{acct: s.savings, kobo: -9000, member: s.member},
 		line{acct: s.partner, kobo: -600, role: "partner_charge"}, line{acct: s.margin, kobo: -400, role: "argon_margin"}),
 		"an entry whose every line is on its own society's accounts, charges included")

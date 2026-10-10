@@ -129,8 +129,14 @@ func run(m *testing.M) int {
 	// Skipped for an existing database: its schema is what is under test.
 	for _, f := range strings.Split(schema, ",") {
 		f = strings.TrimSpace(f)
-		if existing != "" || f == "" {
+		if existing != "" {
 			break
+		}
+		// An empty entry once ended the list here, silently: every file after
+		// it was never applied, and the run tested a schema nobody asked for.
+		if f == "" {
+			fmt.Fprintf(os.Stderr, "tier1: ARGON_TEST_SCHEMA has an empty entry (%q): refusing, since the files after it would not be applied\n", schema)
+			return 2
 		}
 		sql, err := os.ReadFile(f)
 		if err != nil {
@@ -317,6 +323,15 @@ func newSociety(t *testing.T) *soc {
 		}
 		return nil
 	}), "society")
+	// The test society has decided its withdrawals need two signatures, the
+	// count its requests are raised at (0011: a withdrawal's quorum is the
+	// society's, with no default). Its account floor stays undecided.
+	var quorum bool
+	fixture(t, db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+		AND table_name = 'societies' AND column_name = 'withdrawal_signatures_required')`).Scan(&quorum), "information_schema")
+	if quorum {
+		fixture(t, one(`UPDATE societies SET withdrawal_signatures_required = 2 WHERE id = $1`, s.id), "the withdrawal quorum")
+	}
 	return s
 }
 
@@ -351,9 +366,10 @@ func (s *soc) signatory(user, post string) string {
 
 func (s *soc) request() string {
 	var id string
-	fixture(s.t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, 'withdrawal_out', 50000000, 2, now() + interval '1 day') RETURNING id`,
-		s.id, fmt.Sprintf("APR-%d", seq.Add(1))).Scan(&id), "approval request (2-of-3)")
+	// A withdrawal moves a member's savings: it names the member (0011).
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
+		VALUES ($1, $2, $3, 'withdrawal_out', 50000000, 2, now() + interval '1 day') RETURNING id`,
+		s.id, fmt.Sprintf("APR-%d", seq.Add(1)), s.holder()).Scan(&id), "approval request (2-of-3)")
 	return id
 }
 
@@ -426,12 +442,57 @@ func (s *soc) insertEntry(x pgx.Tx, e entry) (string, error) {
 	if e.unknownDate {
 		vd = nil
 	}
+	act, err := s.movementAct(x, e, kind, actor)
+	if err != nil {
+		return "", err
+	}
 	var id string
-	err := x.QueryRow(bg(), `INSERT INTO ledger_entries
+	if act == "" {
+		err = x.QueryRow(bg(), `INSERT INTO ledger_entries
 		  (society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason)
 		VALUES ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9) RETURNING id`,
-		society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason)).Scan(&id)
+			society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason)).Scan(&id)
+		return id, err
+	}
+	err = x.QueryRow(bg(), `INSERT INTO ledger_entries
+		  (society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason, act_id)
+		VALUES ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9, $10) RETURNING id`,
+		society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason), act).Scan(&id)
 	return id, err
+}
+
+var (
+	movementActsOnce sync.Once
+	hasMovementActs  bool
+)
+
+// movementAct: where the schema has them (0011), a single contribution or
+// payout (no batch, not a correction) rests on its poster's own step-up act,
+// written in the entry's transaction; the proof is minted in its own, as the
+// app does. An actor who is no user can take no step-up: such an entry names
+// none, and is refused for what it is (TestU5: the actor is no user). Returns
+// "" where no act applies.
+func (s *soc) movementAct(x pgx.Tx, e entry, kind, actor string) (string, error) {
+	movementActsOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'ledger_entries' AND column_name = 'act_id')`).Scan(&hasMovementActs)
+	})
+	actKind := map[string]string{"contribution_in": "contribution_record", "withdrawal_out": "withdrawal_payout"}[kind]
+	if !hasMovementActs || actKind == "" || e.batch != "" || e.reverses != "" || e.adjusts != "" {
+		return "", nil
+	}
+	var isUser bool
+	fixture(s.t, db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)`, actor).Scan(&isUser), "is the actor a user")
+	if !isUser {
+		return "", nil
+	}
+	proof := stepUp(s.t, actor, actKind)
+	var act string
+	if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ($1, $2, $3) RETURNING id`,
+		actKind, actor, proof).Scan(&act); err != nil {
+		return "", fmt.Errorf("FIXTURE: the poster's step-up act: %w", err)
+	}
+	return act, nil
 }
 
 type line struct {

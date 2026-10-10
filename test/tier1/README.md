@@ -39,6 +39,22 @@ Each was written and mutation-tested before the code it covers.
 | `loans_api` | `tier1_api_loans_test.go` (23), `tier1_api_loans_wo_test.go` (3, written off) | the breaks in `apifake_loans_test.go` (28, `--svc`) | `internal/api/loans.go` |
 | `0010` | `tier1_0010_test.go` (12, a signature and a rejection rest on a step-up) | `0010_interface.sql` (M0) + `mutants_0010/` (12) | `migrations/0010_sign_step_up.up.sql` |
 | `approvals_api` | `tier1_api_approvals_test.go` (18, view, sign, reject; the fraud path) | the breaks in `apifake_approvals_test.go` (`--svc`) | `internal/api/approvals.go` |
+| `0011` | `tier1_0011_test.go` (37 + 6 controls: charge configuration, the server's charge, a single movement's step-up, withdrawal payout, withdrawable, the quorum) | `0011_interface.sql` (M0) + `mutants_0011/` (42) | `migrations/0011_money_movements.up.sql` |
+
+**Suite 0011's fixture moves (2026-10-09), each proved.** Where the 0011 columns exist:
+- a single contribution posted through `insertEntry` carries its poster's own step-up act (`movementAct`); an actor who is no user takes none, so TestU5 keeps its foreign-key refusal;
+- the test society decides its withdrawal quorum (two, the count its requests are raised at);
+- every withdrawal-request fixture names its member;
+- the read-side fixtures that post §7a's charges configure the schedule that produces them (`chargesLike7a`, `chargesContributions`).
+
+Against 0001–0010, the 0011 interface and a reference implementation of every rule, all 449 tests pass (the API suites as the app roles). Each move was then sabotaged on its own:
+- no act: 143 tests fail, every one on "rests on its poster's own PIN step-up";
+- no quorum: 70 fail on "has not decided how many signatures";
+- no member: 50 fail on "names the member whose savings it moves".
+
+Three existing fixtures had to change because they posted charges no schedule produced, which is exactly what the rule refuses: TestRole_Control_ContributionWithEveryRoleRight, TestLineSociety_Control_OwnAccountsAccepted and TestApiStatement10 (that test is about order, not amounts).
+
+**A rule that covers for another (stated, not hidden):** under the mutant that lets a payout name no request, TestMoney21 is still refused, by the commit-time "matches its request" rule. The protection exists twice. Test 21 proves the refusal's reason, not that it is the only thing standing.
 
 Signatures and rejections in every fixture go through `onStepUp`
 (`tier1_0002_test.go`): where the schema has `act_id` (0010), each rests on
