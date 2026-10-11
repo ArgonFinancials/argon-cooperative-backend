@@ -409,3 +409,20 @@ They appear only as illustrative test data, marked so, pending the compliance ow
 **An approved withdrawal is posted when an officer records the payout,** on the officer's own PIN step-up, naming the transfer that paid it. Approval authorises; nothing is posted for money not yet paid. A single contribution rests on its poster's own step-up, as an import does.
 
 **Two rates, kept apart.** The movement charge above is not the loan interest rate. The loan rate belongs to loan writes and still needs a calculation method, flat on the principal or on the reducing balance, from the loan rate's owner.
+
+## 10. Decided 2026-10-11: rules every approval request inherits
+
+**NOBODY SIGNS A REQUEST THEY BENEFIT FROM.** Checked per PERSON, not per member record. The same conflict has been caught three times, each time separately:
+
+| Request | Who benefits | Where it is enforced |
+|---|---|---|
+| Loan disbursement | the borrower; and every guarantor, who does not benefit but has an interest in it (they carry the risk) and is barred for the same reason | 0008 `signatory_not_guarantor`; 0009 `borrower_never_signs_own_loan` (finding 19) |
+| Loan write-off | the borrower (debt extinguished), and every guarantor (liability extinguished) | the same two rules: any request naming the loan |
+| Withdrawal | the member whose savings pay out | 0011 `requester_never_signs_own_withdrawal` (accepted 2026-10-11) |
+
+**For any new request kind:** before its tests are written, name who benefits if it is approved, and make "that person signs it" a refusal test of its own. A request kind with no such test is not ready for review. Rules today are per kind; whether they become one general rule in the schema (a request's beneficiaries as data) is a decision to take when the fourth kind arrives.
+
+**CHANGING A RULE THAT PROTECTS MEMBERS IS ITSELF A REQUEST.** A society's withdrawal quorum, account floor and write-off quorum are bye-law decisions:
+- **Who may set them:** not the app and not an officer alone.
+- **The intended shape:** an approval request of its own kind, under the rules already built, at the society's current quorum, stating the before and after values. This is the write-off's shape: the society decides, attributably, and nobody changes the rule that protects them by editing a field.
+- **Until that request kind exists:** the operator script sets them, as it sets charge schedules, and the app has no privilege on those columns (0011).
