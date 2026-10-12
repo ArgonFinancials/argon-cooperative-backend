@@ -1,16 +1,14 @@
 -- DELIBERATELY WRONG. An undecided floor counts as zero.
 --
--- Must turn red: TestMoney29_AnUnsetFloorRefuses.
+-- Must turn red: TestMoney36_AnUnsetFloorRefuses.
 BEGIN;
-ALTER TABLE charge_schedules ADD CONSTRAINT charge_schedule_names_edition CHECK (edition IS NOT NULL AND btrim(edition) <> '');
+ALTER TABLE charge_schedules ADD CONSTRAINT charge_schedule_names_source CHECK (source IS NOT NULL AND btrim(source) <> '');
 
-ALTER TABLE charge_bands ADD CONSTRAINT charge_component_whole CHECK (
-  (partner_flat_kobo IS NULL) = (partner_bp IS NULL) AND (partner_cap_kobo IS NULL OR partner_bp IS NOT NULL)
-  AND (margin_flat_kobo IS NULL) = (margin_bp IS NULL) AND (margin_cap_kobo IS NULL OR margin_bp IS NOT NULL));
+ALTER TABLE charge_bands ADD CONSTRAINT charge_band_whole CHECK (flat_kobo IS NOT NULL AND bp IS NOT NULL);
 
 CREATE FUNCTION charge_configuration_immutable() RETURNS trigger AS $$
 BEGIN
-  PERFORM auth_refuse('charge_configuration_immutable', 'charge configuration is never edited: a correction is a new schedule, effective from a date');
+  PERFORM auth_refuse('charge_configuration_immutable', 'charge configuration is never edited: a correction is a new series, effective from a date');
   RETURN NULL;
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER charge_schedules_immutable BEFORE UPDATE OR DELETE ON charge_schedules
@@ -24,38 +22,77 @@ BEGIN
   IF EXISTS (SELECT 1 FROM charge_bands b WHERE b.schedule_id = NEW.schedule_id
               AND b.from_kobo <= coalesce(NEW.to_kobo, 9223372036854775807)
               AND NEW.from_kobo <= coalesce(b.to_kobo, 9223372036854775807)) THEN
-    PERFORM auth_refuse('charge_bands_do_not_overlap', format('a band from %s kobo overlaps another band of this schedule: an amount would have two charges', NEW.from_kobo));
+    PERFORM auth_refuse('charge_bands_do_not_overlap', format('a band from %s kobo overlaps another band of this series: an amount would have two charges', NEW.from_kobo));
   END IF;
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER charge_bands_disjoint BEFORE INSERT ON charge_bands FOR EACH ROW EXECUTE FUNCTION charge_bands_disjoint();
 
-CREATE OR REPLACE FUNCTION charge_quote(p_society UUID, p_kind movement_kind, p_amount BIGINT, p_on DATE)
-RETURNS TABLE (partner_kobo BIGINT, margin_kobo BIGINT) SECURITY DEFINER SET search_path = public, pg_temp AS $$
+CREATE FUNCTION charge_component(p_society UUID, p_kind movement_kind, p_component TEXT, p_base BIGINT, p_on DATE)
+RETURNS BIGINT SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   s_id UUID;
   b    charge_bands%ROWTYPE;
 BEGIN
-  SELECT id INTO s_id FROM charge_schedules WHERE society_id = p_society AND kind = p_kind AND effective_from <= p_on
+  SELECT id INTO s_id FROM charge_schedules WHERE society_id = p_society AND kind = p_kind AND component = p_component AND effective_from <= p_on
    ORDER BY effective_from DESC, recorded_at DESC, id DESC LIMIT 1;
   IF s_id IS NULL THEN
-    IF p_kind = 'contribution_in' THEN partner_kobo := 0; margin_kobo := 0; RETURN NEXT; RETURN; END IF;
-    PERFORM auth_refuse('charge_schedule_unset', format('this society has no %s charge schedule in force on %s', p_kind, p_on));
+    IF (p_component = 'partner_fee_vat' AND false) OR (p_component = 'statutory_levy' AND false) OR (p_component = 'argon_margin' AND false) THEN
+      RETURN 0;
+    END IF;
+    CASE p_component
+      WHEN 'partner_fee' THEN PERFORM auth_refuse('charge_partner_fee_unset', format('this society has no partner fee for %s in force on %s', p_kind, p_on));
+      WHEN 'partner_fee_vat' THEN PERFORM auth_refuse('charge_vat_unset', format('this society has no VAT on the %s fee in force on %s', p_kind, p_on));
+      WHEN 'statutory_levy' THEN PERFORM auth_refuse('charge_levy_unset', 'whether the transfer levy falls on the sender is with Compliance: it is never assumed to apply, nor to be zero');
+      ELSE PERFORM auth_refuse('charge_margin_unset', 'Argon''s margin has not been set: it waits on Legal, and is never assumed to be zero');
+    END CASE;
   END IF;
-  SELECT * INTO b FROM charge_bands WHERE schedule_id = s_id AND from_kobo <= p_amount AND (to_kobo IS NULL OR to_kobo >= p_amount);
+  SELECT * INTO b FROM charge_bands WHERE schedule_id = s_id AND from_kobo <= p_base AND (to_kobo IS NULL OR to_kobo >= p_base);
   IF NOT FOUND THEN
-    PERFORM auth_refuse('charge_band_missing', format('no band of this society''s %s schedule covers %s kobo', p_kind, p_amount));
+    PERFORM auth_refuse('charge_band_missing', format('no band of this society''s %s %s series covers %s kobo', p_kind, p_component, p_base));
   END IF;
-  IF b.partner_bp IS NULL THEN
-    PERFORM auth_refuse('charge_partner_unset', 'the partner''s charge for this band has not been set');
+  RETURN b.flat_kobo + CASE WHEN b.cap_kobo IS NULL THEN ((p_base * b.bp + 5000) / 10000) ELSE least(((p_base * b.bp + 5000) / 10000), b.cap_kobo) END;
+END $$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION charge_quote(p_society UUID, p_kind movement_kind, p_amount BIGINT, p_on DATE)
+RETURNS TABLE (partner_fee_kobo BIGINT, partner_vat_kobo BIGINT, statutory_levy_kobo BIGINT, argon_margin_kobo BIGINT) SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  partner_fee_kobo := 0; partner_vat_kobo := 0; statutory_levy_kobo := 0; argon_margin_kobo := 0;
+  IF NOT EXISTS (SELECT 1 FROM charge_schedules WHERE society_id = p_society AND kind = p_kind AND effective_from <= p_on) THEN
+    IF p_kind = 'contribution_in' THEN RETURN NEXT; RETURN; END IF;
+    
   END IF;
-  IF b.margin_bp IS NULL THEN
-    PERFORM auth_refuse('charge_margin_unset', 'Argon''s margin for this band has not been set: it waits on Legal, and is never assumed to be zero');
-  END IF;
-  partner_kobo := b.partner_flat_kobo + CASE WHEN b.partner_cap_kobo IS NULL THEN ((p_amount * b.partner_bp + 5000) / 10000) ELSE least(((p_amount * b.partner_bp + 5000) / 10000), b.partner_cap_kobo) END;
-  margin_kobo := b.margin_flat_kobo + CASE WHEN b.margin_cap_kobo IS NULL THEN ((p_amount * b.margin_bp + 5000) / 10000) ELSE least(((p_amount * b.margin_bp + 5000) / 10000), b.margin_cap_kobo) END;
+  partner_fee_kobo := charge_component(p_society, p_kind, 'partner_fee', p_amount, p_on);
+  partner_vat_kobo := charge_component(p_society, p_kind, 'partner_fee_vat', partner_fee_kobo, p_on);
+  statutory_levy_kobo := charge_component(p_society, p_kind, 'statutory_levy', p_amount, p_on);
+  argon_margin_kobo := charge_component(p_society, p_kind, 'argon_margin', p_amount, p_on);
   RETURN NEXT;
 END $$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION ledger_line_role_admissible() RETURNS trigger AS $$
+DECLARE
+  r TEXT := (SELECT role FROM accounts WHERE id = NEW.account_id);
+BEGIN
+  IF r IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF r IN ('member_savings', 'member_wallet', 'member_loan') AND NEW.member_id IS NULL THEN
+    RAISE EXCEPTION 'a line on a % account names the member it belongs to', r
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'member_line_names_member';
+  END IF;
+  IF NEW.member_id IS NOT NULL AND r NOT IN ('member_savings', 'member_wallet', 'member_loan') THEN
+    RAISE EXCEPTION 'a line naming a member belongs on a member account, not a % account', r
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'member_line_on_member_account';
+  END IF;
+  IF (coalesce(NEW.charge_role, '') = 'partner_charge') <> (r = 'charges_partner')
+     OR (coalesce(NEW.charge_role, '') = 'argon_margin') <> (r = 'charges_margin')
+     OR (coalesce(NEW.charge_role, '') = 'partner_vat') <> (r = 'charges_vat')
+     OR (coalesce(NEW.charge_role, '') = 'statutory_levy') <> (r = 'statutory_levy_payable') THEN
+    RAISE EXCEPTION 'charge role % does not belong on a % account (D-03)', coalesce(NEW.charge_role, 'none'), r
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'charge_role_matches_account';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
 
 CREATE FUNCTION withdrawal_names_its_authority() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
@@ -81,8 +118,10 @@ DECLARE
   q        RECORD;
   r        approval_requests%ROWTYPE;
   base     BIGINT;
-  p        BIGINT;
-  m        BIGINT;
+  c_fee    BIGINT;
+  c_vat    BIGINT;
+  c_levy   BIGINT;
+  c_margin BIGINT;
   v_debit  BIGINT;
   v_floor  BIGINT;
   v_before BIGINT;
@@ -108,10 +147,12 @@ BEGIN
     FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id WHERE l.entry_id = e.id AND ac.role = 'bank';
   SELECT * INTO q FROM charge_quote(e.society_id, e.kind, base, e.value_date);
   SELECT coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'partner_charge'), 0),
-         coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'argon_margin'), 0) INTO p, m
+         coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'partner_vat'), 0),
+         coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'statutory_levy'), 0),
+         coalesce(-sum(amount_kobo) FILTER (WHERE charge_role = 'argon_margin'), 0) INTO c_fee, c_vat, c_levy, c_margin
     FROM ledger_lines WHERE entry_id = e.id;
-  IF p <> q.partner_kobo OR m <> q.margin_kobo THEN
-    PERFORM auth_refuse('entry_charge_is_the_schedules', format('by the schedule this %s of %s kobo is charged %s to the partner and %s to Argon; the entry carries %s and %s', e.kind, base, q.partner_kobo, q.margin_kobo, p, m));
+  IF c_fee <> q.partner_fee_kobo OR c_vat <> q.partner_vat_kobo OR c_levy <> q.statutory_levy_kobo OR c_margin <> q.argon_margin_kobo THEN
+    PERFORM auth_refuse('entry_charge_is_the_schedules', format('by the series this %s of %s kobo is charged %s fee, %s VAT, %s levy and %s margin; the entry carries %s, %s, %s and %s', e.kind, base, q.partner_fee_kobo, q.partner_vat_kobo, q.statutory_levy_kobo, q.argon_margin_kobo, c_fee, c_vat, c_levy, c_margin));
   END IF;
   IF e.kind = 'contribution_in' THEN
     RETURN NULL;
@@ -138,8 +179,8 @@ BEGIN
   SELECT coalesce(sum(greatest(loan_owed(g.loan_id), 0)), 0) INTO v_held
     FROM loan_guarantees g JOIN loans lo ON lo.id = g.loan_id
    WHERE (g.guarantor_member_id = r.member_id OR g.guarantor_user_id = v_person) AND NOT EXISTS (SELECT 1 FROM loan_guarantee_withdrawals gw WHERE gw.guarantee_id = g.id);
-  IF r.amount_kobo + q.partner_kobo + q.margin_kobo > v_before - v_held - v_floor THEN
-    PERFORM auth_refuse('withdrawal_within_withdrawable', format('%s kobo out (the amount and its charge) against %s withdrawable: savings %s, held for guarantees %s, floor %s', r.amount_kobo + q.partner_kobo + q.margin_kobo, v_before - v_held - v_floor, v_before, v_held, v_floor));
+  IF r.amount_kobo + q.partner_fee_kobo + q.partner_vat_kobo + q.statutory_levy_kobo + q.argon_margin_kobo > v_before - v_held - v_floor THEN
+    PERFORM auth_refuse('withdrawal_within_withdrawable', format('%s kobo out (the amount and its charge) against %s withdrawable: savings %s, held for guarantees %s, floor %s', r.amount_kobo + q.partner_fee_kobo + q.partner_vat_kobo + q.statutory_levy_kobo + q.argon_margin_kobo, v_before - v_held - v_floor, v_before, v_held, v_floor));
   END IF;
   RETURN NULL;
 END $$ LANGUAGE plpgsql;

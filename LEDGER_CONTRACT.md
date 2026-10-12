@@ -196,6 +196,7 @@ does not sum to zero.
 | VFD balance vs Argon ledger: which is the record of account | Legal + Product | **DISPUTED** (2026-10-02): two contradicting claims in this project, the original source unavailable. See below. Blocks anything that reconciles against VFD. |
 | Does a reversal refund the Argon charge? | **Commercial** | **D-02: answered, assumed-pending.** The charge is refunded with the principal. Assumed until Commercial confirms; **blocks shipping.** See below. |
 | **Argon's margin on a regulated fee** | **Legal** | **OPEN (2026-10-09).** If the CBN guide sets a CEILING on what may be charged for a transfer, the question is not "may Argon add a margin on top" but "is Argon's total charge within the cap". That depends on whether Argon charges as a financial institution in its own right, or passes through VFD's fee as the licensed entity. The two have different answers, and the second is our structure. Until answered, a margin can be configured and is refused until set (§9). |
+| **The transfer levy's incidence** | **Compliance** | **OPEN (2026-10-11), its own item, not a footnote to the edition check.** If the levy is legally on electronic RECEIPTS, it falls on the recipient, and charging it to our sender would be a compliance error we built in deliberately. That is a different question from "are these the right figures". Until answered, the levy component refuses rather than assuming it applies (§9). |
 | Loan interest calculation method | The loan rate's owner | **OPEN (2026-10-09).** Flat on the principal, or on the reducing balance. Separate from movement charges (§9). Until decided, 0008 refuses any rate above zero. |
 | Opening balance contra account | Tier 1 accountant | `opening_balance` posts at zero charge as its own movement kind. What it debits is §7's assumption, not a decision. |
 
@@ -384,6 +385,18 @@ consistent with imports and guarantees. A signature is the most attributable
 act in the product.
 
 ## 9. Decided 2026-10-09: how charges are configured, who bears them, when a withdrawal is posted
+
+**Revised 2026-10-11: four components, not two.** The figures come from three statutes, and VAT is a rate on the fee, so a single shared band structure cannot hold them. Each component is its own series, from its own named source, set explicitly or refused, on its own ledger line and account:
+- **partner_fee** (the bank's fee, from the CBN guide): bands on the transfer amount.
+- **partner_fee_vat** (VAT law): a RATE ON THE FEE. Written as a figure per band it would be right today and silently wrong the next time the fee changed, and nobody would notice, because it would still look like a VAT figure.
+- **statutory_levy** (the levy's statute): its own bands, so "₦50 from ₦10,000" is one band and never cuts the fee's bands. It is remitted, not earned, on its own payable account. **Refused until Compliance answers its incidence (§6).**
+- **argon_margin**: refused until Legal answers (§6).
+
+Applied transfer figures supplied 2026-10-11, held only as ILLUSTRATIVE test data and SOURCED-AND-UNVERIFIED, pending Compliance confirming the edition and bands:
+- under ₦5,000: ₦0;
+- ₦5,000 – ₦9,999: ₦10 fee + ₦0.75 VAT;
+- ₦10,000 – ₦50,000: ₦10 + ₦0.75 + ₦50 levy;
+- above ₦50,000: ₦50 + ₦3.75 + ₦50 levy.
 
 **Charges are banded configuration with no default, refused until set.**
 - **Per society and movement kind:** a schedule, effective from a date, of amount bands. Each band has a flat fee and an optional rate and cap (the cap limits the rate part), for the partner and for Argon's margin **separately**.
