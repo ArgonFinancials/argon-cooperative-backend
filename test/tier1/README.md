@@ -61,6 +61,8 @@ Three existing fixtures had to change because they posted charges no schedule pr
 - TestMoney22 (a levy line belongs on the levy account) first put the levy on the VAT account. The VAT account's own rule (it carries only VAT) refused it too, so the test passed under the mutant that drops the levy rule. It now uses an account no charge rule guards.
 - TestMoney31 (a request is paid once) was refused the second time because the money had run out, not because the request had been paid. The member now has savings enough for two payouts.
 
+**Habit (2026-10-12): after splitting one rule into several, re-ask of every test which rule actually refuses it.** A split turns each new rule's neighbours into potential cover, and the split itself created test 22's cover, in a suite already proven once. Re-proving is not enough, because the suite passes either way. Read each mutant's red REASON: a WRONG REFUSAL means a neighbour covered for the rule under test.
+
 Signatures and rejections in every fixture go through `onStepUp`
 (`tier1_0002_test.go`): where the schema has `act_id` (0010), each rests on
 the person's own step-up act, taken in the same transaction, so only the rule
