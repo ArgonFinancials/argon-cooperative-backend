@@ -41,7 +41,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var payFees = transferCharges(payKobo) // the illustrative series on ₦6,000
+// payFees(): the illustrative series on ₦6,000, in this schema's terms.
+func payFees() fees { return transferCharges(payKobo) }
 
 // hold: an officer authorises a payout to execute. act: "" their own
 // withdrawal_authorisation act in this transaction; "none"; another kind; or
@@ -85,7 +86,7 @@ func (w *mworld) hold(t *testing.T, h holdSpec) (string, error) {
 			c = *h.charges
 		}
 		return x.QueryRow(bg(), `INSERT INTO withdrawal_holds (request_id, society_id, member_id, amount_kobo,
-			  partner_fee_kobo, partner_vat_kobo, statutory_levy_kobo, argon_margin_kobo, actor_user_id, act_id)
+			  partner_fee_kobo, `+vatColumn()+`, statutory_levy_kobo, argon_margin_kobo, actor_user_id, act_id)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
 			h.req, w.c.s.id, h.member, h.amount, c.fee, c.vat, c.levy, c.margin, h.actor, nz(act)).Scan(&id)
 	})
@@ -217,7 +218,7 @@ func TestPayout03_TheHoldCarriesTheServersCharge(t *testing.T) {
 	fixture(t, err, "a hold whose client supplied no charges")
 	var got fees
 	var f, v, l, m *int64
-	fixture(t, db.QueryRow(bg(), `SELECT partner_fee_kobo, partner_vat_kobo, statutory_levy_kobo, argon_margin_kobo
+	fixture(t, db.QueryRow(bg(), `SELECT partner_fee_kobo, `+vatColumn()+`, statutory_levy_kobo, argon_margin_kobo
 		FROM withdrawal_holds WHERE id = $1`, h).Scan(&f, &v, &l, &m), "the hold")
 	for _, p := range []struct {
 		src *int64
@@ -227,8 +228,8 @@ func TestPayout03_TheHoldCarriesTheServersCharge(t *testing.T) {
 			*p.dst = *p.src
 		}
 	}
-	if got != payFees {
-		t.Fatalf("WRONG CHARGE — the hold carries %+v; the series say %+v", got, payFees)
+	if got != payFees() {
+		t.Fatalf("WRONG CHARGE — the hold carries %+v; the series say %+v", got, payFees())
 	}
 }
 
@@ -366,7 +367,7 @@ func TestPayout16_AReleaseSaysWhy(t *testing.T) {
 func TestPayout17_APaidHoldIsNeverReleased(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	fixture(t, err, "the payout recorded")
 	refused(t, w.release(h, "The transfer failed"), "a paid hold released", refusedAs("hold_release_unpaid"))
 }
@@ -408,14 +409,14 @@ func TestPayout_Control_AReleasedHoldFreesItsAmount(t *testing.T) {
 // must see, and the ledger must say it left.
 func TestPayout18_APayoutWithNoHoldIsRecordedAndFlagged(t *testing.T) {
 	w := newMoneyWorld(t)
-	e, err := w.record(t, payoutRec{member: w.bMem, amount: payKobo, ch: payFees})
+	e, err := w.record(t, payoutRec{member: w.bMem, amount: payKobo, ch: payFees()})
 	recordedAndFlagged(t, e, err, "payout_without_hold", "a ₦6,000 payout nobody authorised")
 }
 
 func TestPayout19_APayoutOfADifferentAmountIsRecordedAndFlagged(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: 650000, ch: payFees})
+	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: 650000, ch: payFees()})
 	recordedAndFlagged(t, e, err, "payout_amount_differs", "₦6,500 paid on a ₦6,000 hold")
 }
 
@@ -424,9 +425,9 @@ func TestPayout20_ASecondPayoutOnOneHoldIsRecordedAndFlagged(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.saved(t, w.bMem, loanSavings)
 	req, h := w.held(t, w.bMem, payKobo)
-	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	fixture(t, err, "the first payout")
-	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	recordedAndFlagged(t, e, err, "hold_paid_twice", "a second ₦6,000 transfer on the same hold")
 }
 
@@ -435,7 +436,7 @@ func TestPayout21_APayoutOnAReleasedHoldIsRecordedAndFlagged(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
 	fixture(t, w.release(h, "VFD reported the transfer failed"), "the release")
-	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	recordedAndFlagged(t, e, err, "payout_on_released_hold", "a transfer that completed after its hold was released")
 }
 
@@ -443,7 +444,7 @@ func TestPayout21_APayoutOnAReleasedHoldIsRecordedAndFlagged(t *testing.T) {
 func TestPayout22_APayoutThatOverdrawsIsRecordedAndFlagged(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: 1000000, ch: payFees})
+	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: 1000000, ch: payFees()})
 	recordedAndFlagged(t, e, err, "payout_overdraws", "a payout larger than the member's savings")
 }
 
@@ -452,7 +453,7 @@ func TestPayout23_ThePayoutIsTheHoldsMember(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.saved(t, w.g1Mem, loanSavings)
 	req, h := w.held(t, w.bMem, payKobo)
-	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.g1Mem, amount: payKobo, ch: payFees})
+	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.g1Mem, amount: payKobo, ch: payFees()})
 	refused(t, err, "the borrower's held payout recorded against a guarantor's savings", refusedAs("payout_from_hold_member"))
 }
 
@@ -471,16 +472,16 @@ func TestPayout25_ATransferIsRecordedOnce(t *testing.T) {
 	w.saved(t, w.bMem, loanSavings)
 	req, h := w.held(t, w.bMem, payKobo)
 	ref := "NIP-ONCE-" + digest()[:8]
-	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees, ref: ref})
+	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees(), ref: ref})
 	fixture(t, err, "the payout")
-	_, err = w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees, ref: ref})
+	_, err = w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees(), ref: ref})
 	refused(t, err, "the same bank transfer recorded a second time", uniqueOrCheck("payout_recorded_once"))
 }
 
 func TestPayout26_APayoutNamesItsTransfer(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees, ref: "  "})
+	_, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees(), ref: "  "})
 	refused(t, err, "a payout recorded without the transfer that paid it", refusedAs("withdrawal_names_payout_reference"))
 }
 
@@ -489,16 +490,16 @@ func TestPayout26_APayoutNamesItsTransfer(t *testing.T) {
 func TestPayout27_TheHoldsChargeStandsWhenTheSeriesChange(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	_, err := chargeSeries(w.c.s.id, "withdrawal_out", "partner_fee", "2026-10-01", srcFee, band{flat: 9999})
+	_, err := chargeSeries(w.c.s.id, "withdrawal_out", feeComponent(), "2026-10-01", srcFee, band{flat: 9999})
 	fixture(t, err, "a new fee series, in force before today")
-	_, err = w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	_, err = w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	accepted(t, err, "a payout recorded with the charges it was authorised at")
 }
 
 func TestPayout_Control_APayoutExactlyAsHeldIsRecordedWithNoFlag(t *testing.T) {
 	w := newMoneyWorld(t)
 	req, h := w.held(t, w.bMem, payKobo)
-	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees})
+	e, err := w.record(t, payoutRec{req: req, hold: h, member: w.bMem, amount: payKobo, ch: payFees()})
 	accepted(t, err, "the held payout, as held")
 	if got := flags(t, e); len(got) != 0 {
 		t.Fatalf("FLAGGED — a payout exactly as authorised was flagged %v; a person would chase nothing", got)

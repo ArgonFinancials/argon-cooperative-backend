@@ -47,6 +47,7 @@ package tier1
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -77,35 +78,125 @@ const (
 	srcVAT    = "ILLUSTRATIVE: VAT at 7.5% on the fee — sourced-and-unverified"
 	srcLevy   = "ILLUSTRATIVE: Electronic Money Transfer Levy, ₦50 from ₦10,000 — sourced-and-unverified; its incidence is with Compliance"
 	srcMargin = "TEST DATA ONLY: margin zero for the test; Legal has not decided"
+	// From 0013 (see vatOnArgonsFee).
+	srcArgonFee       = "ILLUSTRATIVE: Argon's own transfer fee (the wallet platform's unmerged charges branch) — sourced-and-unverified; Legal has not decided"
+	srcPartnerUnknown = "TEST DATA ONLY — ZERO IS NOT THE ANSWER: VFD's charge to Argon is unknown (whoever holds the VFD relationship); in reality this stays refused until set"
 )
 
 // The illustrative transfer series (see the header).
 var (
-	feeBands    = []band{{from: 0, to: 499999}, {from: 500000, to: 5000000, flat: 1000}, {from: 5000001, flat: 5000}}
-	vatBands    = []band{{from: 0, bp: 750}}
-	levyBands   = []band{{from: 0, to: 999999}, {from: 1000000, flat: 5000}}
-	marginBands = []band{{from: 0}}
+	feeBands  = []band{{from: 0, to: 499999}, {from: 500000, to: 5000000, flat: 1000}, {from: 5000001, flat: 5000}}
+	vatBands  = []band{{from: 0, bp: 750}}
+	levyBands = []band{{from: 0, to: 999999}, {from: 1000000, flat: 5000}}
+	zeroBands = []band{{from: 0}}
 )
+
+// THE TWO ERAS OF VAT. Until 0013, VAT was charged on the partner's fee, and
+// the illustrative ₦10 / ₦50 sat on the partner component. From 0013
+// (LEDGER_CONTRACT §9, corrected 2026-10-13) that fee is ARGON'S, VAT is
+// charged on Argon's own fee, and the names say so: the component
+// vat_on_argon_fee, the line role vat, the column vat_kobo. The partner's own
+// charge is UNKNOWN; from 0013 these fixtures set it to zero AS TEST DATA ONLY,
+// so the other components can be exercised, while in reality it stays refused
+// until whoever holds the VFD relationship says what VFD charges.
+//
+// The suites before 0013 run their deliberate breaks on their own schema and
+// their GREEN on the newest, so their fixtures follow the schema they find.
+var (
+	vatEraOnce sync.Once
+	vatOnArgon bool
+)
+
+func vatOnArgonsFee() bool {
+	vatEraOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'charge_schedules_component_check'
+			AND pg_get_constraintdef(oid) LIKE '%vat_on_argon_fee%')`).Scan(&vatOnArgon)
+	})
+	return vatOnArgon
+}
+
+// vatComponent, vatRole, vatColumn: the schema's names for VAT.
+func vatComponent() string {
+	if vatOnArgonsFee() {
+		return "vat_on_argon_fee"
+	}
+	return "partner_fee_vat"
+}
+func vatRole() string {
+	if vatOnArgonsFee() {
+		return "vat"
+	}
+	return "partner_vat"
+}
+func vatColumn() string {
+	if vatOnArgonsFee() {
+		return "vat_kobo"
+	}
+	return "partner_vat_kobo"
+}
+
+// feeComponent: the component the illustrative fee is written to, the one VAT
+// is charged on: the partner's before 0013, Argon's from it.
+func feeComponent() string {
+	if vatOnArgonsFee() {
+		return "argon_margin"
+	}
+	return "partner_fee"
+}
+
+// asFee: an expected charge, written as "the fee VAT is charged on, its VAT,
+// and the levy", placed on whichever component that fee is in this schema.
+func asFee(fee, vat, levy int64) fees {
+	if vatOnArgonsFee() {
+		return fees{margin: fee, vat: vat, levy: levy}
+	}
+	return fees{fee: fee, vat: vat, levy: levy}
+}
+
+func vatOf(fee int64) int64 { return (fee*750 + 5000) / 10000 }
+
+type seriesSpec struct {
+	comp, src string
+	bands     []band
+}
+
+// transferSeries: the illustrative withdrawal series in this schema's terms.
+func transferSeries() []seriesSpec {
+	if vatOnArgonsFee() {
+		return []seriesSpec{
+			{"partner_fee", srcPartnerUnknown, zeroBands},
+			{"vat_on_argon_fee", srcVAT, vatBands},
+			{"statutory_levy", srcLevy, levyBands},
+			{"argon_margin", srcArgonFee, feeBands},
+		}
+	}
+	return []seriesSpec{
+		{"partner_fee", srcFee, feeBands},
+		{"partner_fee_vat", srcVAT, vatBands},
+		{"statutory_levy", srcLevy, levyBands},
+		{"argon_margin", srcMargin, zeroBands},
+	}
+}
 
 // charges: one movement's four components.
 type fees struct{ fee, vat, levy, margin int64 }
 
 func (c fees) total() int64 { return c.fee + c.vat + c.levy + c.margin }
 
-// transferCharges: what the illustrative series charge `amount`.
+// transferCharges: what the illustrative series charge `amount`, on whichever
+// component the fee sits in this schema.
 func transferCharges(amount int64) fees {
-	var c fees
+	var fee, levy int64
 	switch {
 	case amount >= 5000001:
-		c.fee = 5000
+		fee = 5000
 	case amount >= 500000:
-		c.fee = 1000
+		fee = 1000
 	}
-	c.vat = (c.fee*750 + 5000) / 10000
 	if amount >= 1000000 {
-		c.levy = 5000
+		levy = 5000
 	}
-	return c
+	return asFee(fee, vatOf(fee), levy)
 }
 
 func newMoneyWorld(t *testing.T) *mworld {
@@ -115,10 +206,7 @@ func newMoneyWorld(t *testing.T) *mworld {
 	w.vat, w.levy = w.chargeAccounts(t)
 	w.floor(t, floorKobo)
 	w.quorum(t, 2)
-	for _, s := range []struct {
-		comp, src string
-		bands     []band
-	}{{"partner_fee", srcFee, feeBands}, {"partner_fee_vat", srcVAT, vatBands}, {"statutory_levy", srcLevy, levyBands}, {"argon_margin", srcMargin, marginBands}} {
+	for _, s := range transferSeries() {
 		_, err := chargeSeries(w.c.s.id, "withdrawal_out", s.comp, "2020-01-01", s.src, s.bands...)
 		fixture(t, err, "the withdrawal "+s.comp+" series")
 	}
@@ -178,10 +266,7 @@ func chargeSeries(society, kind, component, from, source string, bands ...band) 
 // the illustrative transfer series.
 func allSeriesBut(t *testing.T, society, kind, skip string) {
 	t.Helper()
-	for _, s := range []struct {
-		comp, src string
-		bands     []band
-	}{{"partner_fee", srcFee, feeBands}, {"partner_fee_vat", srcVAT, vatBands}, {"statutory_levy", srcLevy, levyBands}, {"argon_margin", srcMargin, marginBands}} {
+	for _, s := range transferSeries() {
 		if s.comp == skip {
 			continue
 		}
@@ -207,7 +292,7 @@ func (c *chart) chargesContributions(t *testing.T, partnerBP, marginBP int64, so
 	if !has {
 		return
 	}
-	for comp, b := range map[string]band{"partner_fee": {bp: partnerBP}, "partner_fee_vat": {}, "statutory_levy": {}, "argon_margin": {bp: marginBP}} {
+	for comp, b := range map[string]band{"partner_fee": {bp: partnerBP}, vatComponent(): {}, "statutory_levy": {}, "argon_margin": {bp: marginBP}} {
 		_, err := chargeSeries(c.s.id, "contribution_in", comp, "2020-01-01", source, b)
 		fixture(t, err, "the society's contribution "+comp)
 	}
@@ -215,8 +300,8 @@ func (c *chart) chargesContributions(t *testing.T, partnerBP, marginBP int64, so
 
 // quote asks the database for a charge.
 func quote(society, kind string, amount int64, on string) (c fees, err error) {
-	err = db.QueryRow(bg(), `SELECT partner_fee_kobo, partner_vat_kobo, statutory_levy_kobo, argon_margin_kobo
-		FROM charge_quote($1, $2, $3, $4)`, society, kind, amount, on).Scan(&c.fee, &c.vat, &c.levy, &c.margin)
+	// By position (fee, VAT, levy, margin): the VAT column's name changed in 0013.
+	err = db.QueryRow(bg(), `SELECT * FROM charge_quote($1, $2, $3, $4)`, society, kind, amount, on).Scan(&c.fee, &c.vat, &c.levy, &c.margin)
 	return
 }
 
@@ -302,7 +387,7 @@ func (w *mworld) chargeLines(ch fees) []line {
 	for _, c := range []struct {
 		kobo       int64
 		acct, role string
-	}{{ch.fee, w.c.partner, "partner_charge"}, {ch.vat, w.vat, "partner_vat"}, {ch.levy, w.levy, "statutory_levy"}, {ch.margin, w.c.margin, "argon_margin"}} {
+	}{{ch.fee, w.c.partner, "partner_charge"}, {ch.vat, w.vat, vatRole()}, {ch.levy, w.levy, "statutory_levy"}, {ch.margin, w.c.margin, "argon_margin"}} {
 		if c.kobo != 0 {
 			ls = append(ls, line{acct: c.acct, kobo: -c.kobo, role: c.role})
 		}
@@ -392,8 +477,8 @@ func TestMoney05_AWithdrawalWithNoScheduleIsRefused(t *testing.T) {
 
 func TestMoney06_AnAmountNoBandCoversIsRefused(t *testing.T) {
 	c := newChart(t)
-	allSeriesBut(t, c.s.id, "withdrawal_out", "partner_fee")
-	_, err := chargeSeries(c.s.id, "withdrawal_out", "partner_fee", "2020-01-01", srcFee, band{from: 0, to: 500000, flat: 1000})
+	allSeriesBut(t, c.s.id, "withdrawal_out", feeComponent())
+	_, err := chargeSeries(c.s.id, "withdrawal_out", feeComponent(), "2020-01-01", srcFee, band{from: 0, to: 500000, flat: 1000})
 	fixture(t, err, "a fee series covering only to ₦5,000")
 	_, err = quote(c.s.id, "withdrawal_out", payKobo, "2026-10-05")
 	refused(t, err, "a charge for ₦6,000, which no fee band covers", refusedAs("charge_band_missing"))
@@ -401,7 +486,7 @@ func TestMoney06_AnAmountNoBandCoversIsRefused(t *testing.T) {
 
 func TestMoney07_AnUnsetVATRefuses(t *testing.T) {
 	c := newChart(t)
-	allSeriesBut(t, c.s.id, "withdrawal_out", "partner_fee_vat")
+	allSeriesBut(t, c.s.id, "withdrawal_out", vatComponent())
 	_, err := quote(c.s.id, "withdrawal_out", payKobo, "2026-10-05")
 	refused(t, err, "a charge computed with no VAT decided", refusedAs("charge_vat_unset"))
 }
@@ -425,7 +510,7 @@ func TestMoney09_AnUnsetMarginRefusesUntilLegalAnswers(t *testing.T) {
 
 func TestMoney10_TheBandsFlatFee(t *testing.T) {
 	w := newMoneyWorld(t)
-	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-10-05", fees{fee: 1000, vat: 75},
+	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-10-05", asFee(1000, 75, 0),
 		"a ₦6,000 withdrawal: ₦10 fee, ₦0.75 VAT, under the levy")
 }
 
@@ -433,20 +518,20 @@ func TestMoney10_TheBandsFlatFee(t *testing.T) {
 // (rounding down would give 285).
 func TestMoney11_TheRateRoundsHalfUp(t *testing.T) {
 	c := newChart(t)
-	allSeriesBut(t, c.s.id, "withdrawal_out", "partner_fee")
-	_, err := chargeSeries(c.s.id, "withdrawal_out", "partner_fee", "2020-01-01", srcFee, band{bp: 20})
+	allSeriesBut(t, c.s.id, "withdrawal_out", feeComponent())
+	_, err := chargeSeries(c.s.id, "withdrawal_out", feeComponent(), "2020-01-01", srcFee, band{bp: 20})
 	fixture(t, err, "a rate fee")
-	wantQuote(t, c.s.id, "withdrawal_out", 142857, "2026-10-05", fees{fee: 286, vat: 21},
+	wantQuote(t, c.s.id, "withdrawal_out", 142857, "2026-10-05", asFee(286, 21, 0),
 		"0.20% of ₦1,428.57, and 7.5% of that fee (21.45 kobo → 21)")
 }
 
 // The cap limits the RATE part: 0.35% of ₦100,000 is ₦350, capped at ₦200.
 func TestMoney12_TheCapLimitsTheRate(t *testing.T) {
 	c := newChart(t)
-	allSeriesBut(t, c.s.id, "withdrawal_out", "partner_fee")
-	_, err := chargeSeries(c.s.id, "withdrawal_out", "partner_fee", "2020-01-01", srcFee, band{flat: 1000, bp: 35, cap: 20000})
+	allSeriesBut(t, c.s.id, "withdrawal_out", feeComponent())
+	_, err := chargeSeries(c.s.id, "withdrawal_out", feeComponent(), "2020-01-01", srcFee, band{flat: 1000, bp: 35, cap: 20000})
 	fixture(t, err, "a flat fee plus a capped rate")
-	wantQuote(t, c.s.id, "withdrawal_out", 10000000, "2026-10-05", fees{fee: 21000, vat: 1575, levy: 5000},
+	wantQuote(t, c.s.id, "withdrawal_out", 10000000, "2026-10-05", asFee(21000, 1575, 5000),
 		"₦10 + 0.35% of ₦100,000 capped at ₦200; 7.5% of that; the levy")
 }
 
@@ -454,16 +539,16 @@ func TestMoney12_TheCapLimitsTheRate(t *testing.T) {
 // newest one.
 func TestMoney13_TheScheduleInForceOnTheValueDate(t *testing.T) {
 	w := newMoneyWorld(t)
-	_, err := chargeSeries(w.c.s.id, "withdrawal_out", "partner_fee", "2026-10-01", srcFee, band{flat: 9999})
+	_, err := chargeSeries(w.c.s.id, "withdrawal_out", feeComponent(), "2026-10-01", srcFee, band{flat: 9999})
 	fixture(t, err, "a later fee series")
-	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-09-30", fees{fee: 1000, vat: 75},
+	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-09-30", asFee(1000, 75, 0),
 		"a withdrawal value-dated the day before the new fee")
 }
 
 // VAT is what it is: a rate on the fee. On the amount it would be ₦450.
 func TestMoney14_VATIsARateOnTheFeeNotTheAmount(t *testing.T) {
 	w := newMoneyWorld(t)
-	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-10-05", fees{fee: 1000, vat: 75},
+	wantQuote(t, w.c.s.id, "withdrawal_out", payKobo, "2026-10-05", asFee(1000, 75, 0),
 		"VAT on a ₦6,000 withdrawal's ₦10 fee")
 }
 
@@ -471,7 +556,7 @@ func TestMoney14_VATIsARateOnTheFeeNotTheAmount(t *testing.T) {
 // and over the levy's.
 func TestMoney15_TheLevyHasItsOwnBands(t *testing.T) {
 	w := newMoneyWorld(t)
-	wantQuote(t, w.c.s.id, "withdrawal_out", 2000000, "2026-10-05", fees{fee: 1000, vat: 75, levy: 5000},
+	wantQuote(t, w.c.s.id, "withdrawal_out", 2000000, "2026-10-05", asFee(1000, 75, 5000),
 		"a ₦20,000 withdrawal: the same ₦10 fee as ₦6,000, and the ₦50 levy")
 }
 
@@ -486,14 +571,20 @@ func TestMoney_Control_AnUnconfiguredContributionIsFree(t *testing.T) {
 
 // contributions: §7a's 0.20% fee and 0.15% margin, VAT 7.5% of the fee, and a
 // ₦50 levy from ₦10,000 (all test data). ₦25,000 → ₦50, ₦3.75, ₦50, ₦37.50.
-var charged25k = fees{fee: 5000, vat: 375, levy: 5000, margin: 3750}
+func charged25k() fees {
+	vatBase := int64(5000) // the partner's 0.20%, before 0013
+	if vatOnArgonsFee() {
+		vatBase = 3750 // Argon's 0.15%, from 0013
+	}
+	return fees{fee: 5000, vat: vatOf(vatBase), levy: 5000, margin: 3750}
+}
 
 func (w *mworld) chargedContributions(t *testing.T) {
 	t.Helper()
 	for _, s := range []struct {
 		comp  string
 		bands []band
-	}{{"partner_fee", []band{{bp: 20}}}, {"partner_fee_vat", vatBands}, {"statutory_levy", levyBands}, {"argon_margin", []band{{bp: 15}}}} {
+	}{{"partner_fee", []band{{bp: 20}}}, {vatComponent(), vatBands}, {"statutory_levy", levyBands}, {"argon_margin", []band{{bp: 15}}}} {
 		_, err := chargeSeries(w.c.s.id, "contribution_in", s.comp, "2020-01-01", "test data (§7a's split; the illustrative VAT and levy)", s.bands...)
 		fixture(t, err, "the contribution "+s.comp)
 	}
@@ -504,7 +595,7 @@ func with(c fees, f func(*fees)) fees { f(&c); return c }
 func TestMoney16_AContributionCarriesTheSchedulesFee(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k, func(c *fees) { c.fee = 4000 }))}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k(), func(c *fees) { c.fee = 4000 }))}),
 		"a ₦25,000 contribution charged a ₦40 fee where the schedule says ₦50", refusedAs("entry_charge_is_the_schedules"))
 }
 
@@ -517,32 +608,37 @@ func TestMoney17_AFreeContributionCarriesNoCharge(t *testing.T) {
 func TestMoney18_TheVATLineIsTheSchedules(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k, func(c *fees) { c.vat = 400 }))}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k(), func(c *fees) { c.vat = 400 }))}),
 		"VAT of ₦4 where 7.5% of the ₦50 fee is ₦3.75", refusedAs("entry_charge_is_the_schedules"))
 }
 
 func TestMoney19_TheLevyLineIsTheSchedules(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k, func(c *fees) { c.levy = 0 }))}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k(), func(c *fees) { c.levy = 0 }))}),
 		"no levy on ₦25,000 where the series says ₦50", refusedAs("entry_charge_is_the_schedules"))
 }
 
 func TestMoney20_TheMarginLineIsTheSchedules(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k, func(c *fees) { c.margin = 9000 }))}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, with(charged25k(), func(c *fees) { c.margin = 9000 }))}),
 		"Argon's margin ₦90 where the schedule says ₦37.50", refusedAs("entry_charge_is_the_schedules"))
 }
 
 // Remitted, not earned: VAT and the levy each on their own payable account.
 // Each test posts the schedule's exact charges with ONE line on the wrong
 // account, so nothing but the account rule can refuse it.
-func (w *mworld) misposted(role, acct string) []line {
-	ls := w.contribution(w.bMem, 2500000, charged25k)
+// misposted: the schedule's exact charges with the `role` line moved to
+// `acct` and, if newRole is given, carrying that role instead.
+func (w *mworld) misposted(role, acct, newRole string) []line {
+	ls := w.contribution(w.bMem, 2500000, charged25k())
 	for i := range ls {
 		if ls[i].role == role {
 			ls[i].acct = acct
+			if newRole != "" {
+				ls[i].role = newRole
+			}
 		}
 	}
 	return ls
@@ -551,7 +647,7 @@ func (w *mworld) misposted(role, acct string) []line {
 func TestMoney21_AVATLineIsOnTheVATAccount(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.misposted("partner_vat", w.c.migration)}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.misposted(vatRole(), w.c.migration, "")}),
 		"the right VAT, posted to the migration control account", refusedAs("charge_role_matches_account"))
 }
 
@@ -560,14 +656,14 @@ func TestMoney22_ALevyLineIsOnTheLevyAccount(t *testing.T) {
 	w.chargedContributions(t)
 	// Not the VAT account: that account's own rule (it carries only VAT) would
 	// refuse a levy line too, covering for the rule under test.
-	refused(t, w.post(t, move{kind: "contribution_in", lines: w.misposted("statutory_levy", w.c.migration)}),
+	refused(t, w.post(t, move{kind: "contribution_in", lines: w.misposted("statutory_levy", w.c.migration, "")}),
 		"the right levy, posted to the migration control account", refusedAs("charge_role_matches_account"))
 }
 
 func TestMoney_Control_AContributionWithTheSchedulesCharge(t *testing.T) {
 	w := newMoneyWorld(t)
 	w.chargedContributions(t)
-	accepted(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, charged25k)}),
+	accepted(t, w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, charged25k())}),
 		"a ₦25,000 contribution charged exactly ₦50, ₦3.75, ₦50 and ₦37.50, each on its own line")
 }
 
