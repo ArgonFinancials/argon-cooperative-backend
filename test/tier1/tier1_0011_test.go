@@ -62,6 +62,7 @@ type mworld struct {
 	*lworld
 	poster    string // the officer who records payouts and contributions
 	vat, levy string // the VAT-payable and levy-payable accounts
+	lastEntry string // the entry post() last wrote, committed or not
 }
 
 const (
@@ -277,6 +278,7 @@ func (w *mworld) post(t *testing.T, mv move) error {
 			w.c.s.id, mv.kind, mv.valueDate, mv.actor, nz(act), nz(mv.req), nz(mv.ref)).Scan(&id); err != nil {
 			return err
 		}
+		w.lastEntry = id
 		return w.c.s.insertLines(x, id, mv.lines...)
 	})
 }
@@ -634,148 +636,11 @@ func TestMoney_Control_AContributionOnThePostersOwnStepUp(t *testing.T) {
 }
 
 // =============================================================================
-// A WITHDRAWAL IS POSTED WHEN ITS PAYOUT IS RECORDED
+// A WITHDRAWAL'S PAYOUT, AND WHAT A MEMBER MAY WITHDRAW, moved to suite 0012
+// (2026-10-13, finding 33): checked and held when the payout is authorised to
+// execute, before money moves; the confirmed outcome always recorded, any
+// difference flagged for a person (LEDGER_CONTRACT §11).
 // =============================================================================
-
-var payCharges = transferCharges(payKobo) // ₦10 + ₦0.75
-
-func TestMoney28_APayoutNamesItsRequest(t *testing.T) {
-	w := newMoneyWorld(t)
-	refused(t, w.post(t, move{kind: "withdrawal_out", ref: "NIP-1", lines: w.payout(w.bMem, payKobo, payCharges)}),
-		"money paid out of a member's savings with no request behind it", refusedAs("withdrawal_names_request"))
-}
-
-func TestMoney29_TheRequestIsApproved(t *testing.T) {
-	w := newMoneyWorld(t)
-	req, err := w.raise(w.bMem, payKobo, 2)
-	fixture(t, err, "a request")
-	fixture(t, w.c.s.sign(req, w.s1Mem, "treasurer"), "one of two signatures")
-	refused(t, w.pay(t, req, w.bMem, payKobo), "a payout on a request with one signature of the two", refusedAs("withdrawal_request_approved"))
-}
-
-func TestMoney30_APayoutNamesItsTransfer(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, payKobo)
-	refused(t, w.post(t, move{kind: "withdrawal_out", req: req, ref: "  ", lines: w.payout(w.bMem, payKobo, payCharges)}),
-		"a payout recorded without the transfer that paid it", refusedAs("withdrawal_names_payout_reference"))
-}
-
-// Savings enough for two payouts, so a second one could only be refused for
-// being the same request paid again, not for the money having run out.
-func TestMoney31_ARequestIsPaidOnce(t *testing.T) {
-	w := newMoneyWorld(t)
-	w.saved(t, w.bMem, loanSavings)
-	req := w.approved(t, w.bMem, payKobo)
-	fixture(t, w.pay(t, req, w.bMem, payKobo), "the payout")
-	refused(t, w.pay(t, req, w.bMem, payKobo), "the same approved request paid a second time", uniqueOrCheck("withdrawal_posted_once"))
-}
-
-func TestMoney32_ThePayoutIsTheAmountApproved(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, payKobo)
-	refused(t, w.pay(t, req, w.bMem, 700000), "₦7,000 paid on a request approved for ₦6,000", refusedAs("withdrawal_matches_request"))
-}
-
-func TestMoney33_ThePayoutComesFromTheRequestersSavings(t *testing.T) {
-	w := newMoneyWorld(t)
-	w.saved(t, w.g1Mem, loanSavings)
-	req := w.approved(t, w.bMem, payKobo)
-	refused(t, w.pay(t, req, w.g1Mem, payKobo), "the borrower's approved withdrawal paid out of a guarantor's savings",
-		refusedAs("withdrawal_matches_request"))
-}
-
-// On top, not deducted: asked for ₦6,000, the member receives ₦6,000.
-func TestMoney34_TheChargeIsOnTopNotDeducted(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, payKobo)
-	deducted := append([]line{{acct: w.c.savings, kobo: payKobo, member: w.bMem}, {acct: w.c.bank, kobo: -(payKobo - payCharges.total())}},
-		w.chargeLines(payCharges)...)
-	refused(t, w.post(t, move{kind: "withdrawal_out", req: req, ref: "NIP-1", lines: deducted}),
-		"₦6,000 approved, ₦5,989.25 paid: the charges taken out of what the member asked for", refusedAs("withdrawal_matches_request"))
-}
-
-func TestMoney35_AWithdrawalCarriesItsCharge(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, payKobo)
-	refused(t, w.post(t, move{kind: "withdrawal_out", req: req, ref: "NIP-1", lines: w.payout(w.bMem, payKobo, fees{})}),
-		"a ₦6,000 withdrawal paid with no charge where the series say ₦10.75", refusedAs("entry_charge_is_the_schedules"))
-}
-
-// =============================================================================
-// WHAT A MEMBER MAY WITHDRAW (D-10)
-// =============================================================================
-
-func TestMoney36_AnUnsetFloorRefuses(t *testing.T) {
-	w := newMoneyWorld(t)
-	fixture(t, one(`UPDATE societies SET account_floor_kobo = NULL WHERE id = $1`, w.c.s.id), "the floor undecided")
-	req := w.approved(t, w.bMem, payKobo)
-	refused(t, w.pay(t, req, w.bMem, payKobo), "a withdrawal in a society that has not set its account floor", refusedAs("account_floor_unset"))
-}
-
-func TestMoney37_TheFloorStaysBehind(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, 950000)
-	refused(t, w.pay(t, req, w.bMem, 950000), "₦9,500 + ₦10.75 out of ₦10,000 savings with a ₦1,000 floor",
-		refusedAs("withdrawal_within_withdrawable"))
-}
-
-// ₦8,990 fits within the ₦9,000 withdrawable; ₦8,990 + ₦10.75 does not.
-func TestMoney38_TheChargesCountAgainstWhatMayBeWithdrawn(t *testing.T) {
-	w := newMoneyWorld(t)
-	req := w.approved(t, w.bMem, 899000)
-	refused(t, w.pay(t, req, w.bMem, 899000), "₦8,990 + ₦10.75 against ₦9,000 withdrawable", refusedAs("withdrawal_within_withdrawable"))
-}
-
-// guarantorWorld: a disbursed ₦24,000 loan both guarantors guarantee, and the
-// first guarantor's ₦10,000 savings.
-func guarantorWorld(t *testing.T) (*mworld, string) {
-	t.Helper()
-	w := newMoneyWorld(t)
-	loan, _ := w.ready(t)
-	_, err := w.disburse(loan, loanPrincipal)
-	fixture(t, err, "the disbursement")
-	w.saved(t, w.g1Mem, loanSavings)
-	return w, loan
-}
-
-// The conservative default: the FULL outstanding ₦24,000 is held back while
-// the guarantee stands, so nothing of the ₦9,000 is free.
-func TestMoney39_AGuaranteeHoldsBackTheLoansOutstanding(t *testing.T) {
-	w, _ := guarantorWorld(t)
-	req := w.approved(t, w.g1Mem, payKobo)
-	refused(t, w.pay(t, req, w.g1Mem, payKobo), "₦6,000 out of a guarantor's savings while ₦24,000 they guarantee is outstanding",
-		refusedAs("withdrawal_within_withdrawable"))
-}
-
-// Per PERSON, not per member record: the guarantor's other record does not
-// escape the hold.
-func TestMoney40_AGuaranteeHoldsThroughThePersonsOtherRecord(t *testing.T) {
-	w, _ := guarantorWorld(t)
-	other := w.c.s.member(w.g1)
-	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, other), "the guarantor's second record")
-	w.saved(t, other, loanSavings)
-	req := w.approved(t, other, payKobo)
-	refused(t, w.pay(t, req, other, payKobo), "the guarantor withdrawing through their second member record",
-		refusedAs("withdrawal_within_withdrawable"))
-}
-
-func TestMoney_Control_WithdrawingExactlyWhatMayBeWithdrawn(t *testing.T) {
-	w := newMoneyWorld(t)
-	amount := borrowerWithdrawable - transferCharges(borrowerWithdrawable).total() // ₦8,989.25 + ₦10.75 = ₦9,000
-	if amount+transferCharges(amount).total() != borrowerWithdrawable {
-		t.Fatalf("FIXTURE: the arithmetic: %d + %d is not %d", amount, transferCharges(amount).total(), borrowerWithdrawable)
-	}
-	req := w.approved(t, w.bMem, amount)
-	accepted(t, w.pay(t, req, w.bMem, amount), "₦8,989.25 + ₦10.75, exactly the ₦9,000 the borrower may withdraw")
-}
-
-func TestMoney_Control_ARepaidLoanHoldsNothing(t *testing.T) {
-	w, loan := guarantorWorld(t)
-	_, err := w.repay(loan, loanPrincipal)
-	fixture(t, err, "the loan repaid in full")
-	req := w.approved(t, w.g1Mem, payKobo)
-	accepted(t, w.pay(t, req, w.g1Mem, payKobo), "a guarantor withdrawing once the loan they guaranteed owes nothing")
-}
 
 // =============================================================================
 // WHO AUTHORISES A WITHDRAWAL

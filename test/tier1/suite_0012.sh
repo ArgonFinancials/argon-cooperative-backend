@@ -1,0 +1,49 @@
+# Suite 0012 — the payout hold (decided 2026-10-13, finding 33). Sourced by
+# mutate.sh. Every judgement when a payout is authorised to execute, before
+# money moves; whatever happened, recorded; any difference flagged for a person.
+SUITE_INCLUDE='^TestPayout'
+SUITE_EXCLUDE='^$'
+SUITE_SKIP=''
+SUITE_RUN='^TestPayout'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,test/tier1/0012_interface.sql'
+SUITE_MUTDIR='mutants_0012'
+SUITE_GREEN_NEEDS='migrations/0012_payout_holds.up.sql'   # absent until after review
+CONTROL_RE='Control'
+declare -gA SVC_TARGET_OF=()
+# M0 is 0011's behaviour; TestPayout26 (a payout names its transfer) is a rule
+# 0011 already has, so it is not red on M0 and is proved by its own mutant.
+declare -gA TARGET_OF=(
+  [M0]='TestPayout(0[1-9]|1[0-9]|2[0-5]|2[78])_'
+  [m_request_any_status]='TestPayout01_AHoldNeedsAnApprovedRequest'
+  [m_match_unchecked]='TestPayout02_AHoldIsForTheAmountApproved'
+  [m_charges_as_supplied]='TestPayout03_TheHoldCarriesTheServersCharge'
+  [m_floor_unset_zero]='TestPayout04_AnUnsetFloorRefusesTheHold'
+  [m_floor_ignored]='TestPayout05_TheFloorStaysBehind'
+  [m_fee_not_counted]='TestPayout06_TheChargesCountAgainstWhatMayBeWithdrawn'
+  [m_guarantees_ignored]='TestPayout07_AGuaranteeHoldsBackTheLoansOutstanding'
+  [m_guarantees_by_record]='TestPayout08_AGuaranteeHoldsThroughThePersonsOtherRecord'
+  [m_open_holds_ignored]='TestPayout09_OpenHoldsCountAgainstWhatMayBeWithdrawn'
+  [m_once_open_unchecked]='TestPayout10_OneOpenHoldPerRequest'
+  [m_act_optional]='TestPayout11_AHoldRestsOnAStepUp'
+  [m_any_actor]='TestPayout12_TheActIsTheAuthorisersOwn'
+  [m_any_kind]='TestPayout13_TheActIsAnAuthorisation'
+  [m_any_tx]='TestPayout14_TheActIsFromThisTransaction'
+  [m_act_reusable]='TestPayout15_OneStepUpAuthorisesOnce'
+  [m_reason_optional]='TestPayout16_AReleaseSaysWhy'
+  [m_paid_releasable]='TestPayout17_APaidHoldIsNeverReleased'
+  [m_no_hold_unflagged]='TestPayout18_APayoutWithNoHoldIsRecordedAndFlagged'
+  [m_amount_unflagged]='TestPayout19_APayoutOfADifferentAmountIsRecordedAndFlagged'
+  [m_twice_unflagged]='TestPayout20_ASecondPayoutOnOneHoldIsRecordedAndFlagged'
+  [m_released_unflagged]='TestPayout21_APayoutOnAReleasedHoldIsRecordedAndFlagged'
+  [m_overdraw_unflagged]='TestPayout22_APayoutThatOverdrawsIsRecordedAndFlagged'
+  [m_member_unchecked]='TestPayout23_ThePayoutIsTheHoldsMember'
+  [m_hold_charge_unchecked]='TestPayout24_ThePayoutCarriesTheHoldsCharge'
+  [m_recorded_twice]='TestPayout25_ATransferIsRecordedOnce'
+  [m_ref_optional]='TestPayout26_APayoutNamesItsTransfer'
+  [m_charge_from_series]='TestPayout27_TheHoldsChargeStandsWhenTheSeriesChange'
+  [m_undetermined_unflagged]='TestPayout28_AContributionWhoseChargeCannotBeDeterminedIsRecordedAndFlagged'
+  [c_withdrawable_strict]='TestPayout_Control_HoldingExactlyWhatMayBeWithdrawn'
+  [c_holds_principal]='TestPayout_Control_ARepaidLoanHoldsNothing'
+  [c_release_ignored]='TestPayout_Control_AReleasedHoldFreesItsAmount'
+  [c_flag_everything]='TestPayout_Control_APayoutExactlyAsHeldIsRecordedWithNoFlag'
+)

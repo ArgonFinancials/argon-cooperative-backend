@@ -39,7 +39,8 @@ Each was written and mutation-tested before the code it covers.
 | `loans_api` | `tier1_api_loans_test.go` (23), `tier1_api_loans_wo_test.go` (3, written off) | the breaks in `apifake_loans_test.go` (28, `--svc`) | `internal/api/loans.go` |
 | `0010` | `tier1_0010_test.go` (12, a signature and a rejection rest on a step-up) | `0010_interface.sql` (M0) + `mutants_0010/` (12) | `migrations/0010_sign_step_up.up.sql` |
 | `approvals_api` | `tier1_api_approvals_test.go` (18, view, sign, reject; the fraud path) | the breaks in `apifake_approvals_test.go` (`--svc`) | `internal/api/approvals.go` |
-| `0011` | `tier1_0011_test.go` (44 + 6 controls: four-component charge configuration, the server's charge, each charge on its own account, a single movement's step-up, withdrawal payout, withdrawable, the quorum, nobody signs their own) | `0011_interface.sql` (M0) + `mutants_0011/` (49) | `migrations/0011_money_movements.up.sql` |
+| `0011` | `tier1_0011_test.go` (31 + 4 controls: four-component charge configuration, the server's charge, each charge on its own account, a single movement's step-up, the quorum, nobody signs their own; the payout and withdrawable tests moved to 0012 on 2026-10-13) | `0011_interface.sql` (M0) + `mutants_0011/` (35) | `migrations/0011_money_movements.up.sql` |
+| `0012` | `tier1_0012_test.go` (28 + 4 controls: the payout hold, checked before money moves; the recording, whatever happened, any difference flagged; contributions recorded when their charge cannot be determined) | `0012_interface.sql` (M0: 0011's recording-time judgements) + `mutants_0012/` (32) | `migrations/0012_payout_holds.up.sql` |
 
 **Suite 0011's fixture moves (2026-10-09), each proved.** Where the 0011 columns exist:
 - a single contribution posted through `insertEntry` carries its poster's own step-up act (`movementAct`); an actor who is no user takes none, so TestU5 keeps its foreign-key refusal;

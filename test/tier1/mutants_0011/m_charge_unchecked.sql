@@ -1,6 +1,6 @@
 -- DELIBERATELY WRONG. The charge lines are not compared with the series at all: the client's figures stand.
 --
--- Must turn red: TestMoney16_AContributionCarriesTheSchedulesFee, TestMoney35_AWithdrawalCarriesItsCharge.
+-- Must turn red: TestMoney16_AContributionCarriesTheSchedulesFee.
 BEGIN;
 ALTER TABLE charge_schedules ADD CONSTRAINT charge_schedule_names_source CHECK (source IS NOT NULL AND btrim(source) <> '');
 
