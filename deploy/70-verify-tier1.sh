@@ -43,6 +43,8 @@ U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
 BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 52)
 R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91)
+R3=$(U 63) E2=$(U 45) E3=$(U 46) E4=$(U 47) A3=$(U 23) A4=$(U 24)
+SP6=$(U 116) SP7=$(U 117) SP8=$(U 118) SP9=$(U 119) SP10=$(U 120) SA6=$(U 126) SA7=$(U 127) SA8=$(U 128) SA9=$(U 129) SA10=$(U 130)
 R2=$(U 62) SP5=$(U 115) SA5=$(U 125) SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
 # Written for the schema at migration 0005 (users, line-level member_id, no
@@ -74,13 +76,21 @@ fi
 has_sig_acts=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
   WHERE table_name = 'signatory_approvals' AND column_name = 'act_id'" </dev/null)
 sign_sql() {  # sign_sql PROOF ACT USER MEMBER POST: one signature on R1
+  sign_on_sql "$R1" "$@"
+}
+sign_on_sql() {  # sign_on_sql REQUEST PROOF ACT USER MEMBER POST
   if [[ $has_sig_acts == 1 ]]; then
-    echo "INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($2, 'approval_signature', $3, $1);
-INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($R1, $4, '$5', $2);"
+    echo "INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($3, 'approval_signature', $4, $2);
+INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($1, $5, '$6', $3);"
   else
-    echo "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($R1, $4, '$5');"
+    echo "INSERT INTO signatory_approvals (request_id, member_id, post_at_signing) VALUES ($1, $5, '$6');"
   fi
 }
+# Single contributions and withdrawals (0011), where the schema has them. The
+# app may not set a society's quorum, floor or charges (grants.sql): the
+# operator does, here as the migrator, between the app's society and the rest.
+has_money=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
+  WHERE table_name = 'societies' AND column_name = 'account_floor_kobo'" </dev/null)
 if [[ $has_sig_acts == 1 ]]; then
   require_env ARGON_AUTH_PASSWORD
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
@@ -88,10 +98,39 @@ if [[ $has_sig_acts == 1 ]]; then
     ($SP3, $U1, 'pin', 'approval_signature'), ($SP4, $U3, 'pin', 'approval_signature'),
     ($SP5, $U1, 'pin', 'approval_rejection');" </dev/null >/dev/null
 fi
+pg_as argon_app "$db" -q -c "INSERT INTO societies (id, code, registered_name, registration_number, state_directorate)
+  VALUES ($S, 'ZZPROBE', 'Probe Cooperative', 'PROBE/0001', 'Lagos');" </dev/null >/dev/null
+MONEY_ACCOUNTS="" MONEY_REQUEST=""
+if [[ $has_money == 1 ]]; then
+  # PROBE TEST DATA, not regulation: a ₦10 fee, VAT 7.5% of it, no levy, no
+  # margin, a ₦0 floor, two signatures.
+  pg_as argon_migrator "$db" -q <<SQL >/dev/null
+BEGIN;
+UPDATE societies SET withdrawal_signatures_required = 2, account_floor_kobo = 0 WHERE id = $S;
+WITH s AS (
+  INSERT INTO charge_schedules (society_id, kind, component, effective_from, source)
+  SELECT $S, 'withdrawal_out', c, '2020-01-01', 'PROBE TEST DATA'
+    FROM unnest(ARRAY['partner_fee', 'partner_fee_vat', 'statutory_levy', 'argon_margin']) c
+  RETURNING id, component)
+INSERT INTO charge_bands (schedule_id, from_kobo, flat_kobo, bp)
+  SELECT id, 0, CASE component WHEN 'partner_fee' THEN 1000 ELSE 0 END, CASE component WHEN 'partner_fee_vat' THEN 750 ELSE 0 END FROM s;
+COMMIT;
+SQL
+  pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+    ($SP6, $U1, 'pin', 'contribution_record'), ($SP7, $U1, 'pin', 'approval_signature'),
+    ($SP8, $U3, 'pin', 'approval_signature'), ($SP9, $U1, 'pin', 'withdrawal_payout'),
+    ($SP10, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
+  MONEY_ACCOUNTS=",
+  ($A3, $S, '2101', 'Charges payable — partner', 'liability', 'charges_partner'),
+  ($A4, $S, '2102', 'VAT payable on charges', 'liability', 'charges_vat')"
+  # R3: ₦5,000 out of M2's savings, approved by M1 and M3 (neither is M2).
+  MONEY_REQUEST="INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
+  VALUES ($R3, $S, 'APR-PROBE-3', $M2, 'withdrawal_out', 500000, 2, now() + interval '1 day');
+$(sign_on_sql "$R3" "$SP7" "$SA7" "$U1" "$M1" treasurer)
+$(sign_on_sql "$R3" "$SP8" "$SA8" "$U3" "$M3" chairman)"
+fi
 pg_as argon_app "$db" -q <<SQL >/dev/null
 BEGIN;
-INSERT INTO societies (id, code, registered_name, registration_number, state_directorate)
-  VALUES ($S, 'ZZPROBE', 'Probe Cooperative', 'PROBE/0001', 'Lagos');
 INSERT INTO branches (id, society_id, code, name) VALUES ($B, $S, 'HQ', 'Head office');
 INSERT INTO members (id, society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id) VALUES
   ($M1, $S, $B, 'P-001', 'Probe Treasurer', '+2340000000001', 'payroll', '2020-01-01', $U1),
@@ -102,7 +141,7 @@ INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from) 
   ($S, $M3, 'chairman',  true, '2020-01-01');
 INSERT INTO accounts (id, society_id, code, name, kind, role) VALUES
   ($A1, $S, '1000', 'Cash at VFD', 'asset', 'bank'),
-  ($A2, $S, '2000', 'Member savings', 'liability', 'member_savings');
+  ($A2, $S, '2000', 'Member savings', 'liability', 'member_savings')$MONEY_ACCOUNTS;
 $BATCH_SQL
 INSERT INTO ledger_entries (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
   VALUES ($E1, $S, $BT, 'contribution_in', '2026-01-31', $ACTOR, 'treasurer', 'Treasurer');
@@ -110,9 +149,10 @@ INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, me
   ($L1, $E1, $A1,  10000, 'principal', NULL),
   ($L2, $E1, $A2, -10000, 'principal', $M1);
 INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-  VALUES ($R1, $S, 'APR-PROBE-1', $M1, 'withdrawal_out', 50000000, 2, now() + interval '1 day'),
+  VALUES ($R1, $S, 'APR-PROBE-1', $M2, 'withdrawal_out', 50000000, 2, now() + interval '1 day'),
          ($R2, $S, 'APR-PROBE-2', $M2, 'withdrawal_out', 50000000, 2, now() + interval '1 day');
 $(sign_sql "$SP1" "$SA1" "$U1" "$M1" treasurer)
+$MONEY_REQUEST
 COMMIT;
 SQL
 n=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM ledger_lines WHERE entry_id = $E1" </dev/null)
@@ -174,11 +214,21 @@ probe req T6 $OWNER 'P0001.*immutable: DELETE on ledger_batches' "DELETE a poste
 
 # 3. Balance, enforced at COMMIT. The marker proves both INSERTs succeeded and
 # the refusal came from COMMIT — i.e. the deferred trigger, not an early check.
+# A single contribution rests on its poster's act where the schema has them
+# (0011), so the only refusal C3 can meet is the balance check it is about.
+SP11=$(U 141) SP12=$(U 142) SA11=$(U 151) SA12=$(U 152)
+C3_ACT="" C3_COL="" C3_VAL="" K3_ACT="" K3_COL="" K3_VAL=""
+if [[ $has_money == 1 ]]; then
+  pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+    ($SP11, $ACTOR, 'pin', 'contribution_record'), ($SP12, $ACTOR, 'pin', 'contribution_record');" </dev/null >/dev/null
+  C3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA11, 'contribution_record', $ACTOR, $SP11);" C3_COL=", act_id" C3_VAL=", $SA11"
+  K3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA12, 'contribution_record', $ACTOR, $SP12);" K3_COL=", act_id" K3_VAL=", $SA12"
+fi
 probe req C3 argon_app "P0001.*entry a0000000-0000-4000-8000-000000000042 does not balance: debits minus credits = 100 kobo" \
   "entry whose lines sum to +100 kobo fails at COMMIT" \
-  "BEGIN;
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
-     VALUES ($EBAD, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer');
+  "BEGIN; $C3_ACT
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label$C3_COL)
+     VALUES ($EBAD, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer'$C3_VAL);
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EBAD, $A1,  10000, 'principal');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES ($EBAD, $A2,  -9900, 'principal', $M1);
    \\echo PROBE_MARKER_LINES_INSERTED_BEFORE_COMMIT
@@ -187,9 +237,9 @@ probe req C3b argon_app 'P0001.*C3b-entry-persisted' "…and the unbalanced entr
   "DO \$\$ BEGIN IF (SELECT count(*) FROM ledger_entries WHERE id = $EBAD) + (SELECT count(*) FROM ledger_lines WHERE entry_id = $EBAD) > 0
      THEN RAISE NOTICE 'persisted'; ELSE RAISE EXCEPTION 'C3b-entry-persisted: none (this refusal is the pass)'; END IF; END \$\$;"
 probe ctl K3 argon_app '' "control: the same entry balanced (+10000/−10000) commits" \
-  "BEGIN;
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
-     VALUES ($EOK, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer');
+  "BEGIN; $K3_ACT
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label$K3_COL)
+     VALUES ($EOK, $S, 'contribution_in', '2026-02-01', $ACTOR, 'treasurer', 'Treasurer'$K3_VAL);
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($EOK, $A1,  10000, 'principal');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES ($EOK, $A2, -10000, 'principal', $M1);
    COMMIT;"
@@ -224,6 +274,44 @@ probe ctl K23 argon_app '' "control: app rejects on the rejecter's own step-up, 
 fi
 
 # == Privilege layer: what argon_app cannot even attempt =======================
+# 0011 as the app: governance and charges are not the app's to write (P25–P30,
+# by INSERT as well as UPDATE: an app that could INSERT a society's quorum
+# could create one with a quorum of 1); its descriptive fields are (K26). The
+# money path runs as the app it serves: a contribution with no step-up is
+# refused (P31); one on the poster's own act commits (K25); an approved
+# withdrawal is paid out, charges on top (K27), once (P32).
+if [[ $has_money == 1 ]]; then
+probe req P25 argon_app '42501.*permission denied for table charge_schedules' "app writes a charge series" \
+  "INSERT INTO charge_schedules (society_id, kind, component, effective_from, source) VALUES ($S, 'withdrawal_out', 'argon_margin', '2026-01-01', 'app');"
+probe req P26 argon_app '42501.*permission denied for table societies' "app sets its society's withdrawal quorum to 1" \
+  "UPDATE societies SET withdrawal_signatures_required = 1 WHERE id = $S;"
+probe req P27 argon_app '42501.*permission denied for table societies' "app creates a society that carries a withdrawal quorum of 1" \
+  "INSERT INTO societies (code, registered_name, registration_number, state_directorate, withdrawal_signatures_required) VALUES ('ZZP27', 'Quorum of one', 'P/27', 'Lagos', 1);"
+probe req P28 argon_app '42501.*permission denied for table societies' "app lowers its society's account floor" \
+  "UPDATE societies SET account_floor_kobo = 0 WHERE id = $S;"
+probe req P29 argon_app '42501.*permission denied for table societies' "app sets its society's write-off quorum" \
+  "UPDATE societies SET write_off_signatures_required = 1 WHERE id = $S;"
+probe req P30 argon_app '42501.*permission denied for table societies' "app lowers its society's general signature count" \
+  "UPDATE societies SET signatures_required = 1 WHERE id = $S;"
+probe ctl K26 argon_app '' "control: app corrects its society's registered name (a descriptive field)" \
+  "UPDATE societies SET registered_name = 'Probe Cooperative Society' WHERE id = $S;"
+probe req P31 argon_app '23514.*rests on its poster' "app records a contribution with no step-up behind it" \
+  "BEGIN; INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
+probe ctl K25 argon_app '' "control: app records a ₦10,000 contribution on the poster's own step-up" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA6, 'contribution_record', $U1, $SP6);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA6);
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
+probe ctl K27 argon_app '' "control: app pays out an approved ₦5,000 withdrawal, ₦10.75 on top, on its own step-up" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, 'NIP-PROBE-1');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+     ($E3, $A2, 501075, 'principal', $M2), ($E3, $A1, -500000, 'principal', NULL), ($E3, $A3, -1000, 'partner_charge', NULL), ($E3, $A4, -75, 'partner_vat', NULL); COMMIT;"
+probe req P32 argon_app '23505.*withdrawal_posted_once' "app pays the same approved request a second time" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, 'NIP-PROBE-2'); COMMIT;"
+fi
+
 probe req P1 argon_app '42501.*permission denied for table ledger_entries' "app UPDATE on ledger_entries" \
   "UPDATE ledger_entries SET reason = 'probe tamper' WHERE id = $E1;"
 probe req P2 argon_app '42501.*permission denied for table ledger_lines' "app DELETE on ledger_lines" \

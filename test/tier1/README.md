@@ -61,6 +61,14 @@ Three existing fixtures had to change because they posted charges no schedule pr
 - TestMoney22 (a levy line belongs on the levy account) first put the levy on the VAT account. The VAT account's own rule (it carries only VAT) refused it too, so the test passed under the mutant that drops the levy rule. It now uses an account no charge rule guards.
 - TestMoney31 (a request is paid once) was refused the second time because the money had run out, not because the request had been paid. The member now has savings enough for two payouts.
 
+**0011 as the app (the probe, 2026-10-13).** As argon_app:
+- the app cannot write a charge series (P25), and cannot set any quorum or the floor by UPDATE (P26, P28–P30) or by creating a society that carries one (P27);
+- it can still correct a society's name (K26);
+- it cannot record a contribution without a step-up (P31), and can on its own act (K25);
+- it pays out an approved withdrawal, charges on top (K27), once (P32).
+
+Each grant was put back on its own, in the commit that added the checks: table-wide UPDATE on `societies` turned P26 and P28–P30 red and left P27 holding; table-wide INSERT turned only P27 red (taking away UPDATE alone would have looked closed); INSERT on charge schedules turned only P25 red. The probe's own balance cases (C3, K3) now carry the poster's act, so C3 meets only the balance rule.
+
 **Habit (2026-10-12): after splitting one rule into several, re-ask of every test which rule actually refuses it.** A split turns each new rule's neighbours into potential cover, and the split itself created test 22's cover, in a suite already proven once. Re-proving is not enough, because the suite passes either way. Read each mutant's red REASON: a WRONG REFUSAL means a neighbour covered for the rule under test.
 
 Signatures and rejections in every fixture go through `onStepUp`

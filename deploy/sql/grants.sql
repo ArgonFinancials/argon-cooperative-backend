@@ -19,8 +19,11 @@ GRANT SELECT ON
   ledger_batches, ledger_entries, ledger_lines, signatory_approvals, wallet_reconciliations
 TO argon_app;
 GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_app;
+-- act_id, request_id, payout_reference (0011): a single movement's step-up act,
+-- the approved request a payout pays, and the transfer that paid it.
 GRANT INSERT (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post,
-              actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id)
+              actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id,
+              act_id, request_id, payout_reference)
   ON ledger_entries TO argon_app;
 -- act_id (0010): the signer's own step-up act, written by the app in the
 -- signature's transaction. Without it in this list the app cannot sign at all
@@ -31,7 +34,22 @@ GRANT INSERT (id, request_id, member_id, post_at_signing, user_id, act_id)
 -- Mutable reference state. No DELETE: a society, member or user is ended by a
 -- status change, not by vanishing. members.user_id is updatable (linking a
 -- record to its person); relinking is checked by members_relink_auditor_check.
-GRANT SELECT, INSERT, UPDATE ON societies, branches, members, accounts, wallets TO argon_app;
+GRANT SELECT, INSERT, UPDATE ON branches, members, accounts, wallets TO argon_app;
+
+-- A society: its descriptive fields only (0011, LEDGER_CONTRACT §10). Its
+-- quorums (signatures_required, write_off_signatures_required,
+-- withdrawal_signatures_required), account floor, guard threshold and
+-- lifecycle are bye-law and platform decisions: set by the operator script
+-- until a request kind exists to change them. Neither INSERT nor UPDATE: an
+-- app that could INSERT them could create a society with a quorum of 1, and
+-- taking away only UPDATE would look like the hole was closed.
+GRANT SELECT ON societies TO argon_app;
+GRANT INSERT (id, code, registered_name, registration_number, state_directorate) ON societies TO argon_app;
+GRANT UPDATE (registered_name, state_directorate) ON societies TO argon_app;
+
+-- Charges (0011) are configuration the operator writes as the owner. The app
+-- reads them; it never writes a figure it will later be charged by.
+GRANT SELECT ON charge_schedules, charge_bands TO argon_app;
 GRANT SELECT, INSERT ON users TO argon_app;
 GRANT UPDATE (full_name) ON users TO argon_app;
 
