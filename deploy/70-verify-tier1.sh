@@ -352,6 +352,20 @@ probe req P32 argon_app '23505.*withdrawal_posted_once' "app pays the same appro
 fi
 fi
 
+# 0014: the operator's functions are the operator's. The app can call none of
+# them, and cannot write the log of who changed a society's rules.
+# Detected from the catalog, not information_schema: information_schema lists
+# only what the asking role may touch, and the app may touch none of this, so
+# asking it there reads "absent" and skips every case below without a word.
+has_operator=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.society_settings_log') IS NOT NULL)::int" </dev/null)
+[[ $has_operator == 1 ]] || info "schema before 0014: no operator functions to probe (P36–P39 not run)"
+if [[ $has_operator == 1 ]]; then
+probe req P36 argon_app '42501.*permission denied for function operator_set_withdrawal_quorum' "app sets its society's withdrawal quorum through the operator's function"   "SELECT operator_set_withdrawal_quorum($S, 2, 'app', 'app', 'none', current_date, 'app');"
+probe req P37 argon_app '42501.*permission denied for function operator_add_charge_series' "app adds a charge series through the operator's function"   "SELECT operator_add_charge_series($S, 'withdrawal_out', 'argon_margin', current_date, 'app', '[]'::jsonb, 'app', 'app', 'app');"
+probe req P38 argon_app '42501.*permission denied for function operator_set_lifecycle' "app moves its society's lifecycle through the operator's function"   "SELECT operator_set_lifecycle($S, 'active', 'app', 'app', 'app');"
+probe req P39 argon_app '42501.*permission denied for table society_settings_log' "app writes into the log of who changed a society's rules"   "INSERT INTO society_settings_log (society_id, setting, new_value) VALUES ($S, 'withdrawal_signatures_required', '1');"
+fi
+
 probe req P1 argon_app '42501.*permission denied for table ledger_entries' "app UPDATE on ledger_entries" \
   "UPDATE ledger_entries SET reason = 'probe tamper' WHERE id = $E1;"
 probe req P2 argon_app '42501.*permission denied for table ledger_lines' "app DELETE on ledger_lines" \
