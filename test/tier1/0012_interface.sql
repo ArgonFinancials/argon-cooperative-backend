@@ -34,11 +34,16 @@ CREATE TABLE withdrawal_hold_releases (
   at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE ledger_entries ADD COLUMN hold_id UUID REFERENCES withdrawal_holds(id);
+-- A flag carries what a resolver needs without going to the logs: what was
+-- expected, what happened, and when (raised_at; the entry's own value date and
+-- posting time through entry_id), and the hold it concerns, if any.
 CREATE TABLE ledger_discrepancies (
   id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   entry_id  UUID NOT NULL REFERENCES ledger_entries(id),
+  hold_id   UUID REFERENCES withdrawal_holds(id),
   kind      TEXT NOT NULL,
-  detail    TEXT NOT NULL,
+  expected  TEXT NOT NULL,
+  observed  TEXT NOT NULL,
   raised_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

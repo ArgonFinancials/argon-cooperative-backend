@@ -62,6 +62,14 @@ Three existing fixtures had to change because they posted charges no schedule pr
 - TestMoney22 (a levy line belongs on the levy account) first put the levy on the VAT account. The VAT account's own rule (it carries only VAT) refused it too, so the test passed under the mutant that drops the levy rule. It now uses an account no charge rule guards.
 - TestMoney31 (a request is paid once) was refused the second time because the money had run out, not because the request had been paid. The member now has savings enough for two payouts.
 
+**0012 as the app (the probe, 2026-10-13).** As argon_app:
+- the app cannot supply a hold's charges (P33), and authorises a payout on its own step-up (K29);
+- it records the held payout (K27), and cannot record the same transfer twice (P32, its meaning since 0012);
+- a second, different transfer on one hold is recorded (K28) and flagged with what was expected and what happened (P34);
+- it cannot write a flag away (P35).
+
+Each new grant was widened on its own: table-wide INSERT on holds turned P33 red (refused by the hold's rule instead of the role), and DELETE on flags turned P35 red. Flags carry expected, observed, when and the hold; a mute flag (`m_flag_mute`) and an undetermined charge reported as zero (`m_undetermined_as_zero`) are mutants that turn their tests red.
+
 **0011 as the app (the probe, 2026-10-13).** As argon_app:
 - the app cannot write a charge series (P25), and cannot set any quorum or the floor by UPDATE (P26, P28–P30) or by creating a society that carries one (P27);
 - it can still correct a society's name (K26);

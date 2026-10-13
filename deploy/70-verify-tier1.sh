@@ -91,6 +91,11 @@ INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id)
 # operator does, here as the migrator, between the app's society and the rest.
 has_money=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
   WHERE table_name = 'societies' AND column_name = 'account_floor_kobo'" </dev/null)
+# The payout hold (0012): a payout is authorised (held) before money moves,
+# and whatever happened is recorded, any difference flagged.
+has_holds=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
+  WHERE table_name = 'ledger_entries' AND column_name = 'hold_id'" </dev/null)
+H1=$(U 65) E5=$(U 48) SP13=$(U 143) SP14=$(U 144) SA13=$(U 153) SA14=$(U 154)
 if [[ $has_sig_acts == 1 ]]; then
   require_env ARGON_AUTH_PASSWORD
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
@@ -120,6 +125,10 @@ SQL
     ($SP6, $U1, 'pin', 'contribution_record'), ($SP7, $U1, 'pin', 'approval_signature'),
     ($SP8, $U3, 'pin', 'approval_signature'), ($SP9, $U1, 'pin', 'withdrawal_payout'),
     ($SP10, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
+  if [[ $has_holds == 1 ]]; then
+    pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+      ($SP13, $U1, 'pin', 'withdrawal_authorisation'), ($SP14, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
+  fi
   MONEY_ACCOUNTS=",
   ($A3, $S, '2101', 'Charges payable — partner', 'liability', 'charges_partner'),
   ($A4, $S, '2102', 'VAT payable on charges', 'liability', 'charges_vat')"
@@ -302,6 +311,25 @@ probe ctl K25 argon_app '' "control: app records a ₦10,000 contribution on the
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA6, 'contribution_record', $U1, $SP6);
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA6);
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
+if [[ $has_holds == 1 ]]; then
+# 0012: authorise (hold) before the money moves; then record whatever happened.
+probe req P33 argon_app '42501.*permission denied for table withdrawal_holds' "app supplies a hold's charges (the server computes them)"   "INSERT INTO withdrawal_holds (request_id, society_id, member_id, amount_kobo, partner_fee_kobo, actor_user_id) VALUES ($R3, $S, $M2, 500000, 0, $U1);"
+probe ctl K29 argon_app '' "control: app authorises the approved ₦5,000 payout on its own step-up (a hold)"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA13, 'withdrawal_authorisation', $U1, $SP13);
+   INSERT INTO withdrawal_holds (id, request_id, society_id, member_id, amount_kobo, actor_user_id, act_id) VALUES ($H1, $R3, $S, $M2, 500000, $U1, $SA13); COMMIT;"
+probe ctl K27 argon_app '' "control: app records the held ₦5,000 payout, ₦10.75 on top, on its own step-up"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, $H1, 'NIP-PROBE-1');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+     ($E3, $A2, 501075, 'principal', $M2), ($E3, $A1, -500000, 'principal', NULL), ($E3, $A3, -1000, 'partner_charge', NULL), ($E3, $A4, -75, 'partner_vat', NULL); COMMIT;"
+probe req P32 argon_app '23505.*payout_recorded_once' "app records the same bank transfer a second time"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, $H1, 'NIP-PROBE-1'); COMMIT;"
+probe ctl K28 argon_app '' "control: a second, different transfer on the same hold is RECORDED (and flagged), not refused"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA14, 'withdrawal_payout', $U1, $SP14);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E5, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA14, $R3, $H1, 'NIP-PROBE-2');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+     ($E5, $A2, 501075, 'principal', $M2), ($E5, $A1, -500000, 'principal', NULL), ($E5, $A3, -1000, 'partner_charge', NULL), ($E5, $A4, -75, 'partner_vat', NULL); COMMIT;"
+probe req P34 argon_app 'P0001.*K28-unflagged' "…and the second transfer was flagged for a person (hold_paid_twice)"   "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM ledger_discrepancies WHERE entry_id = $E5 AND kind = 'hold_paid_twice' AND expected <> '' AND observed <> '')
+     THEN RAISE EXCEPTION 'K28-unflagged: no, it was flagged (this refusal is the pass)'; ELSE RAISE NOTICE 'unflagged'; END IF; END \$\$;"
+probe req P35 argon_app '42501.*permission denied for table ledger_discrepancies' "app writes away a flag"   "DELETE FROM ledger_discrepancies WHERE entry_id = $E5;"
+else
 probe ctl K27 argon_app '' "control: app pays out an approved ₦5,000 withdrawal, ₦10.75 on top, on its own step-up" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, 'NIP-PROBE-1');
@@ -310,6 +338,7 @@ probe ctl K27 argon_app '' "control: app pays out an approved ₦5,000 withdrawa
 probe req P32 argon_app '23505.*withdrawal_posted_once' "app pays the same approved request a second time" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, 'NIP-PROBE-2'); COMMIT;"
+fi
 fi
 
 probe req P1 argon_app '42501.*permission denied for table ledger_entries' "app UPDATE on ledger_entries" \

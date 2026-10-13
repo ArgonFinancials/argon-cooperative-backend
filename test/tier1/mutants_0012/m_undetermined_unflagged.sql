@@ -107,6 +107,7 @@ DECLARE
   v_held   BIGINT;
   v_floor  BIGINT;
   v_person UUID;
+  v_con    TEXT;
 BEGIN
   SELECT * INTO e FROM ledger_entries WHERE id = NEW.id;
   IF e.kind NOT IN ('contribution_in', 'withdrawal_out') OR e.reverses_id IS NOT NULL OR e.adjusts_id IS NOT NULL THEN
@@ -146,6 +147,7 @@ BEGIN
       v_quoted := true;
     EXCEPTION WHEN check_violation THEN
       v_quoted := false;
+      GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
     END;
     IF v_quoted THEN
       IF c_fee <> q.partner_fee_kobo OR c_vat <> q.partner_vat_kobo OR c_levy <> q.statutory_levy_kobo OR c_margin <> q.argon_margin_kobo THEN
@@ -163,7 +165,7 @@ BEGIN
   -- A payout: the money left. Record it; flag every difference from what was
   -- authorised. Refuse only a malformed record.
   IF e.hold_id IS NULL THEN
-    INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_without_hold', format('%s kobo left with no authorisation behind it', base));
+    INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, NULL, 'payout_without_hold', 'a payout authorised to execute (a hold) before the money left', format('%s kobo left with no hold behind it', base));
   ELSE
     SELECT * INTO h FROM withdrawal_holds WHERE id = e.hold_id;
     IF EXISTS (SELECT 1 FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id
@@ -174,13 +176,13 @@ BEGIN
         PERFORM auth_refuse('entry_charge_is_the_holds', format('the charges were fixed when the payout was authorised: %s, %s, %s, %s; the entry carries %s, %s, %s, %s', h.partner_fee_kobo, h.partner_vat_kobo, h.statutory_levy_kobo, h.argon_margin_kobo, c_fee, c_vat, c_levy, c_margin));
       END IF;
     IF base <> h.amount_kobo THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_amount_differs', format('%s kobo paid on a hold for %s', base, h.amount_kobo));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'payout_amount_differs', format('%s kobo, as held', h.amount_kobo), format('%s kobo paid', base));
     END IF;
     IF EXISTS (SELECT 1 FROM withdrawal_hold_releases WHERE hold_id = h.id) THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_on_released_hold', format('paid on hold %s after it was released', h.id));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'payout_on_released_hold', format('no payout on hold %s: it was released', h.id), format('%s kobo paid on it after the release', base));
     END IF;
     IF EXISTS (SELECT 1 FROM ledger_entries WHERE hold_id = h.id AND id <> e.id) THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'hold_paid_twice', format('hold %s has more than one recorded payout', h.id));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'hold_paid_twice', format('one payout on hold %s', h.id), format('%s recorded payouts on it, this one %s kobo', (SELECT count(*) FROM ledger_entries WHERE hold_id = h.id), base));
     END IF;
   END IF;
   SELECT l.member_id INTO v_member FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id
@@ -194,7 +196,7 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM loan_guarantee_withdrawals gw WHERE gw.guarantee_id = g.id);
     SELECT coalesce(account_floor_kobo, 0) INTO v_floor FROM societies WHERE id = e.society_id;
     IF v_after - v_held - v_floor < 0 THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_overdraws', format('after this payout the member''s savings of %s fall %s below what must stay (held %s, floor %s)', v_after, -(v_after - v_held - v_floor), v_held, v_floor));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, e.hold_id, 'payout_overdraws', format('at least %s kobo left in savings (held for guarantees %s, floor %s)', v_held + v_floor, v_held, v_floor), format('%s kobo in savings after this payout', v_after));
     END IF;
   END IF;
   RETURN NULL;

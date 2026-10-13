@@ -107,6 +107,7 @@ DECLARE
   v_held   BIGINT;
   v_floor  BIGINT;
   v_person UUID;
+  v_con    TEXT;
 BEGIN
   SELECT * INTO e FROM ledger_entries WHERE id = NEW.id;
   IF e.kind NOT IN ('contribution_in', 'withdrawal_out') OR e.reverses_id IS NOT NULL OR e.adjusts_id IS NOT NULL THEN
@@ -146,6 +147,7 @@ BEGIN
       v_quoted := true;
     EXCEPTION WHEN check_violation THEN
       v_quoted := false;
+      GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
     END;
     IF v_quoted THEN
       IF c_fee <> q.partner_fee_kobo OR c_vat <> q.partner_vat_kobo OR c_levy <> q.statutory_levy_kobo OR c_margin <> q.argon_margin_kobo THEN
@@ -155,7 +157,7 @@ BEGIN
       IF c_fee <> 0 OR c_vat <> 0 OR c_levy <> 0 OR c_margin <> 0 THEN
         PERFORM auth_refuse('entry_charge_is_the_schedules', 'this society''s series cannot determine the charge, so the entry carries none');
       END IF;
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'charge_undetermined', format('%s kobo arrived; the society''s series could not determine its charge, so it was recorded uncharged', base));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, NULL, 'charge_undetermined', format('the charge on %s kobo from the society''s series, whose %s is not set', base, CASE v_con WHEN 'charge_partner_fee_unset' THEN 'partner_fee' WHEN 'charge_vat_unset' THEN 'partner_fee_vat' WHEN 'charge_levy_unset' THEN 'statutory_levy' WHEN 'charge_margin_unset' THEN 'argon_margin' WHEN 'charge_band_missing' THEN 'band covering this amount' ELSE coalesce(v_con, 'series') END), 'recorded uncharged: the charge is UNDETERMINED, not zero');
     END IF;
     RETURN NULL;
   END IF;
@@ -174,13 +176,13 @@ BEGIN
         PERFORM auth_refuse('entry_charge_is_the_holds', format('the charges were fixed when the payout was authorised: %s, %s, %s, %s; the entry carries %s, %s, %s, %s', h.partner_fee_kobo, h.partner_vat_kobo, h.statutory_levy_kobo, h.argon_margin_kobo, c_fee, c_vat, c_levy, c_margin));
       END IF;
     IF base <> h.amount_kobo THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_amount_differs', format('%s kobo paid on a hold for %s', base, h.amount_kobo));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'payout_amount_differs', format('%s kobo, as held', h.amount_kobo), format('%s kobo paid', base));
     END IF;
     IF EXISTS (SELECT 1 FROM withdrawal_hold_releases WHERE hold_id = h.id) THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_on_released_hold', format('paid on hold %s after it was released', h.id));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'payout_on_released_hold', format('no payout on hold %s: it was released', h.id), format('%s kobo paid on it after the release', base));
     END IF;
     IF EXISTS (SELECT 1 FROM ledger_entries WHERE hold_id = h.id AND id <> e.id) THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'hold_paid_twice', format('hold %s has more than one recorded payout', h.id));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, h.id, 'hold_paid_twice', format('one payout on hold %s', h.id), format('%s recorded payouts on it, this one %s kobo', (SELECT count(*) FROM ledger_entries WHERE hold_id = h.id), base));
     END IF;
   END IF;
   SELECT l.member_id INTO v_member FROM ledger_lines l JOIN accounts ac ON ac.id = l.account_id
@@ -194,7 +196,7 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM loan_guarantee_withdrawals gw WHERE gw.guarantee_id = g.id);
     SELECT coalesce(account_floor_kobo, 0) INTO v_floor FROM societies WHERE id = e.society_id;
     IF v_after - v_held - v_floor < 0 THEN
-      INSERT INTO ledger_discrepancies (entry_id, kind, detail) VALUES (e.id, 'payout_overdraws', format('after this payout the member''s savings of %s fall %s below what must stay (held %s, floor %s)', v_after, -(v_after - v_held - v_floor), v_held, v_floor));
+      INSERT INTO ledger_discrepancies (entry_id, hold_id, kind, expected, observed) VALUES (e.id, e.hold_id, 'payout_overdraws', format('at least %s kobo left in savings (held for guarantees %s, floor %s)', v_held + v_floor, v_held, v_floor), format('%s kobo in savings after this payout', v_after));
     END IF;
   END IF;
   RETURN NULL;

@@ -23,8 +23,15 @@ GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_ap
 -- the approved request a payout pays, and the transfer that paid it.
 GRANT INSERT (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post,
               actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id,
-              act_id, request_id, payout_reference)
+              act_id, request_id, payout_reference, hold_id)
   ON ledger_entries TO argon_app;
+
+-- The payout hold (0012). The app authorises a payout (a hold) and releases
+-- one, but never writes a hold's charges (the server computes them) and never
+-- writes a flag (only the rules do, at commit). Both are append-only.
+GRANT SELECT ON withdrawal_holds, withdrawal_hold_releases, ledger_discrepancies TO argon_app;
+GRANT INSERT (id, request_id, society_id, member_id, amount_kobo, actor_user_id, act_id) ON withdrawal_holds TO argon_app;
+GRANT INSERT (hold_id, actor_user_id, reason) ON withdrawal_hold_releases TO argon_app;
 -- act_id (0010): the signer's own step-up act, written by the app in the
 -- signature's transaction. Without it in this list the app cannot sign at all
 -- (finding 25), however right the rule.

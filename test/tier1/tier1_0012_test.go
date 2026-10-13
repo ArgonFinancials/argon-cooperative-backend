@@ -35,6 +35,7 @@ package tier1
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -137,7 +138,25 @@ func (w *mworld) record(t *testing.T, p payoutRec) (string, error) {
 	return id, err
 }
 
-// flags: what was flagged on an entry for a person.
+// flag: one item for a person, as they will read it.
+type flag struct{ kind, expected, observed string }
+
+// flagsOf: everything flagged on an entry.
+func flagsOf(t *testing.T, entry string) []flag {
+	t.Helper()
+	var fs []flag
+	rows, err := db.Query(bg(), `SELECT kind, expected, observed FROM ledger_discrepancies WHERE entry_id = $1 ORDER BY kind`, entry)
+	fixture(t, err, "the discrepancies")
+	defer rows.Close()
+	for rows.Next() {
+		var f flag
+		fixture(t, rows.Scan(&f.kind, &f.expected, &f.observed), "a discrepancy")
+		fs = append(fs, f)
+	}
+	return fs
+}
+
+// flags: the kinds flagged on an entry.
 func flags(t *testing.T, entry string) []string {
 	t.Helper()
 	var ks []string
@@ -160,6 +179,12 @@ func recordedAndFlagged(t *testing.T, entry string, err error, kind, what string
 	}
 	if got := flags(t, entry); !slices.Contains(got, kind) {
 		t.Fatalf("UNFLAGGED — %s was recorded with flags %v; want %q for a person to explain", what, got, kind)
+	}
+	// A flag a resolver can act on says what was expected and what happened.
+	for _, f := range flagsOf(t, entry) {
+		if f.kind == kind && (strings.TrimSpace(f.expected) == "" || strings.TrimSpace(f.observed) == "") {
+			t.Fatalf("MUTE FLAG — %q on %s says expected %q, observed %q: a resolver would have to go to the logs", kind, what, f.expected, f.observed)
+		}
 	}
 }
 
@@ -491,4 +516,11 @@ func TestPayout28_AContributionWhoseChargeCannotBeDeterminedIsRecordedAndFlagged
 	allSeriesBut(t, w.c.s.id, "contribution_in", "statutory_levy")
 	err := w.post(t, move{kind: "contribution_in", lines: w.contribution(w.bMem, 2500000, fees{})})
 	recordedAndFlagged(t, w.lastEntry, err, "charge_undetermined", "₦25,000 that arrived in a society whose levy is undecided")
+	// UNDETERMINED, not zero: uncharged with a flag that said "free" would later
+	// read as correctly free. And which component is missing.
+	for _, f := range flagsOf(t, w.lastEntry) {
+		if f.kind == "charge_undetermined" && (!strings.Contains(strings.ToLower(f.observed), "undetermined") || !strings.Contains(f.expected, "statutory_levy")) {
+			t.Fatalf("MISLEADING FLAG — expected %q, observed %q: it must say the charge is undetermined, and that statutory_levy is what is missing", f.expected, f.observed)
+		}
+	}
 }
