@@ -193,11 +193,13 @@ does not sum to zero.
 |---|---|---|
 | Charge posting rules | Engineering + Tier 1 accountant | **Must join the B-29 review.** Which accounts charges post to, and when they are recognised, is not settled. |
 | Partner charge vs Argon margin recorded separately | Commercial | **Must be separate.** See below. |
-| VFD balance vs Argon ledger: which is the record of account | Legal + Product | **DISPUTED** (2026-10-02): two contradicting claims in this project, the original source unavailable. See below. Blocks anything that reconciles against VFD. |
+| VFD balance vs Argon ledger: which is the record of account | Legal + Product | **CLOSED 2026-10-13 (§11).** Argon's ledger is the record of account of what the society decided; VFD's balance is the bank's record of what it holds; neither is adjusted to match the other; a difference is an item to explain. Settled by evidence from the running wallet platform, not by the B-04 summary, **which described a spike nobody ran** (finding 32). Carries an obligation: scheduled reconciliation against VFD (§11). |
 | Does a reversal refund the Argon charge? | **Commercial** | **D-02: answered, assumed-pending.** The charge is refunded with the principal. Assumed until Commercial confirms; **blocks shipping.** See below. |
-| **Argon's margin on a regulated fee** | **Legal** | **OPEN (2026-10-09).** If the CBN guide sets a CEILING on what may be charged for a transfer, the question is not "may Argon add a margin on top" but "is Argon's total charge within the cap". That depends on whether Argon charges as a financial institution in its own right, or passes through VFD's fee as the licensed entity. The two have different answers, and the second is our structure. Until answered, a margin can be configured and is refused until set (§9). |
+| **Argon's own fee on a transfer** | **Legal** | **REFRAMED 2026-10-13.** The wallet platform books the ₦10 / ₦50 transfer fee as Argon's income (its charges page calls it Argon's profit); VFD's own charge to Argon is captured nowhere. So the question is not whether Argon may pass a bank's fee through, or add a margin to it: **Argon charges its own fee in its own right**, and the CBN cap applies to that differently. Until answered, the margin component is refused until set (§9). |
 | **The transfer levy's incidence** | **Compliance** | **OPEN (2026-10-11), its own item, not a footnote to the edition check.** If the levy is legally on electronic RECEIPTS, it falls on the recipient, and charging it to our sender would be a compliance error we built in deliberately. That is a different question from "are these the right figures". Until answered, the levy component refuses rather than assuming it applies (§9). |
-| Loan interest calculation method | The loan rate's owner | **OPEN (2026-10-09).** Flat on the principal, or on the reducing balance. Separate from movement charges (§9). Until decided, 0008 refuses any rate above zero. |
+| Loan interest calculation method | The loan rate's owner | **ANSWERED 2026-10-13 from the running loan platform: flat on principal** (argon-loans-backend `approval_terms.go:39-41`: total = principal × (1 + rate)), the method current customers have. For loan writes. **Flag to its owner:** that platform derives the term from the rate (months = ceil(rate ÷ 10), `approval_terms.go:45-53`), which is probably not intentional. |
+| **VFD's actual charge to Argon (the partner component)** | **Whoever holds the VFD relationship** | **OPEN (2026-10-13).** Unknown: no response, webhook or invoice field in the running platform carries it. The partner component stays refused until set (§9). |
+| **Where a society's money is held** | **Legal + Product** | **OPEN (2026-10-13), raised the same day.** Pooled in Argon's VFD account with each society's share existing only as a row in our database (the wallet platform's structure, unreconciled), or segregated per society. Expected: segregation, because a Directorate auditing a society will ask where the money is. **Build nothing that assumes either answer.** |
 | Opening balance contra account | Tier 1 accountant | `opening_balance` posts at zero charge as its own movement kind. What it debits is §7's assumption, not a decision. |
 
 ### The reversal charge is a fairness question before it is an accounting one
@@ -244,6 +246,8 @@ from history — you cannot later ask what Argon actually earned, because the
 answer was never written down. Transaction charges are the only revenue line in
 the product, so this is the only place that number exists.
 
+> **CLOSED 2026-10-13 — see §11. Kept below as the record of the dispute.**
+>
 > **DISPUTED (2026-10-02). Do not build on either claim.** This project holds
 > two contradicting statements of which balance is the record of account:
 > `lib/decisions.ts` D-04 as first written says **Argon's ledger**; the same
@@ -386,6 +390,13 @@ act in the product.
 
 ## 9. Decided 2026-10-09: how charges are configured, who bears them, when a withdrawal is posted
 
+**Corrected 2026-10-13: the ₦10 / ₦50 transfer fee is ARGON'S, not the bank's.** The running wallet platform books it as Argon's income; VFD's actual charge to Argon is captured nowhere. So:
+- the figures listed below as the "partner fee" are **Argon's margin**;
+- the **partner component is unknown, not ₦10**. It stays refused until whoever holds the VFD relationship says what VFD charges;
+- Legal's question is reframed (§6): Argon charges its own fee in its own right.
+
+The shape below is unchanged; the labels on the illustrative figures are corrected in suite 0011's fixtures.
+
 **Revised 2026-10-11: four components, not two.** The figures come from three statutes, and VAT is a rate on the fee, so a single shared band structure cannot hold them. Each component is its own series, from its own named source, set explicitly or refused, on its own ledger line and account:
 - **partner_fee** (the bank's fee, from the CBN guide): bands on the transfer amount.
 - **partner_fee_vat** (VAT law): a RATE ON THE FEE. Written as a figure per band it would be right today and silently wrong the next time the fee changed, and nobody would notice, because it would still look like a VAT figure.
@@ -439,3 +450,39 @@ They appear only as illustrative test data, marked so, pending the compliance ow
 - **Who may set them:** not the app and not an officer alone.
 - **The intended shape:** an approval request of its own kind, under the rules already built, at the society's current quorum, stating the before and after values. This is the write-off's shape: the society decides, attributably, and nobody changes the rule that protects them by editing a field.
 - **Until that request kind exists:** the operator script sets them, as it sets charge schedules, and the app has no privilege on those columns (0011).
+
+## 11. Decided 2026-10-13: the record of account, reconciliation, and recording what happened
+
+**D-04 is CLOSED.**
+- **Our immutable double-entry ledger is the record of account** of what the society decided.
+- **VFD's balance is the bank's record** of what it holds.
+- **Neither is ever adjusted to match the other;** a difference is an item to explain.
+
+**The evidence is the running wallet platform** (read-only review, 2026-10-13). It treats its local books as the record of account: every balance read and every sufficiency check uses its stored balance, and VFD's balance is never read per account. That matches D-04 as first written. It has never once checked those books against VFD:
+- no scheduled reconciliation;
+- in-app "reconciliation" compares local data with local data;
+- thirteen repair tools disagree with each other about which local figure is true, and none consults VFD.
+
+That is how ₦1.39m of loan credits accumulated uncorrected, waiting on "VFD balances" nobody fetched.
+
+**There was no B-04 spike.** "B-04" appears nowhere in code, docs or history in any of the four repositories. The summary this contract carried described work nobody did (finding 32). The answer came from reading what the running system does.
+
+**OBLIGATION: scheduled reconciliation against VFD.** This is what turns D-04 from an assertion into a control.
+- On a schedule, compare what the ledger says each VFD account holds with what VFD reports (statements, or balances where statements are unavailable).
+- **Record every difference** as an item to explain, with who resolved it and how.
+- Never "correct" either side to match the other.
+- A reconciliation that cannot run (VFD unreachable, no statement) is itself a recorded item, never a silent skip.
+
+**THE LEDGER MUST BE ABLE TO RECORD ANYTHING THAT ACTUALLY HAPPENED.**
+- A rule that prevents recording reality is not a control; it is a blindfold.
+- **Validation belongs BEFORE the money moves.** After it, the only question is what is true.
+- So a payout is checked, and its amount held, when it is **authorised to execute**. The confirmed outcome is then always recorded.
+- A recorded outcome that differs from what was authorised (a different amount, a second payment, a payout with no authorisation, a payout the member could not afford) is **flagged for a person, never refused**.
+- Found in suite 0011 as built (finding 33): the database checked withdrawable when the payout was recorded, so it would have refused to record a transfer that had already left the bank.
+
+**How the VFD boundary is built: re-implemented in Go, in this repository** (decided 2026-10-13).
+- The cooperative's record of account cannot depend on a ledger that is hand-edited and unreconciled.
+- A shared Go module holding only the VFD client is the better end state, once someone owns the wallet-side changes. It does not block this work. The wallet platform's repositories are not to be changed from here.
+- **Take the knowledge, none of the defects:** `docs/VFD_INTEGRATION.md` is the spec.
+
+**Where a society's money is held is open** (§6). Nothing is built that assumes pooled or segregated funds.
