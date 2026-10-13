@@ -243,3 +243,125 @@ func TestOperator_Control_ASeriesFromTodayOrLater(t *testing.T) {
 	accepted(t, addSeries(c.s.id, "withdrawal_out", "argon_margin", today(t, 30), srcArgonFee, oneBand, opName, opHost, opWhy),
 		"a series effective in thirty days, announced now")
 }
+
+// =============================================================================
+// EVERY GOVERNANCE SETTING (decided 2026-10-13): the write-off quorum, the
+// general signature count, the guard threshold, and — separately — Argon's
+// lifecycle for the society.
+// =============================================================================
+
+func setWriteOffQuorum(society string, n int, operator, login, ref, date, reason string) error {
+	return one(`SELECT operator_set_write_off_quorum($1, $2, $3, $4, $5, $6::date, $7)`,
+		society, n, nz(operator), nz(login), nz(ref), nz(date), nz(reason))
+}
+
+func setSignatureCount(society string, n int, operator, login, ref, date, reason string) error {
+	return one(`SELECT operator_set_signature_count($1, $2, $3, $4, $5, $6::date, $7)`,
+		society, n, nz(operator), nz(login), nz(ref), nz(date), nz(reason))
+}
+
+func setGuardThreshold(society string, kobo int64, operator, login, ref, date, reason string) error {
+	return one(`SELECT operator_set_guard_threshold($1, $2, $3, $4, $5, $6::date, $7)`,
+		society, kobo, nz(operator), nz(login), nz(ref), nz(date), nz(reason))
+}
+
+func setLifecycle(society, state, operator, login, reason string) error {
+	return one(`SELECT operator_set_lifecycle($1, $2::society_lifecycle, $3, $4, $5)`, society, state, nz(operator), nz(login), nz(reason))
+}
+
+// A write-off is one person deciding a debt will not be recovered: the easiest
+// way to make money disappear while leaving a legitimate-looking record. If
+// any act needs two people, it is this one, and the refusal says so.
+func TestOperator15_AWriteOffQuorumBelowTwoIsRefused(t *testing.T) {
+	c := newChart(t)
+	err := setWriteOffQuorum(c.s.id, 1, opName, opHost, minutes, resolved, opWhy)
+	refused(t, err, "a write-off quorum of one", refusedAs("write_off_quorum_at_least_two"))
+	if !strings.Contains(strings.ToLower(err.Error()), "one person") {
+		t.Fatalf("UNEXPLAINED — the refusal does not say why a write-off needs two people: %v", err)
+	}
+}
+
+func TestOperator16_ASignatureCountBelowTwoIsRefused(t *testing.T) {
+	c := newChart(t)
+	err := setSignatureCount(c.s.id, 1, opName, opHost, minutes, resolved, opWhy)
+	refused(t, err, "a general signature count of one", refusedAs("signatures_required_at_least_two"))
+	if !strings.Contains(strings.ToLower(err.Error()), "no quorum") {
+		t.Fatalf("UNEXPLAINED — the refusal does not say a quorum of one is no quorum: %v", err)
+	}
+}
+
+func TestOperator17_AWriteOffQuorumCarriesTheSocietysResolution(t *testing.T) {
+	c := newChart(t)
+	refused(t, setWriteOffQuorum(c.s.id, 2, opName, opHost, "", resolved, opWhy), "a write-off quorum set with no resolution behind it",
+		refusedAs("society_resolution_required"))
+}
+
+// The guard threshold is the society's policy too: it carries the resolution.
+func TestOperator18_AGuardThresholdCarriesTheSocietysResolution(t *testing.T) {
+	c := newChart(t)
+	refused(t, setGuardThreshold(c.s.id, 5000000, opName, opHost, minutes, "", opWhy), "a guard threshold set with no resolution date",
+		refusedAs("society_resolution_required"))
+}
+
+// The lifecycle is Argon's state for the society, not the society's decision:
+// no resolution, but still a named operator and a reason.
+func TestOperator19_ALifecycleChangeSaysWhy(t *testing.T) {
+	c := newChart(t)
+	refused(t, setLifecycle(c.s.id, "verifying", opName, opHost, ""), "a society moved to verifying with no reason given",
+		refusedAs("operator_gives_reason"))
+}
+
+func TestOperator20_AWriteOffQuorumChangeIsLogged(t *testing.T) {
+	c := newChart(t)
+	fixture(t, setWriteOffQuorum(c.s.id, 3, opName, opHost, minutes, resolved, opWhy), "the write-off quorum set")
+	r := lastLog(t, c.s.id)
+	if r.setting != "write_off_signatures_required" || r.oldV != "" || r.newV != "3" || r.operator != opName || r.ref != minutes {
+		t.Fatalf("UNRECORDED — log %+v; want write_off_signatures_required, unset → 3, the operator, the resolution", r)
+	}
+}
+
+func TestOperator21_ASignatureCountChangeIsLogged(t *testing.T) {
+	c := newChart(t)
+	fixture(t, setSignatureCount(c.s.id, 2, opName, opHost, minutes, resolved, opWhy), "the signature count set")
+	r := lastLog(t, c.s.id)
+	if r.setting != "signatures_required" || r.oldV != "3" || r.newV != "2" || r.operator != opName || r.ref != minutes {
+		t.Fatalf("UNRECORDED — log %+v; want signatures_required, 3 → 2, the operator, the resolution", r)
+	}
+}
+
+func TestOperator22_AGuardThresholdChangeIsLogged(t *testing.T) {
+	c := newChart(t)
+	fixture(t, setGuardThreshold(c.s.id, 5000000, opName, opHost, minutes, resolved, opWhy), "the guard threshold set")
+	r := lastLog(t, c.s.id)
+	if r.setting != "guard_threshold_kobo" || r.oldV != "10000000" || r.newV != "5000000" || r.operator != opName {
+		t.Fatalf("UNRECORDED — log %+v; want guard_threshold_kobo, 10000000 → 5000000, the operator", r)
+	}
+}
+
+func TestOperator23_ALifecycleChangeIsLogged(t *testing.T) {
+	c := newChart(t)
+	fixture(t, setLifecycle(c.s.id, "verifying", opName, opHost, "Documents received from the Directorate"), "the lifecycle moved")
+	r := lastLog(t, c.s.id)
+	if r.setting != "lifecycle" || r.oldV != "prospect" || r.newV != "verifying" || r.operator != opName || r.ref != "" {
+		t.Fatalf("UNRECORDED — log %+v; want lifecycle, prospect → verifying, the operator, no resolution", r)
+	}
+}
+
+func TestOperator_Control_AWriteOffQuorumOfTwo(t *testing.T) {
+	c := newChart(t)
+	accepted(t, setWriteOffQuorum(c.s.id, 2, opName, opHost, minutes, resolved, opWhy), "a write-off quorum of two, on the AGM's resolution")
+}
+
+// The guard threshold is interface friction, not authorisation: it decides what
+// a person is asked to type or hold, never who must sign. It has NO minimum;
+// applying the quorum rule to it by analogy would refuse a legitimate ₦1.
+func TestOperator_Control_AGuardThresholdHasNoMinimum(t *testing.T) {
+	c := newChart(t)
+	accepted(t, setGuardThreshold(c.s.id, 100, opName, opHost, minutes, resolved, opWhy), "a guard threshold of ₦1")
+}
+
+func TestOperator_Control_ALifecycleChangeNeedsNoResolution(t *testing.T) {
+	c := newChart(t)
+	accepted(t, setLifecycle(c.s.id, "verifying", opName, opHost, "Documents received from the Directorate"),
+		"Argon moving a society to verifying, with no resolution of the society's")
+}

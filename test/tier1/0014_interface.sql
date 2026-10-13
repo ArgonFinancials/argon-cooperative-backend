@@ -20,10 +20,27 @@ CREATE FUNCTION operator_set_withdrawal_quorum(p_society UUID, p_quorum INT, p_o
 BEGIN
   UPDATE societies SET withdrawal_signatures_required = p_quorum WHERE id = p_society;
 END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_withdrawal_quorum(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
+CREATE FUNCTION operator_set_write_off_quorum(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  UPDATE societies SET write_off_signatures_required = p_quorum WHERE id = p_society;
+END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_write_off_quorum(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
+CREATE FUNCTION operator_set_signature_count(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  UPDATE societies SET signatures_required = p_quorum WHERE id = p_society;
+END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_signature_count(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
 CREATE FUNCTION operator_set_account_floor(p_society UUID, p_floor BIGINT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   UPDATE societies SET account_floor_kobo = p_floor WHERE id = p_society;
 END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_account_floor(p_society UUID, p_floor BIGINT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
+CREATE FUNCTION operator_set_guard_threshold(p_society UUID, p_kobo BIGINT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  UPDATE societies SET guard_threshold_kobo = p_kobo WHERE id = p_society;
+END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_guard_threshold(p_society UUID, p_kobo BIGINT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
 CREATE FUNCTION operator_add_charge_series(p_society UUID, p_kind movement_kind, p_component TEXT, p_from DATE, p_source TEXT, p_bands JSONB, p_operator TEXT, p_login TEXT, p_reason TEXT) RETURNS UUID SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_id UUID;
@@ -35,7 +52,10 @@ BEGIN
       FROM jsonb_array_elements(p_bands) b;
   RETURN v_id;
 END $$ LANGUAGE plpgsql;
-REVOKE EXECUTE ON FUNCTION operator_set_withdrawal_quorum(p_society UUID, p_quorum INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION operator_set_account_floor(p_society UUID, p_floor BIGINT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION operator_add_charge_series(p_society UUID, p_kind movement_kind, p_component TEXT, p_from DATE, p_source TEXT, p_bands JSONB, p_operator TEXT, p_login TEXT, p_reason TEXT) FROM PUBLIC;
+CREATE FUNCTION operator_set_lifecycle(p_society UUID, p_lifecycle society_lifecycle, p_operator TEXT, p_login TEXT, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  UPDATE societies SET lifecycle = p_lifecycle WHERE id = p_society;
+END $$ LANGUAGE plpgsql;
+REVOKE EXECUTE ON FUNCTION operator_set_lifecycle(p_society UUID, p_lifecycle society_lifecycle, p_operator TEXT, p_login TEXT, p_reason TEXT) FROM PUBLIC;
 COMMIT;
