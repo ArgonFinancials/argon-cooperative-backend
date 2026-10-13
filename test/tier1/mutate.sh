@@ -25,7 +25,7 @@ require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_A
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
-  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api) SUITE=$1; shift ;;
+  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|0014|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api) SUITE=$1; shift ;;
   --only) ONLY=$2; shift 2 ;;
   --partial) PARTIAL=1; shift ;;
   --svc) SVC=1; shift ;;
