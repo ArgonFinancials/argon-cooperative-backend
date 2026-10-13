@@ -154,6 +154,7 @@ what fails says more about the scripts than what passes.
 | 32 | **There was no B-04 spike.** LEDGER_CONTRACT carried a "Step 0 B-04 finding as summarised", and D-04 sat DISPUTED for eleven days waiting on "whoever ran B-04". A read-only review of all four Argon repositories (2026-10-13) found "B-04" and "spike" nowhere in code, docs or history. The summary described work nobody did. D-04 was settled instead by what the running wallet platform does. | A summary of work is not evidence that the work happened. When a decision rests on a cited study, find the study. Where there is none, the cited study is itself the finding, and the answer comes from the system that exists. |
 | 33 | **Suite 0011 as approved, and its migration (71c8f49), refused to record reality.** An officer pays a withdrawal, then records it, and the database checks withdrawable at that moment. If the check fails, the money has left the bank and the ledger refuses to say so. The wallet platform's open ₦20,000 case and its refund-turned-double-payout are this shape. Caught by reading that platform before any withdrawal could run here (no endpoint posts one, and no society has the configuration a withdrawal needs). | LEDGER_CONTRACT §11: **the ledger must be able to record anything that actually happened.** Validation belongs before the money moves: hold at authorisation. After the money moves, record the confirmed outcome and flag any difference for a person. A rule that prevents recording reality is a blindfold, not a control. 0011 is revised, tests first, for re-approval. |
 | 34 | **A capability check that skipped itself.** The probe's 0014 cases (the app cannot call the operator's functions or write their log) decided whether 0014 existed by asking `information_schema.tables` *as argon_app*. information_schema lists only what the asking role holds privileges on; the app holds none on the settings log, correctly, so the probe read "absent" and skipped all four cases without a word. A sabotage that granted the app EXECUTE on the quorum function then "passed". Caught because the new rows never appeared. Separately and UNEXPLAINED: the first direct probe run that day exited 1, where the same code then exited 0; its log was deleted before being read. | Detect from the catalog (`to_regclass`), never from a view filtered by the asker's privileges, and **say when a block is skipped** (the probe now prints it). The other era checks ask about tables the app does hold privileges on, so they were not affected; that is luck, not design, and the rule now is the catalog. Proved: the four cases run and refuse; with EXECUTE granted to the app, only P36 goes red. A log is read before it is deleted (finding 29's lesson, missed again). |
+| 35 | **Three ways the operator script's tests could have passed without testing anything** (2026-10-14, all caught before the script was trusted). (a) The fixture that seeds a society per test ran as `c=$(fresh)`: in a subshell the counter never advanced and its `die` stopped only the subshell, so every test after the first ran against **no society at all**, and went on to its checks. (b) Git Bash's `grep -qiF` aborted on the script's output, so every text check failed whatever was printed. (c) Three refusal tests looked for the database's reason by a phrase the script's own preview also prints ("never backdated", "unilateral", "debt will not be recovered"): S14 passed while the script's refusal formatter matched nothing and printed every refusal as a raw psql dump. S09 and S10 were saved only by also checking the rule's name. | (a) the fixture runs in the test's own shell and sets a variable; (b) the comparison is in bash; (c) every refusal test now requires `REFUSED by the database (<rule>)` and a phrase only the database says, and the formatter reads psql's `psql:<stdin>:N:` prefix. Proved: twenty sabotaged copies of the script (`test/ops/sabotage_settings.sh`), each caught by the test it should fail, for the reason it should. Same lesson as the 0011–0013 neighbours: **ask of every passing test what actually made it pass**, including text the code under test prints itself. |
 
 **Habit: when a shared fixture changes, re-read every test that depends on it
 before trusting the run (finding 27).** A mutation run proves a test fails
@@ -295,6 +296,47 @@ by time, id or number, and uniqueness is exact. "Appears to" is the accurate
 claim; no test establishes it. A result that depends on how two strings sort
 should be checked on EC2, not trusted from a Windows run.
 
+## A society's rules: the operator (`45-society-settings.sh`)
+
+A society's quorums, floor and guard threshold are bye-law decisions, its
+lifecycle is Argon's state for it, and its charges are configuration the app
+never writes. Until request kinds exist to change them, the operator changes
+them with this script, which calls 0014's functions as argon_migrator. Nothing
+else should write these columns (see the trust boundary below: the owner's
+role can, and that is the documented gap).
+
+```bash
+cd /opt/argon/src; E=ARGON_ENV=/etc/argon/deploy.env
+# Show first: what the society has now, and who changed what, on whose decision.
+sudo $E bash deploy/45-society-settings.sh show --society LAG001
+# A society's setting: the operator, the society's resolution, the reason.
+sudo $E bash deploy/45-society-settings.sh withdrawal-quorum --society LAG001 --value 3 \
+  --operator "Your Name" --resolution "Minutes of the AGM, item 7" --resolution-date 2026-09-30 \
+  --reason "Carrying out the AGM's resolution"
+# ...prints the change and NOT APPLIED (exit 3). Read it, then the same line with --confirm.
+```
+
+- Settings: `withdrawal-quorum`, `write-off-quorum`, `signature-count`
+  (each at least 2, refused below with the reason), `account-floor` and
+  `guard-threshold` (in kobo; the preview shows naira), `lifecycle`,
+  `charge-series --file SERIES.json` (`{"kind", "component", "from", "source",
+  "bands": [{"from", "to", "flat", "bp", "cap"}]}`; never backdated).
+- **The guard threshold has no minimum.** It is interface friction, not
+  authorisation: it decides what a person is asked to confirm, never who must
+  sign. The quorum rule does not apply to it.
+- **The lifecycle and charge series take no resolution**, and the script
+  refuses one rather than drop it: the lifecycle is Argon's state for the
+  society, and charges are not the society's decision.
+- The server login is recorded by the script (`user@host`, and `(sudo by NAME)`
+  under sudo). There is no flag for it.
+- A refusal is the database's, printed as written, with the rule's name.
+  Nothing is changed by a refusal.
+- Every change is in `society_settings_log`, which is never edited, and which
+  0014's down migration refuses to drop once it holds a row.
+
+Tests: `test/ops/society_settings_test.sh` (a scratch database; CI runs it with
+suite 0014).
+
 ## Trust boundary
 
 **On the server, Docker access is superuser.** The postgres container trusts
@@ -317,7 +359,7 @@ They do **not** fully bind **argon_owner**, and cannot. As owner, it can:
 The probe shows all three succeeding (G5–G7). This is accepted, not
 overlooked: something has to be able to run migrations and restores. So the
 boundary is **who can act as argon_owner**:
-- only `argon_migrator` can, and only migrations (`40`) and restores (`60`) use it,
+- only `argon_migrator` can, and only migrations (`40`), the operator's settings (`45`, through 0014's functions) and restores (`60`) use it,
 - its password lives in `/etc/argon/deploy.env` (root, 0600) and never in the API's environment,
 - the API's `DATABASE_URL` is argon_app, and the probe's P1–P8 rows prove what that role cannot do,
 - the postgres superuser is reachable through `docker exec` on the host (root or the docker group, see above) or with its password from `/etc/argon/deploy.env`.

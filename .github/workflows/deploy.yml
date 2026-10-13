@@ -107,6 +107,10 @@ jobs:
         run: bash deploy/20-roles.sh
       - name: Mutation run, suite ${{ matrix.suite }}
         run: bash test/tier1/mutate.sh "${{ matrix.suite }}" --svc
+      # The operator's script calls 0014's functions: tested where 0014 is.
+      - name: Operator script (45-society-settings.sh)
+        if: matrix.suite == '0014'
+        run: bash test/ops/society_settings_test.sh
 
   # The gate: who, and which commit. Its own job so a refusal comes in seconds
   # and the deploy job never starts. Inputs reach the script as environment
