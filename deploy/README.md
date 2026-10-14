@@ -164,6 +164,27 @@ the GREEN half catches that, and GREEN runs last; for a migration not yet
 written, it does not run at all. Moving the fixtures onto step-up acts disarmed
 TestSignStep6, the mutation run counted it as proved, and only GREEN caught it.
 
+**Rule: when a test asserts on output, it requires text that only the system
+under test can produce** (finding 35, S14). A test cannot tell where text came
+from unless it is written to care: S14 looked for "never backdated", the
+database never printed it, the script's own preview did, and the test passed
+on the right string from the wrong source. So a refusal test asks for the
+rule's name and a phrase only the database says, never a phrase the code in
+front of it also prints. This is a new trap, not a variant of the old ones:
+the mutation run cannot catch it, because the covering text survives every
+mutant that does not touch the preview.
+
+**This environment: Git Bash on Windows.** The development machine is
+Windows; the server and CI are Linux. Failures that came from that difference
+so far: finding 6 (CRLF in the forced command, loud), finding 7 (a line
+written for Windows exited SILENTLY on Linux), finding 35(b) (Git Bash's
+`grep -qiF` aborted, SILENTLY failing every text check), and on 2026-10-14 two
+loud ones in the operator script (`rev` missing; Python's `\r\n` made an enum
+value invalid). It cuts both ways: whoever runs these tests on Linux will not
+reproduce the Windows failures, and a run on Windows proves nothing about
+Linux-only paths (finding 7). CI runs on Linux; a check written here is not
+proven until CI has run it.
+
 **Rule: a new check is not trusted until it has been made to fail on purpose,
 in the same commit that adds it.** Every new instrument in this project has
 had a defect, and each looked like success:
@@ -327,8 +348,15 @@ sudo $E bash deploy/45-society-settings.sh withdrawal-quorum --society LAG001 --
 - **The lifecycle and charge series take no resolution**, and the script
   refuses one rather than drop it: the lifecycle is Argon's state for the
   society, and charges are not the society's decision.
-- The server login is recorded by the script (`user@host`, and `(sudo by NAME)`
-  under sudo). There is no flag for it.
+- The server login is recorded by the script, never by the caller (there is no
+  flag for it), and **labelled for what it is**:
+  `user@host [login, verified by id -un]`, and under sudo
+  `; sudo by NAME [claimed: SUDO_USER from the environment, not verified]`.
+  The sudo name is accurate on this server only because reading the env file
+  needs root, and that is how it happens to be run, not a control. The fix:
+  read the audit subsystem's login uid (`/proc/self/loginuid`, set by
+  pam_loginuid at login and not changeable by the user) instead of the
+  environment.
 - A refusal is the database's, printed as written, with the rule's name.
   Nothing is changed by a refusal.
 - Every change is in `society_settings_log`, which is never edited, and which

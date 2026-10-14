@@ -88,7 +88,10 @@ OP="Adaeze Okafor (Argon operations)"
 MINUTES="Minutes of the AGM, item 7 (resolution 2026/04)"
 RESOLVED="2026-09-30"
 WHY="Carrying out the AGM's resolution"
-LOGIN="$(id -un)@$(hostname)"
+# The log is the attribution record: a reader must not have to know which part
+# was verified and which only claimed (2026-10-14).
+LOGIN="$(id -un)@$(hostname) [login, verified by id -un]"
+SUDO_CLAIM="; sudo by aokafor [claimed: SUDO_USER from the environment, not verified]"
 TODAY=$(sql "SELECT current_date")
 YESTERDAY=$(sql "SELECT current_date - 1")
 society_args=(--operator "$OP" --resolution "$MINUTES" --resolution-date "$RESOLVED" --reason "$WHY")
@@ -169,7 +172,7 @@ elif [[ $(col "$c" lifecycle) != verifying ]]; then red "lifecycle is $(col "$c"
 elif [[ $r != "lifecycle|prospect|verifying|$OP|$LOGIN|||Documents received" ]]; then red "log row: $r"
 else pass; fi
 
-T="S08 the server login is the script's to record: --login is refused, and sudo names who ran it"
+T="S08 the server login is the script's to record: --login is refused; the login is labelled verified, the sudo name claimed"
 fresh; before=$(snap "$c")
 run withdrawal-quorum --society "$c" --value 3 "${society_args[@]}" --login "someone@elsewhere" --confirm
 if ((RC == 0)) || [[ $(snap "$c") != "$before" ]]; then red "a caller-supplied login was accepted"
@@ -179,7 +182,7 @@ else
   cat "$OUT" >>"$ALL"
   got=$(lastlog "$c" | cut -d'|' -f5)
   if ((RC != 0)); then red "under sudo: exit $RC"; shown
-  elif [[ $got != "$LOGIN (sudo by aokafor)" ]]; then red "under sudo the login is recorded as '$got'"
+  elif [[ $got != "$LOGIN$SUDO_CLAIM" ]]; then red "under sudo the login is recorded as '$got'"
   else pass; fi
 fi
 

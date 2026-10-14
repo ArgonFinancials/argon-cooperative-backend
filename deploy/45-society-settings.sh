@@ -13,8 +13,8 @@
 #   (any of them: --db NAME, default ARGON_DB from the env file)
 #
 # Without --confirm it shows the change and applies nothing (exit 3). The server
-# login is recorded by the script ("user@host", and "(sudo by NAME)" under
-# sudo); a caller cannot supply one. The database enforces the rules; a refusal
+# login is recorded by the script, labelled: "user@host [login, verified ...]",
+# and under sudo "; sudo by NAME [claimed ...]"; a caller cannot supply one. The database enforces the rules; a refusal
 # is printed as the database wrote it, because the why is the point.
 #
 # Runs as argon_migrator, which lands in argon_owner: the only role that may
@@ -116,9 +116,19 @@ case $setting in
     [[ $rdate =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "--resolution-date '$rdate' is not YYYY-MM-DD" ;;
 esac
 
-# The server login, recorded by the script and never by the caller.
-login="$(id -un)@$(hostname)"
-[[ -n ${SUDO_USER:-} ]] && login+=" (sudo by $SUDO_USER)"
+# The server login, recorded by the script and never by the caller, and
+# labelled for what it is: the log is the attribution record for every
+# governance change, and its reader must not have to know which part was
+# verified. id -un is the process's real user. SUDO_USER is only an
+# environment variable: sudo sets it, but anything can, so it is recorded as
+# CLAIMED. It happens to be accurate on the server (reading the env file needs
+# root, so the script runs under sudo), and "accurate because of how it is
+# run" is not a control. The fix, when someone builds it: the audit
+# subsystem's login uid (/proc/self/loginuid, set by pam_loginuid at login and
+# not changeable by the user), which names who logged in, whatever they then
+# became.
+login="$(id -un)@$(hostname) [login, verified by id -un]"
+[[ -n ${SUDO_USER:-} ]] && login+="; sudo by $SUDO_USER [claimed: SUDO_USER from the environment, not verified]"
 
 naira() {  # 100000 -> ₦1,000.00 (100000 kobo)
   local k=$1 sign="" n
