@@ -40,6 +40,10 @@ func (f *fakeAPI) PostPinProof(ctx context.Context, req api.PostPinProofRequestO
 		// stopped by the service's own session check, and proves nothing here.
 		"ended_session_ok": "stepup_ended_session",
 	}[f.brk]
+	// Finding 36: the state before the money acts were listed.
+	if f.brk == "money_acts_unmintable" && (req.Body.Act == "contribution_record" || req.Body.Act == "withdrawal_payout" || req.Body.Act == "withdrawal_authorisation") {
+		return api.PostPinProof400JSONResponse{Code: "unknown_act", Message: "no such act"}, nil
+	}
 	svc := &fakeService{d: auth.Deps{DB: f.db}, brk: brk}
 	tok, _ := ctx.Value(ctxToken{}).(string)
 	p, err := svc.ProvePIN(ctx, tok, req.Body.Pin, auth.ActKind(req.Body.Act))

@@ -92,18 +92,25 @@ const (
 	ActSignatoryResetRequest ActKind = "signatory_reset_request"
 	ActSignatoryPhoneRequest ActKind = "signatory_phone_request"
 	ActSignatoryApproval     ActKind = "signatory_approval"
-	ActGuarantee             ActKind = "guarantee"            // 0008: a guarantor's own consent
-	ActGuaranteeWithdrawal   ActKind = "guarantee_withdrawal" // 0008
-	ActApprovalSignature     ActKind = "approval_signature"   // 0010: signing a request
-	ActApprovalRejection     ActKind = "approval_rejection"   // 0010: rejecting one
+	ActGuarantee             ActKind = "guarantee"                // 0008: a guarantor's own consent
+	ActGuaranteeWithdrawal   ActKind = "guarantee_withdrawal"     // 0008
+	ActApprovalSignature     ActKind = "approval_signature"       // 0010: signing a request
+	ActApprovalRejection     ActKind = "approval_rejection"       // 0010: rejecting one
+	ActContributionRecord    ActKind = "contribution_record"      // 0011: recording a contribution
+	ActWithdrawalPayout      ActKind = "withdrawal_payout"        // 0011: recording a payout
+	ActWithdrawalAuthorise   ActKind = "withdrawal_authorisation" // 0012: authorising one to execute
 )
 
 // ActKinds is every kind a proof can be minted for: credential_acts.kind.
 // (Finding 24: 0008's guarantee kinds were missing here, so no client could
-// obtain a proof for a guarantee through the API.)
+// obtain a proof for a guarantee through the API. Finding 36, the same again:
+// 0011's and 0012's money acts. TestApiMoney01 now mints, through the API,
+// every kind the schema's proof_act_kind_known allows, so the next one fails a
+// test instead of waiting to be found.)
 var ActKinds = []ActKind{ActLedgerBatch, ActPinChange, ActMemberReset, ActPhoneChange, ActLockRelease,
 	ActSignatoryResetRequest, ActSignatoryPhoneRequest, ActSignatoryApproval,
-	ActGuarantee, ActGuaranteeWithdrawal, ActApprovalSignature, ActApprovalRejection}
+	ActGuarantee, ActGuaranteeWithdrawal, ActApprovalSignature, ActApprovalRejection,
+	ActContributionRecord, ActWithdrawalPayout, ActWithdrawalAuthorise}
 
 // Proof is a minted step-up. Its id is what the act names; it is spent by the
 // act, inside the act's own transaction, and by nothing else.

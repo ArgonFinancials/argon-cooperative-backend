@@ -150,10 +150,16 @@ components:
 
     ActKind:
       type: string
-      description: The attributable act a PIN proof is minted FOR (credential_acts.kind).
+      description: |
+        The attributable act a PIN proof is minted FOR (credential_acts.kind).
+        contribution_record, withdrawal_payout (0011) and withdrawal_authorisation
+        (0012) were missing here and from the auth service until 2026-10-14
+        (finding 36, finding 24 recurring): no client could step up to record or
+        authorise money.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
-             guarantee, guarantee_withdrawal, approval_signature, approval_rejection]
+             guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
+             contribution_record, withdrawal_payout, withdrawal_authorisation]
 
     PinProofRequest:
       type: object
@@ -787,6 +793,152 @@ components:
         note:
           type: string
           description: Required for looks_wrong; optional otherwise.
+
+    Charges:
+      type: object
+      required: [partnerFeeKobo, vatKobo, statutoryLevyKobo, argonMarginKobo, totalKobo]
+      description: |
+        A movement's charges, AS THE SERVER COMPUTED THEM (0011, 0013): the
+        society's series in force on the date, four components, never summed
+        into one figure but totalled for convenience. A client never supplies a
+        charge; one sent in a body is ignored.
+      properties:
+        partnerFeeKobo: { $ref: '#/components/schemas/Magnitude' }
+        vatKobo: { $ref: '#/components/schemas/Magnitude' }
+        statutoryLevyKobo: { $ref: '#/components/schemas/Magnitude' }
+        argonMarginKobo: { $ref: '#/components/schemas/Magnitude' }
+        totalKobo: { $ref: '#/components/schemas/Magnitude' }
+
+    Discrepancy:
+      type: object
+      required: [kind, expected, observed]
+      description: |
+        Something recorded that a person must explain (0012,
+        ledger_discrepancies). The ledger records what happened; this says how
+        it differs from what was authorised, in words a resolver can act on
+        without going to the logs.
+      properties:
+        kind:
+          type: string
+          enum: [payout_without_hold, payout_amount_differs, hold_paid_twice,
+                 payout_on_released_hold, payout_overdraws, charge_undetermined]
+        expected: { type: string }
+        observed: { type: string }
+
+    MoneyMovement:
+      type: object
+      required: [entryId, kind, societyId, memberId, amountKobo, memberAmountKobo, valueDate,
+                 chargeDetermined, charges, flags, postedBy]
+      description: |
+        A recorded contribution or payout. RECORDED MEANS IT HAPPENED: flags
+        say how it differs from what was authorised; they never mean it was
+        not recorded.
+      properties:
+        entryId: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [contribution_in, withdrawal_out]
+        societyId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        amountKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: What arrived at, or left, the bank.
+        memberAmountKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: |
+            What the member's savings moved by: a contribution less its charges
+            (credited), a payout plus its charges (debited; the fee is on top).
+        valueDate: { type: string, format: date }
+        holdId: { type: string, format: uuid, nullable: true }
+        payoutReference: { type: string, nullable: true }
+        chargeDetermined:
+          type: boolean
+          description: |
+            false when the society's series could not determine the charge: the
+            contribution was recorded UNCHARGED, charges is null (never zeros:
+            the charge is UNDETERMINED, not zero), and flags carries
+            charge_undetermined.
+        charges:
+          allOf: [{ $ref: '#/components/schemas/Charges' }]
+          nullable: true
+        flags:
+          type: array
+          items: { $ref: '#/components/schemas/Discrepancy' }
+        postedBy: { $ref: '#/components/schemas/PostedBy' }
+
+    RecordContribution:
+      type: object
+      required: [memberId, amountKobo, valueDate, pinProofId]
+      properties:
+        memberId: { type: string, format: uuid }
+        amountKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: What arrived. Not zero.
+        valueDate: { type: string, format: date, description: When the money arrived. }
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof from POST /auth/pin-proofs with act contribution_record, minted by the recorder.
+
+    AuthorisePayout:
+      type: object
+      required: [pinProofId]
+      properties:
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof with act withdrawal_authorisation, minted by the authoriser.
+
+    PayoutHold:
+      type: object
+      required: [holdId, requestId, memberId, amountKobo, charges, totalKobo, authorisedBy, authorisedAt, state]
+      description: |
+        A payout AUTHORISED TO EXECUTE (0012): every judgement made before the
+        money moves. The charges are fixed here; the recorded payout carries
+        exactly these.
+      properties:
+        holdId: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        charges: { $ref: '#/components/schemas/Charges' }
+        totalKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The amount plus every charge, all of which must fit within what the member may withdraw.
+        authorisedBy: { type: string, format: uuid }
+        authorisedAt: { type: string, format: date-time }
+        state:
+          type: string
+          enum: [open, paid, released]
+        releaseReason: { type: string, nullable: true }
+
+    ReleaseHold:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: Why the transfer will not happen (it definitively failed). Required; no step-up (decided 2026-10-13).
+
+    RecordPayout:
+      type: object
+      required: [memberId, amountKobo, valueDate, payoutReference, pinProofId]
+      description: |
+        A payout THAT HAPPENED, recorded as it happened. holdId names the
+        authorisation it carried out; without one it is still recorded, and
+        flagged payout_without_hold.
+      properties:
+        holdId: { type: string, format: uuid, nullable: true }
+        memberId: { type: string, format: uuid }
+        amountKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: What the bank actually paid.
+        valueDate: { type: string, format: date }
+        payoutReference: { type: string, minLength: 1, description: The transfer's reference. One transfer is recorded once. }
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof with act withdrawal_payout, minted by the recorder.
 
     Problem:
       type: object
@@ -1428,6 +1580,228 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "note_required: looks_wrong goes to the committee and the auditor with the words that sent it."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---- MONEY: contributions in, payouts out (0011, 0012) ------------------------
+  # Recording and authorising are different duties (the role matrix,
+  # frontend lib/permissions.ts): recording money is the treasurer's or the
+  # secretary's (record_cash); authorising a release is a signatory's
+  # (chairman, treasurer, secretary). An officer of the society without the
+  # duty is told not_permitted; anyone else gets 404, identical to a society,
+  # request or hold that does not exist. Every refusal writes nothing.
+
+  /societies/{societyId}/contributions:
+    post:
+      operationId: recordContribution
+      summary: Record a contribution that arrived, on the recorder's own PIN step-up
+      description: |
+        The server builds the double entry by role (the bank in, the member's
+        savings credited, each charge component on its own line) and charges it
+        by the society's series on the value date. MONEY THAT ARRIVED IS
+        RECORDED: where the series cannot determine the charge, it is recorded
+        uncharged, chargeDetermined is false, charges is null, and the flag
+        charge_undetermined says which component is missing.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordContribution' }
+      responses:
+        '201':
+          description: Recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MoneyMovement' }
+        '400':
+          description: "bad_request: malformed (money not a kobo string, a missing field)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid contribution_record proof, the caller's own, unspent); not_permitted (an officer here whose post does not record money)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller holds no current post in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "zero_amount; unknown_member (not a member of this society)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /approvals/{requestId}/holds:
+    post:
+      operationId: authorisePayout
+      summary: Authorise an approved withdrawal to execute (the hold), on the authoriser's own PIN step-up
+      description: |
+        Every judgement before the money moves (0012): the request is an
+        approved withdrawal; the charges are the server's, fixed here; the
+        amount plus every charge fits within what the member may withdraw
+        (savings, less guarantees held, the floor, and other open holds). One
+        open hold per request. A refusal carries the database's reason with its
+        figures.
+      security: [{ session: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorisePayout' }
+      responses:
+        '201':
+          description: Authorised.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PayoutHold' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (an officer here who is not a signatory, the auditor included)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such request, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_approved (the message says what the request is); hold_open (release the open hold first)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "exceeds_withdrawable (the message carries the figures); not_configured (a charge component or the account floor is not set: the message says which)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /holds/{holdId}/releases:
+    post:
+      operationId: releaseHold
+      summary: Release a hold whose transfer definitively failed, saying why
+      security: [{ session: [] }]
+      parameters:
+        - { name: holdId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseHold' }
+      responses:
+        '201':
+          description: Released.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PayoutHold' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "not_permitted (an officer here who is not a signatory)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such hold, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "hold_paid (a paid hold is never released); hold_released (already)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/payouts:
+    post:
+      operationId: recordPayout
+      summary: Record a payout that happened, on the recorder's own PIN step-up
+      description: |
+        THE LEDGER RECORDS WHAT HAPPENED (LEDGER_CONTRACT §11). Refused only
+        when malformed and a correct form exists: no step-up, the same transfer
+        recorded twice, the wrong member's savings for the hold. Everything
+        else is recorded, and flags say how it differs from what was authorised
+        (no hold, a different amount, a second payout on a hold, a payout on a
+        released hold, savings overdrawn). With a hold, the charges are the
+        hold's; without one, the series' on the value date where they can say,
+        otherwise none (and payout_without_hold sends it to a person anyway).
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordPayout' }
+      responses:
+        '201':
+          description: Recorded, with any flags.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MoneyMovement' }
+        '400':
+          description: "bad_request: malformed, or no transfer reference."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (an officer here whose post does not record money)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller holds no current post in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_recorded: this transfer reference is already in the ledger (the message names its entry). Nothing new is written."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "zero_amount; unknown_member; unknown_hold (not a hold of this society); not_the_holds_member (a held payout comes out of the hold's member's savings)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
