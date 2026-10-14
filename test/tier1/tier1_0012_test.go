@@ -110,6 +110,7 @@ func (w *mworld) release(hold, reason string) error {
 // lines; `member` is whose savings fall; ref is the transfer's reference.
 type payoutRec struct {
 	req, hold, member, ref string
+	by                     string // the recorder, if not the chairman
 	amount                 int64
 	ch                     fees
 }
@@ -120,18 +121,27 @@ func (w *mworld) record(t *testing.T, p payoutRec) (string, error) {
 	if p.ref == "" {
 		p.ref = "NIP-" + digest()[:12]
 	}
-	proof := stepUp(t, w.poster, "withdrawal_payout")
+	// The recorder is the chairman by default: the poster authorises holds,
+	// and from 0015 the officer who authorised a hold never records its payout
+	// (authorising and attesting are different duties). Recording as the
+	// poster made authoriser_never_records refuse first, covering for the
+	// rule under test (TestPayout23, 24, 26).
+	by := p.by
+	if by == "" {
+		by = w.s2
+	}
+	proof := stepUp(t, by, "withdrawal_payout")
 	var id string
 	err := tx(func(x pgx.Tx) error {
 		var act string
 		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('withdrawal_payout', $1, $2) RETURNING id`,
-			w.poster, proof).Scan(&act); err != nil {
+			by, proof).Scan(&act); err != nil {
 			return fmt.Errorf("FIXTURE: the step-up act: %w", err)
 		}
 		if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label,
 			  act_id, request_id, hold_id, payout_reference)
 			VALUES ($1, 'withdrawal_out', current_date, $2, 'treasurer', 'Treasurer', $3, $4, $5, $6) RETURNING id`,
-			w.c.s.id, w.poster, act, nz(p.req), nz(p.hold), p.ref).Scan(&id); err != nil {
+			w.c.s.id, by, act, nz(p.req), nz(p.hold), p.ref).Scan(&id); err != nil {
 			return err
 		}
 		return w.c.s.insertLines(x, id, w.payout(p.member, p.amount, p.ch)...)

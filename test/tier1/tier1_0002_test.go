@@ -447,17 +447,19 @@ func (s *soc) insertEntry(x pgx.Tx, e entry) (string, error) {
 		return "", err
 	}
 	var id string
-	if act == "" {
-		err = x.QueryRow(bg(), `INSERT INTO ledger_entries
-		  (society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason)
-		VALUES ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9) RETURNING id`,
-			society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason)).Scan(&id)
-		return id, err
+	cols := "society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason"
+	vals := "$1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9"
+	args := []any{society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason)}
+	if act != "" {
+		cols, vals, args = cols+", act_id", vals+fmt.Sprintf(", $%d", len(args)+1), append(args, act)
 	}
-	err = x.QueryRow(bg(), `INSERT INTO ledger_entries
-		  (society_id, batch_id, kind, value_date, posted_at, actor_user_id, actor_post, actor_post_label, reverses_id, adjusts_id, reason, act_id)
-		VALUES ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, 'treasurer', 'Treasurer', $7, $8, $9, $10) RETURNING id`,
-		society, nz(e.batch), kind, vd, nz(e.postedAt), actor, nz(e.reverses), nz(e.adjusts), nz(e.reason), act).Scan(&id)
+	// From 0015 a single contribution names the client's reference for it.
+	if e.batch == "" && e.reverses == "" && e.adjusts == "" {
+		if cr := clientRefOf(kind, ""); cr != nil {
+			cols, vals, args = cols+", client_reference", vals+fmt.Sprintf(", $%d", len(args)+1), append(args, cr)
+		}
+	}
+	err = x.QueryRow(bg(), `INSERT INTO ledger_entries (`+cols+`) VALUES (`+vals+`) RETURNING id`, args...).Scan(&id)
 	return id, err
 }
 

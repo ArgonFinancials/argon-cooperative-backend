@@ -4,8 +4,8 @@ SUITE_INCLUDE='^Test'              # tests in this suite …
 # … except the other suites. This suite is defined by EXCLUSION, so every new
 # suite's prefix must be added here, or it is silently swept into 0002 and run
 # against schemas it was never written for (it happened: 53/82).
-SUITE_EXCLUDE='^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator)'
-SUITE_SKIP='^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator)'   # passed to -test.skip
+SUITE_EXCLUDE='^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit)'
+SUITE_SKIP='^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit)'   # passed to -test.skip
 SUITE_RUN=''
 SUITE_BASE='migrations/0001_init.up.sql,test/tier1/0002_interface.sql'
 SUITE_MUTDIR='mutants'

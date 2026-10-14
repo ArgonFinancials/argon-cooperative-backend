@@ -47,6 +47,7 @@ package tier1
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -325,7 +326,34 @@ type move struct {
 	kind, actor, act, actID string
 	actBy                   string // the act's owner, if not the actor
 	req, ref, valueDate     string
+	clientRef               string // a contribution's client reference (0015): "" a fresh one, "none" none
 	lines                   []line
+}
+
+// clientRefOf: the client reference a single contribution carries where the
+// schema has the column (0015), read from the catalog (finding 34); nil
+// elsewhere, and for "none".
+func clientRefOf(kind, ref string) any {
+	if kind != "contribution_in" || ref == "none" || !hasClientRefs() {
+		return nil
+	}
+	if ref == "" {
+		ref = "CLI-" + digest()[:16]
+	}
+	return ref
+}
+
+var (
+	clientRefsOnce sync.Once
+	clientRefs     bool
+)
+
+func hasClientRefs() bool {
+	clientRefsOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ledger_entries'::regclass
+			AND attname = 'client_reference' AND NOT attisdropped)`).Scan(&clientRefs)
+	})
+	return clientRefs
 }
 
 func (w *mworld) post(t *testing.T, mv move) error {
@@ -357,10 +385,17 @@ func (w *mworld) post(t *testing.T, mv move) error {
 			}
 		}
 		var id string
+		cols, args := "", []any{w.c.s.id, mv.kind, mv.valueDate, mv.actor, nz(act), nz(mv.req), nz(mv.ref)}
+		if cr := clientRefOf(mv.kind, mv.clientRef); cr != nil {
+			cols, args = ", client_reference", append(args, cr)
+		}
+		vals := "$1, $2, $3, $4, 'treasurer', 'Treasurer', $5, $6, $7"
+		if cols != "" {
+			vals += ", $8"
+		}
 		if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post,
-			  actor_post_label, act_id, request_id, payout_reference)
-			VALUES ($1, $2, $3, $4, 'treasurer', 'Treasurer', $5, $6, $7) RETURNING id`,
-			w.c.s.id, mv.kind, mv.valueDate, mv.actor, nz(act), nz(mv.req), nz(mv.ref)).Scan(&id); err != nil {
+			  actor_post_label, act_id, request_id, payout_reference`+cols+`)
+			VALUES (`+vals+`) RETURNING id`, args...).Scan(&id); err != nil {
 			return err
 		}
 		w.lastEntry = id
@@ -422,10 +457,12 @@ func (w *mworld) pay(t *testing.T, req, member string, amount int64) error {
 	return w.post(t, move{kind: "withdrawal_out", req: req, ref: "NIP-" + digest()[:10], lines: w.payout(member, amount, transferCharges(amount))})
 }
 
-// saved: a free contribution of `kobo` to `member`'s savings.
+// saved: a free contribution of `kobo` to `member`'s savings, recorded by the
+// society's default actor (a user with no member record): from 0015 nobody
+// records money into their own savings, and `member` may be the poster.
 func (w *mworld) saved(t *testing.T, member string, kobo int64) {
 	t.Helper()
-	fixture(t, w.post(t, move{kind: "contribution_in", valueDate: "2026-09-01", lines: w.contribution(member, kobo, fees{})}), "savings")
+	fixture(t, w.post(t, move{kind: "contribution_in", actor: w.c.s.actor, valueDate: "2026-09-01", lines: w.contribution(member, kobo, fees{})}), "savings")
 }
 
 // =============================================================================
@@ -707,8 +744,14 @@ func TestMoney27_OneStepUpPostsOnce(t *testing.T) {
 		}
 		for i := 0; i < 2; i++ {
 			var id string
-			if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id)
-				VALUES ($1, 'contribution_in', '2026-10-05', $2, 'treasurer', 'Treasurer', $3) RETURNING id`, w.c.s.id, w.poster, act).Scan(&id); err != nil {
+			// From 0015 each names its own client reference, so the only rule
+			// left to refuse the second is the one under test.
+			cols, args := "", []any{w.c.s.id, w.poster, act}
+			if cr := clientRefOf("contribution_in", ""); cr != nil {
+				cols, args = ", client_reference", append(args, cr)
+			}
+			if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id`+cols+`)
+				VALUES ($1, 'contribution_in', '2026-10-05', $2, 'treasurer', 'Treasurer', $3`+strings.Repeat(", $4", len(args)-3)+`) RETURNING id`, args...).Scan(&id); err != nil {
 				return err
 			}
 			if err := w.c.s.insertLines(x, id, w.contribution(w.bMem, 500000, fees{})...); err != nil {
