@@ -38,6 +38,21 @@
 //	money_hold_member_as_500      not the hold's member answers 500
 //	money_payout_charges_dropped  a held payout is built with no charges, not the hold's
 //	money_reference_optional      a blank transfer reference is passed on, and its refusal answers 500
+//
+// Breaks — 0015 (nobody authorises or attests to what they benefit from; the
+// authoriser never records; a contribution is recorded once):
+//
+//	money_self_recording_ok       a member records money into or out of their own savings
+//	money_self_authorising_ok     a member authorises their own payout
+//	money_authoriser_records_ok   the officer who authorised a hold records its payout
+//	money_retry_records_twice     the Idempotency-Key is not looked up: a retry is recorded again
+//	money_retry_needs_step_up     a repeat is judged on its step-up before the key is looked up
+//	money_key_optional            a contribution with no Idempotency-Key is given one and recorded
+//
+// Until 0015's migration exists the suite's base has only its column, so this
+// fake checks 0015's rules itself before writing, and also maps the
+// database's refusals for when the rules are there. The real handlers rely on
+// the database (their GREEN runs on the real 0015).
 package tier1
 
 import (
@@ -46,6 +61,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -148,7 +164,7 @@ func (f *fakeAPI) chargeLines(ctx context.Context, society string, c chg) []mlin
 
 type moneyEntry struct {
 	society, kind, valueDate, post string
-	request, hold, ref             *string
+	request, hold, ref, clientRef  *string
 	lines                          []mline
 }
 
@@ -161,8 +177,8 @@ func (f *fakeAPI) postMoney(ctx context.Context, caller, act, proof string, e mo
 	}
 	err := f.actThen(ctx, caller, act, proof, false, func(x pgx.Tx, actID *string) error {
 		if err := x.QueryRow(ctx, `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label,
-			  act_id, request_id, hold_id, payout_reference) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text`,
-			e.society, e.kind, e.valueDate, caller, e.post, label, actID, e.request, e.hold, e.ref).Scan(&id); err != nil {
+			  act_id, request_id, hold_id, payout_reference, client_reference) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id::text`,
+			e.society, e.kind, e.valueDate, caller, e.post, label, actID, e.request, e.hold, e.ref, e.clientRef).Scan(&id); err != nil {
 			return err
 		}
 		for _, l := range e.lines {
@@ -238,6 +254,62 @@ func (f *fakeAPI) movement(ctx context.Context, caller, post, entry, kind, socie
 	return m
 }
 
+// beneficiary: does `user` own the member record `member`? (per PERSON, §10)
+func (f *fakeAPI) beneficiary(ctx context.Context, user, member string) bool {
+	var mine bool
+	f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND user_id = $2)`, member, user).Scan(&mine)
+	return mine
+}
+
+var (
+	conflictRecord    = api.Problem{Code: "conflict_of_interest", Message: "nobody attests to a movement they benefit from: this is your own savings. Another officer records it"}
+	conflictAuthorise = api.Problem{Code: "conflict_of_interest", Message: "nobody authorises a movement they benefit from: this payout is from your own savings. Another signatory authorises it"}
+	dutiesSeparated   = api.Problem{Code: "duties_separated", Message: "you authorised this payout's hold: authorising and attesting are different duties. Another officer records it"}
+)
+
+// movementOfEntry: a recorded movement, read back from the ledger (the answer
+// to a repeat: the FIRST record, not the request).
+func (f *fakeAPI) movementOfEntry(ctx context.Context, id string) (api.MoneyMovement, error) {
+	var kind, society, actor, post, member string
+	var date time.Time
+	var hold, ref *string
+	var amount int64
+	var c chg
+	var undetermined bool
+	err := f.db.QueryRow(ctx, `SELECT e.kind::text, e.society_id::text, e.value_date, e.actor_user_id::text, coalesce(e.actor_post::text, ''),
+		  e.hold_id::text, e.payout_reference,
+		  (SELECT coalesce(abs(sum(l.amount_kobo)), 0) FROM ledger_lines l JOIN accounts a ON a.id = l.account_id WHERE l.entry_id = e.id AND a.role = 'bank'),
+		  (SELECT l.member_id::text FROM ledger_lines l JOIN accounts a ON a.id = l.account_id WHERE l.entry_id = e.id AND a.role = 'member_savings' LIMIT 1),
+		  coalesce((SELECT -sum(amount_kobo) FROM ledger_lines WHERE entry_id = e.id AND charge_role = 'partner_charge'), 0),
+		  coalesce((SELECT -sum(amount_kobo) FROM ledger_lines WHERE entry_id = e.id AND charge_role = 'vat'), 0),
+		  coalesce((SELECT -sum(amount_kobo) FROM ledger_lines WHERE entry_id = e.id AND charge_role = 'statutory_levy'), 0),
+		  coalesce((SELECT -sum(amount_kobo) FROM ledger_lines WHERE entry_id = e.id AND charge_role = 'argon_margin'), 0),
+		  EXISTS (SELECT 1 FROM ledger_discrepancies d WHERE d.entry_id = e.id AND d.kind = 'charge_undetermined')
+		FROM ledger_entries e WHERE e.id = $1`, id).
+		Scan(&kind, &society, &date, &actor, &post, &hold, &ref, &amount, &member, &c.fee, &c.vat, &c.levy, &c.margin, &undetermined)
+	if err != nil {
+		return api.MoneyMovement{}, err
+	}
+	return f.movement(ctx, actor, post, id, kind, society, member, amount, openapi_types.Date{Time: date}, c, !undetermined, hold, ref), nil
+}
+
+// contributionByKey: the 200 for a key already recorded in the society.
+func (f *fakeAPI) contributionByKey(ctx context.Context, society, key string) (api.RecordContributionResponseObject, bool, error) {
+	var id string
+	err := f.db.QueryRow(ctx, `SELECT id::text FROM ledger_entries WHERE society_id = $1 AND client_reference = $2`, society, key).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	m, err := f.movementOfEntry(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return api.RecordContribution200JSONResponse(m), true, nil
+}
+
 // =============================================================================
 // CONTRIBUTIONS
 // =============================================================================
@@ -258,6 +330,23 @@ func (f *fakeAPI) RecordContribution(ctx context.Context, req api.RecordContribu
 	if b == nil {
 		return api.RecordContribution400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
+	// Already recorded under this key? Then nothing is written, and no
+	// step-up is needed: nothing attributable happens (postAll's order).
+	key := req.Params.IdempotencyKey
+	if f.brk == "money_retry_records_twice" {
+		key += "-" + digest()[:8]
+	}
+	if f.brk == "money_retry_needs_step_up" {
+		var fresh bool
+		f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth_proofs WHERE id::text = $1 AND user_id = $2 AND consumed_at IS NULL)`,
+			b.PinProofId.String(), caller).Scan(&fresh)
+		if !fresh {
+			return api.RecordContribution403JSONResponse(stepUpProblem("contribution_record")), nil
+		}
+	}
+	if r, done, err := f.contributionByKey(ctx, society, key); err != nil || done {
+		return r, err
+	}
 	amount, ok := magnitude(b.AmountKobo)
 	if !ok {
 		return api.RecordContribution400JSONResponse{Code: "bad_request", Message: "amountKobo is a non-negative kobo string"}, nil
@@ -271,6 +360,9 @@ func (f *fakeAPI) RecordContribution(ctx context.Context, req api.RecordContribu
 	if !here && f.brk != "money_member_any_society" {
 		return api.RecordContribution422JSONResponse{Code: "unknown_member", Message: "not a member of this society"}, nil
 	}
+	if f.beneficiary(ctx, caller, member) && f.brk != "money_self_recording_ok" {
+		return api.RecordContribution403JSONResponse(conflictRecord), nil
+	}
 	date := b.ValueDate.Format("2006-01-02")
 	c, determined, err := f.quoteOf(ctx, society, "contribution_in", amount, date)
 	if err != nil {
@@ -283,10 +375,17 @@ func (f *fakeAPI) RecordContribution(ctx context.Context, req api.RecordContribu
 		{acct: f.accountByRole(ctx, society, "member_savings"), kobo: -(amount - c.total()), member: member}}
 	lines = append(lines, f.chargeLines(ctx, society, c)...)
 	entry, err := f.postMoney(ctx, caller, "contribution_record", b.PinProofId.String(),
-		moneyEntry{society: society, kind: "contribution_in", valueDate: date, post: post, lines: lines})
+		moneyEntry{society: society, kind: "contribution_in", valueDate: date, post: post, clientRef: &key, lines: lines})
 	if err != nil {
-		if moneyStepUpRefusals[pgConstraint(err)] && f.brk != "money_step_up_as_500" {
+		switch c := pgConstraint(err); {
+		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.RecordContribution403JSONResponse(stepUpProblem("contribution_record")), nil
+		case c == "contribution_not_recorded_by_beneficiary":
+			return api.RecordContribution403JSONResponse(conflictRecord), nil
+		case c == "contribution_recorded_once": // a retry that raced the first
+			if r, done, err := f.contributionByKey(ctx, society, key); err != nil || done {
+				return r, err
+			}
 		}
 		return nil, err
 	}
@@ -345,6 +444,9 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 	if req.Body == nil {
 		return api.AuthorisePayout400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
+	if r.member != nil && f.beneficiary(ctx, caller, *r.member) && f.brk != "money_self_authorising_ok" {
+		return api.AuthorisePayout403JSONResponse(conflictAuthorise), nil
+	}
 	var hold string
 	err = f.actThen(ctx, caller, "withdrawal_authorisation", req.Body.PinProofId.String(), false, func(x pgx.Tx, act *string) error {
 		// The charges are the database's to fix (0012); these zeros are overwritten.
@@ -360,6 +462,8 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 		switch c := pgConstraint(err); {
 		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.AuthorisePayout403JSONResponse(stepUpProblem("withdrawal_authorisation")), nil
+		case c == "authoriser_not_beneficiary":
+			return api.AuthorisePayout403JSONResponse(conflictAuthorise), nil
 		case c == "hold_request_approved":
 			return api.AuthorisePayout409JSONResponse{Code: "not_approved", Message: msg}, nil
 		case c == "hold_once_open":
@@ -474,20 +578,26 @@ func (f *fakeAPI) RecordPayout(ctx context.Context, req api.RecordPayoutRequestO
 	if !here {
 		return api.RecordPayout422JSONResponse{Code: "unknown_member", Message: "not a member of this society"}, nil
 	}
+	if f.beneficiary(ctx, caller, member) && f.brk != "money_self_recording_ok" {
+		return api.RecordPayout403JSONResponse(conflictRecord), nil
+	}
 	date := b.ValueDate.Format("2006-01-02")
 	var c chg
 	determined := true
 	var hold, request *string
 	if b.HoldId != nil {
 		id := b.HoldId.String()
-		var rq string
-		err := f.db.QueryRow(ctx, `SELECT request_id::text, partner_fee_kobo, vat_kobo, statutory_levy_kobo, argon_margin_kobo
-			FROM withdrawal_holds WHERE id = $1 AND society_id = $2`, id, society).Scan(&rq, &c.fee, &c.vat, &c.levy, &c.margin)
+		var rq, authoriser string
+		err := f.db.QueryRow(ctx, `SELECT request_id::text, partner_fee_kobo, vat_kobo, statutory_levy_kobo, argon_margin_kobo, actor_user_id::text
+			FROM withdrawal_holds WHERE id = $1 AND society_id = $2`, id, society).Scan(&rq, &c.fee, &c.vat, &c.levy, &c.margin, &authoriser)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return api.RecordPayout422JSONResponse{Code: "unknown_hold", Message: "not a hold of this society"}, nil
 		}
 		if err != nil {
 			return nil, err
+		}
+		if authoriser == caller && f.brk != "money_authoriser_records_ok" {
+			return api.RecordPayout403JSONResponse(dutiesSeparated), nil
 		}
 		hold, request = &id, &rq
 		if f.brk == "money_payout_charges_dropped" {
@@ -509,6 +619,10 @@ func (f *fakeAPI) RecordPayout(ctx context.Context, req api.RecordPayoutRequestO
 		switch c := pgConstraint(err); {
 		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.RecordPayout403JSONResponse(stepUpProblem("withdrawal_payout")), nil
+		case c == "payout_not_recorded_by_beneficiary":
+			return api.RecordPayout403JSONResponse(conflictRecord), nil
+		case c == "authoriser_never_records":
+			return api.RecordPayout403JSONResponse(dutiesSeparated), nil
 		case c == "payout_recorded_once" && f.brk != "money_duplicate_as_500":
 			var first string
 			f.db.QueryRow(ctx, `SELECT id::text FROM ledger_entries WHERE payout_reference = $1`, ref).Scan(&first)

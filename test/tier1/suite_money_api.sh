@@ -2,7 +2,9 @@
 # release a hold, record a payout, over HTTP (0011, 0012). Sourced by
 # mutate.sh. Run with --svc.
 #
-# Base: the real 0001–0014. The rules are proven at the database in suites
+# Base: the real 0001–0014 and 0015's interface (the client reference's column;
+# 0015's rules are checked by the fake until the migration exists, then the base
+# moves to the real 0015). The rules are proven at the database in suites
 # 0011–0013; here, what the API adds: who may, the step-up, the server's
 # charges, refusals that carry the database's reasons, and flags in the answer.
 SUITE_INCLUDE='^TestApiMoney'
@@ -11,7 +13,7 @@ SUITE_SKIP=''
 SUITE_RUN='^TestApiMoney'
 SVC_RUN='^TestApiMoney'
 SVC_ENV='ARGON_TEST_API_FAKE'
-SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,test/tier1/0015_interface.sql'
 SUITE_MUTDIR='mutants_api_none'
 SUITE_GREEN_NEEDS='internal/api/money.go'          # the real handlers, written after review
 CONTROL_RE='^$'
@@ -44,4 +46,10 @@ declare -gA SVC_TARGET_OF=(
   [money_duplicate_as_500]='TestApiMoney24_ATransferIsRecordedOnce'
   [money_hold_member_as_500]='TestApiMoney25_AHeldPayoutIsTheHoldsMembers'
   [money_reference_optional]='TestApiMoney28_APayoutNamesItsTransfer'
+  [money_retry_records_twice]='TestApiMoney29_ARetriedContributionIsRecordedOnce'
+  [money_retry_needs_step_up]='TestApiMoney29_ARetriedContributionIsRecordedOnce'
+  [money_key_optional]='TestApiMoney30_AContributionCarriesItsIdempotencyKey'
+  [money_self_recording_ok]='TestApiMoney31_NobodyRecordsTheirOwnContribution|TestApiMoney33_NobodyRecordsTheirOwnPayout'
+  [money_self_authorising_ok]='TestApiMoney32_NobodyAuthorisesTheirOwnPayout'
+  [money_authoriser_records_ok]='TestApiMoney34_TheAuthoriserNeverRecordsThePayout'
 )

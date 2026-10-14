@@ -102,6 +102,11 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 			q.Set("asOf", time.Now().Format("2006-01-02"))
 			r.URL.RawQuery = q.Encode()
 		}
+		// money_key_optional: a contribution with no Idempotency-Key is given
+		// one (the router refuses a missing required header before any handler).
+		if f.brk == "money_key_optional" && strings.HasSuffix(r.URL.Path, "/contributions") && r.Header.Get("Idempotency-Key") == "" {
+			r.Header.Set("Idempotency-Key", "AUTO-"+digest()[:16])
+		}
 		if f.brk != "money_as_numbers" {
 			h.ServeHTTP(w, r)
 			return

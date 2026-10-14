@@ -25,6 +25,14 @@
 //     charge is recorded uncharged, with charges NULL (UNDETERMINED, not zero);
 //     a payout that differs from its authorisation is recorded and flagged, and
 //     the flags come back in the answer. Refused only when malformed.
+//
+// Decided 2026-10-14 (0015, LEDGER_CONTRACT §10 widened):
+//   - NOBODY AUTHORISES, SIGNS OR ATTESTS TO A MOVEMENT THEY BENEFIT FROM:
+//     403 conflict_of_interest.
+//   - The officer who authorised a hold never records its payout: 403
+//     duties_separated. Authorising is the judgement, recording the attestation.
+//   - A contribution carries the client's Idempotency-Key: a retry on a dropped
+//     connection answers 200 with the first record and writes nothing.
 package tier1
 
 import (
@@ -43,6 +51,7 @@ type mapi struct {
 	*mworld
 	srv       *httptest.Server
 	secretary string // the secretary (a signatory, and records money)
+	secMem    string
 	auditor   string // the internal auditor: an officer, reads, records nothing
 	abroad    string // the treasurer of another society
 	stranger  string // a member of another society
@@ -53,8 +62,8 @@ func newMoneyAPI(t *testing.T) *mapi {
 	w := &mapi{mworld: newMoneyWorld(t), srv: apiServer(t)}
 	s := w.c.s
 	w.secretary = s.user("Secretary (signatory)")
-	sMem := s.signatory(w.secretary, "secretary")
-	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, sMem), "active secretary")
+	w.secMem = s.signatory(w.secretary, "secretary")
+	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, w.secMem), "active secretary")
 	w.auditor = s.user("Internal auditor")
 	fixture(t, s.appoint(s.member(w.auditor), "internal_auditor", false, "2020-01-01", ""), "the auditor")
 	elsewhere := newSociety(t)
@@ -66,6 +75,11 @@ func newMoneyAPI(t *testing.T) *mapi {
 
 func (w *mapi) call(t *testing.T, method, as, path string, body any) resp {
 	t.Helper()
+	return w.callH(t, method, as, path, body, nil)
+}
+
+func (w *mapi) callH(t *testing.T, method, as, path string, body any, headers map[string]string) resp {
+	t.Helper()
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -75,6 +89,9 @@ func (w *mapi) call(t *testing.T, method, as, path string, body any) resp {
 	req.Header.Set("Authorization", "Bearer "+signIn(t, as))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	r, err := http.DefaultClient.Do(req)
 	fixture(t, err, method+" "+path)
@@ -127,8 +144,21 @@ func wire(c fees) mCharges {
 // ---- calls ------------------------------------------------------------------------
 
 func (w *mapi) contribute(t *testing.T, as, member string, kobo any, proof string) resp {
-	return w.call(t, http.MethodPost, as, "/societies/"+w.c.s.id+"/contributions",
-		map[string]any{"memberId": member, "amountKobo": kobo, "valueDate": "2026-10-05", "pinProofId": proof})
+	return w.contributeAt(t, as, w.c.s.id, member, kobo, proof, "")
+}
+
+// contributeAt: key "" a fresh Idempotency-Key, "none" no header.
+func (w *mapi) contributeAt(t *testing.T, as, society, member string, kobo any, proof, key string) resp {
+	h := map[string]string{}
+	switch key {
+	case "":
+		h["Idempotency-Key"] = "CLI-" + digest()[:16]
+	case "none":
+	default:
+		h["Idempotency-Key"] = key
+	}
+	return w.callH(t, http.MethodPost, as, "/societies/"+society+"/contributions",
+		map[string]any{"memberId": member, "amountKobo": kobo, "valueDate": "2026-10-05", "pinProofId": proof}, h)
 }
 
 func (w *mapi) authorise(t *testing.T, as, req, proof string) resp {
@@ -153,11 +183,12 @@ func (w *mapi) payOut(t *testing.T, as string, p payoutCall) resp {
 }
 
 // heldVia: an approved request for the borrower and its hold, authorised
-// through the API by the treasurer (fixture).
+// through the API by the CHAIRMAN (fixture), so the treasurer and the
+// secretary may record its payout: the authoriser never does (0015).
 func (w *mapi) heldVia(t *testing.T, amount int64) (req, hold string) {
 	t.Helper()
 	req = w.approved(t, w.bMem, amount)
-	r := w.authorise(t, w.poster, req, stepUp(t, w.poster, "withdrawal_authorisation"))
+	r := w.authorise(t, w.s2, req, stepUp(t, w.s2, "withdrawal_authorisation"))
 	if r.status != http.StatusCreated {
 		t.Fatalf("FIXTURE: authorising the payout: %d %s", r.status, r.body)
 	}
@@ -276,14 +307,20 @@ func TestApiMoney03_AContributionNeedsAStepUp(t *testing.T) {
 }
 
 // The society's series, computed by the server; a client's figure is ignored.
+// WHICH LAYER REFUSES: the API (the server's charge) and, behind it, the DATABASE (entry_charge_is_the_schedules).
+// With the API's check removed, the database refuses, the API answers 500, and
+// this test is red either way: it catches a wrong result and cannot say which
+// layer produced it. A red reading "500" means the database caught what the API
+// should have. Its break (suite_money_api.sh) is caught that way.
 func TestApiMoney04_TheChargeIsTheServers(t *testing.T) {
 	w := newMoneyAPI(t)
 	w.c.chargesLike7a(t)
 	want, err := quote(w.c.s.id, "contribution_in", 2500000, "2026-10-05")
 	fixture(t, err, "the series' charge")
-	r := w.call(t, http.MethodPost, w.poster, "/societies/"+w.c.s.id+"/contributions", map[string]any{"memberId": w.g1Mem, "amountKobo": "2500000",
+	r := w.callH(t, http.MethodPost, w.poster, "/societies/"+w.c.s.id+"/contributions", map[string]any{"memberId": w.g1Mem, "amountKobo": "2500000",
 		"valueDate": "2026-10-05", "pinProofId": stepUp(t, w.poster, "contribution_record"),
-		"charges": map[string]string{"partnerFeeKobo": "0", "vatKobo": "0", "statutoryLevyKobo": "0", "argonMarginKobo": "0", "totalKobo": "0"}})
+		"charges": map[string]string{"partnerFeeKobo": "0", "vatKobo": "0", "statutoryLevyKobo": "0", "argonMarginKobo": "0", "totalKobo": "0"}},
+		map[string]string{"Idempotency-Key": "CLI-" + digest()[:16]})
 	m := decoded[mMovement](t, r, http.StatusCreated, "a charged contribution")
 	if m.Charges == nil || *m.Charges != wire(want) || m.MemberAmountKobo != k(2500000-want.total()) {
 		t.Fatalf("WRONG CHARGE — charges %+v, member credited %s; want %+v and %d", m.Charges, m.MemberAmountKobo, wire(want), 2500000-want.total())
@@ -322,8 +359,7 @@ func TestApiMoney06_RecordingIsTheTreasurersOrTheSecretarys(t *testing.T) {
 
 func TestApiMoney07_AnyoneElseGetsNotFound(t *testing.T) {
 	w := newMoneyAPI(t)
-	none := w.call(t, http.MethodPost, w.abroad, "/societies/"+noSuchRow+"/contributions",
-		map[string]any{"memberId": w.g1Mem, "amountKobo": "2500000", "valueDate": "2026-10-05", "pinProofId": noSuchRow})
+	none := w.contributeAt(t, w.abroad, noSuchRow, w.g1Mem, "2500000", noSuchRow, "")
 	for who, u := range map[string]string{"a member with no post": w.borrower, "the treasurer of another society": w.abroad} {
 		r := w.contribute(t, u, w.g1Mem, "2500000", stepUp(t, u, "contribution_record"))
 		if r.status != http.StatusNotFound || string(r.body) != string(none.body) {
@@ -332,6 +368,11 @@ func TestApiMoney07_AnyoneElseGetsNotFound(t *testing.T) {
 	}
 }
 
+// WHICH LAYER REFUSES: the API (unknown_member) and, behind it, the DATABASE (the line-society rule, 0006).
+// With the API's check removed, the database refuses, the API answers 500, and
+// this test is red either way: it catches a wrong result and cannot say which
+// layer produced it. A red reading "500" means the database caught what the API
+// should have. Its break (suite_money_api.sh) is caught that way.
 func TestApiMoney08_TheMemberIsThisSocietys(t *testing.T) {
 	w := newMoneyAPI(t)
 	wantProblem(t, w.contribute(t, w.poster, w.stranger, "2500000", stepUp(t, w.poster, "contribution_record")), http.StatusUnprocessableEntity, "unknown_member",
@@ -352,6 +393,11 @@ func TestApiMoney09_MoneyIsAStringOnTheWire(t *testing.T) {
 	}
 }
 
+// WHICH LAYER REFUSES: the API (zero_amount) and, behind it, the DATABASE (a zero line is never written).
+// With the API's check removed, the database refuses, the API answers 500, and
+// this test is red either way: it catches a wrong result and cannot say which
+// layer produced it. A red reading "500" means the database caught what the API
+// should have. Its break (suite_money_api.sh) is caught that way.
 func TestApiMoney10_AZeroContributionIsRefused(t *testing.T) {
 	w := newMoneyAPI(t)
 	n := entriesFor(t, w.g1Mem)
@@ -472,6 +518,11 @@ func TestApiMoney19_APaidHoldIsNeverReleased(t *testing.T) {
 // RECORDING A PAYOUT: WHAT HAPPENED
 // =============================================================================
 
+// WHICH LAYER REFUSES: the API (the hold's charges) and, behind it, the DATABASE (entry_charge_is_the_holds).
+// With the API's check removed, the database refuses, the API answers 500, and
+// this test is red either way: it catches a wrong result and cannot say which
+// layer produced it. A red reading "500" means the database caught what the API
+// should have. Its break (suite_money_api.sh) is caught that way.
 func TestApiMoney20_APayoutOnItsHoldIsRecorded(t *testing.T) {
 	w := newMoneyAPI(t)
 	_, hold := w.heldVia(t, payKobo)
@@ -572,6 +623,11 @@ func TestApiMoney27_RecordingAPayoutIsTheTreasurersOrTheSecretarys(t *testing.T)
 	}
 }
 
+// WHICH LAYER REFUSES: the API (a blank reference) and, behind it, the DATABASE (withdrawal_names_payout_reference).
+// With the API's check removed, the database refuses, the API answers 500, and
+// this test is red either way: it catches a wrong result and cannot say which
+// layer produced it. A red reading "500" means the database caught what the API
+// should have. Its break (suite_money_api.sh) is caught that way.
 func TestApiMoney28_APayoutNamesItsTransfer(t *testing.T) {
 	w := newMoneyAPI(t)
 	_, hold := w.heldVia(t, payKobo)
@@ -580,4 +636,134 @@ func TestApiMoney28_APayoutNamesItsTransfer(t *testing.T) {
 	if r.status != http.StatusBadRequest || entriesFor(t, w.bMem) != n {
 		t.Fatalf("ACCEPTED — a payout with no transfer reference: %d %s; want 400 and nothing written", r.status, r.body)
 	}
+}
+
+// =============================================================================
+// 0015: A CONTRIBUTION IS RECORDED ONCE
+// =============================================================================
+
+// A dropped connection on 3G: the client retries with the same key. The
+// repeat writes nothing, needs no step-up, and answers with the FIRST record.
+// Two retries: one with a FRESH proof (a client that steps up again: only the
+// key stands between it and a second record), and one resending the request
+// as it was, its proof already spent by the first (needs no step-up).
+func TestApiMoney29_ARetriedContributionIsRecordedOnce(t *testing.T) {
+	w := newMoneyAPI(t)
+	key := "CLI-" + digest()[:16]
+	proof := stepUp(t, w.poster, "contribution_record")
+	first := decoded[mMovement](t, w.contributeAt(t, w.poster, w.c.s.id, w.g1Mem, "2500000", proof, key), http.StatusCreated, "the contribution")
+	n := entriesFor(t, w.g1Mem)
+	// In this order (a slice, not a map): the fresh-proof retry first, so a
+	// key that is not looked up shows as RECORDED TWICE, not as a step-up refusal.
+	for _, rt := range []struct{ what, proof string }{
+		{"with a fresh step-up", stepUp(t, w.poster, "contribution_record")},
+		{"resent as it was (its proof spent)", proof},
+	} {
+		what := rt.what
+		r := w.contributeAt(t, w.poster, w.c.s.id, w.g1Mem, "2500000", rt.proof, key)
+		if r.status == http.StatusCreated {
+			t.Fatalf("RECORDED TWICE — the same key, retried %s, was recorded again: %s", what, r.body)
+		}
+		again := decoded[mMovement](t, r, http.StatusOK, "the same contribution retried "+what)
+		if again.EntryId != first.EntryId || entriesFor(t, w.g1Mem) != n {
+			t.Fatalf("RECORDED TWICE — retried %s, the answer is entry %s (first %s); the member's entries went from %d to %d",
+				what, again.EntryId, first.EntryId, n, entriesFor(t, w.g1Mem))
+		}
+	}
+}
+
+func TestApiMoney30_AContributionCarriesItsIdempotencyKey(t *testing.T) {
+	w := newMoneyAPI(t)
+	n := entriesFor(t, w.g1Mem)
+	r := w.contributeAt(t, w.poster, w.c.s.id, w.g1Mem, "2500000", stepUp(t, w.poster, "contribution_record"), "none")
+	if r.status != http.StatusBadRequest || entriesFor(t, w.g1Mem) != n {
+		t.Fatalf("ACCEPTED — a contribution with no Idempotency-Key: %d %s; want 400 and nothing written", r.status, r.body)
+	}
+}
+
+// =============================================================================
+// 0015: NOBODY AUTHORISES OR ATTESTS TO A MOVEMENT THEY BENEFIT FROM
+// =============================================================================
+
+// ownRequest: an approved withdrawal paying the TREASURER, signed by the
+// chairman and the secretary, with savings of their own to pay it from.
+func (w *mapi) ownRequest(t *testing.T) string {
+	t.Helper()
+	w.saved(t, w.s1Mem, loanSavings)
+	req, err := w.raise(w.s1Mem, payKobo, 2)
+	fixture(t, err, "the treasurer's own withdrawal request")
+	fixture(t, w.c.s.sign(req, w.s2Mem, "chairman"), "the chairman's signature")
+	fixture(t, w.c.s.sign(req, w.secMem, "secretary"), "the secretary's signature")
+	return req
+}
+
+// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
+// suite's base has only 0015's column); from it, the API and, behind it, the
+// DATABASE (contribution_not_recorded_by_beneficiary). With the API's check removed the database refuses and the
+// API answers 500: red either way, and a red reading "500" means the
+// database caught what the API should have.
+func TestApiMoney31_NobodyRecordsTheirOwnContribution(t *testing.T) {
+	w := newMoneyAPI(t)
+	n := entriesFor(t, w.s1Mem)
+	wantProblem(t, w.contribute(t, w.poster, w.s1Mem, "2500000", stepUp(t, w.poster, "contribution_record")), http.StatusForbidden, "conflict_of_interest",
+		"the treasurer recording money into their own savings")
+	if entriesFor(t, w.s1Mem) != n {
+		t.Fatalf("ACCEPTED — the treasurer credited their own savings")
+	}
+}
+
+// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
+// suite's base has only 0015's column); from it, the API and, behind it, the
+// DATABASE (authoriser_not_beneficiary). With the API's check removed the database refuses and the
+// API answers 500: red either way, and a red reading "500" means the
+// database caught what the API should have.
+func TestApiMoney32_NobodyAuthorisesTheirOwnPayout(t *testing.T) {
+	w := newMoneyAPI(t)
+	req := w.ownRequest(t)
+	wantProblem(t, w.authorise(t, w.poster, req, stepUp(t, w.poster, "withdrawal_authorisation")), http.StatusForbidden, "conflict_of_interest",
+		"the treasurer authorising their own payout")
+	if holdsFor(t, req) != 0 {
+		t.Fatalf("ACCEPTED — the treasurer authorised their own payout")
+	}
+}
+
+// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
+// suite's base has only 0015's column); from it, the API and, behind it, the
+// DATABASE (payout_not_recorded_by_beneficiary). With the API's check removed the database refuses and the
+// API answers 500: red either way, and a red reading "500" means the
+// database caught what the API should have.
+func TestApiMoney33_NobodyRecordsTheirOwnPayout(t *testing.T) {
+	w := newMoneyAPI(t)
+	req := w.ownRequest(t)
+	h := decoded[mHold](t, w.authorise(t, w.s2, req, stepUp(t, w.s2, "withdrawal_authorisation")), http.StatusCreated, "the chairman authorising it")
+	n := entriesFor(t, w.s1Mem)
+	wantProblem(t, w.payOut(t, w.poster, payoutCall{hold: h.HoldId, member: w.s1Mem, ref: w.ref(), kobo: payKobo, proof: stepUp(t, w.poster, "withdrawal_payout")}),
+		http.StatusForbidden, "conflict_of_interest", "the treasurer recording their own payout")
+	if entriesFor(t, w.s1Mem) != n {
+		t.Fatalf("ACCEPTED — the treasurer recorded their own payout")
+	}
+}
+
+// =============================================================================
+// 0015: AUTHORISING AND ATTESTING ARE DIFFERENT DUTIES
+// =============================================================================
+
+// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
+// suite's base has only 0015's column); from it, the API and, behind it, the
+// DATABASE (authoriser_never_records). With the API's check removed the database refuses and the
+// API answers 500: red either way, and a red reading "500" means the
+// database caught what the API should have.
+func TestApiMoney34_TheAuthoriserNeverRecordsThePayout(t *testing.T) {
+	w := newMoneyAPI(t)
+	req := w.approved(t, w.bMem, payKobo)
+	h := decoded[mHold](t, w.authorise(t, w.secretary, req, stepUp(t, w.secretary, "withdrawal_authorisation")), http.StatusCreated,
+		"the secretary (a signatory, who also records money) authorising it")
+	n := entriesFor(t, w.bMem)
+	wantProblem(t, w.payOut(t, w.secretary, payoutCall{hold: h.HoldId, member: w.bMem, ref: w.ref(), kobo: payKobo, proof: stepUp(t, w.secretary, "withdrawal_payout")}),
+		http.StatusForbidden, "duties_separated", "the secretary recording the payout they authorised")
+	if entriesFor(t, w.bMem) != n {
+		t.Fatalf("ACCEPTED — one person authorised and recorded the same payout")
+	}
+	decoded[mMovement](t, w.payOut(t, w.poster, payoutCall{hold: h.HoldId, member: w.bMem, ref: w.ref(), kobo: payKobo, proof: stepUp(t, w.poster, "withdrawal_payout")}),
+		http.StatusCreated, "the treasurer recording it instead")
 }

@@ -1603,9 +1603,21 @@ paths:
         RECORDED: where the series cannot determine the charge, it is recorded
         uncharged, chargeDetermined is false, charges is null, and the flag
         charge_undetermined says which component is missing.
+
+        Idempotency-Key is the client's reference for this contribution,
+        minted CLIENT-SIDE once per contribution and reused on every retry
+        (0015: unique within the society). On a phone on 3G a retry is normal:
+        a repeat of a recorded key answers 200 with the FIRST record, writes
+        nothing, and needs no step-up, as postAll does.
+
+        Nobody records money into their own savings (LEDGER_CONTRACT §10).
       security: [{ session: [] }]
       parameters:
         - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
       requestBody:
         required: true
         content:
@@ -1617,8 +1629,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MoneyMovement' }
+        '200':
+          description: |
+            Already recorded under this Idempotency-Key. NOTHING WAS WRITTEN.
+            The body is the FIRST record, read from the ledger, not from this
+            request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MoneyMovement' }
         '400':
-          description: "bad_request: malformed (money not a kobo string, a missing field)."
+          description: "bad_request: malformed (money not a kobo string, a missing field, no Idempotency-Key)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1628,7 +1648,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "step_up_required (no valid contribution_record proof, the caller's own, unspent); not_permitted (an officer here whose post does not record money)."
+          description: "step_up_required (no valid contribution_record proof, the caller's own, unspent); not_permitted (an officer here whose post does not record money); conflict_of_interest (the member credited is the recorder: nobody attests to a movement they benefit from)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1679,7 +1699,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "step_up_required; not_permitted (an officer here who is not a signatory, the auditor included)."
+          description: "step_up_required; not_permitted (an officer here who is not a signatory, the auditor included); conflict_of_interest (the payout is from the authoriser's own savings)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1786,7 +1806,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "step_up_required; not_permitted (an officer here whose post does not record money)."
+          description: "step_up_required; not_permitted (an officer here whose post does not record money); conflict_of_interest (the payout is from the recorder's own savings); duties_separated (the recorder authorised this payout's hold: authorising and attesting are different duties)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
