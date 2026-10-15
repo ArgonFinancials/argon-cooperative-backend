@@ -8,6 +8,12 @@
 # 0011–0013; here, what the API adds: who may, the step-up, the server's
 # charges, refusals that carry the database's reasons, and flags in the answer.
 SUITE_INCLUDE='^TestApiMoney'
+#
+# TEMPORARY ARRANGEMENT (2026-10-14), kept visible so it cannot outlive its
+# reason: the base has 0015's INTERFACE (the column) because 0015's migration
+# does not exist yet, and so the fake (apifake_money_test.go) checks 0015's
+# rules itself. The moment the migration exists, this suite refuses to run
+# until SUITE_BASE names it instead.
 SUITE_EXCLUDE='^$'
 SUITE_SKIP=''
 SUITE_RUN='^TestApiMoney'
@@ -51,5 +57,9 @@ declare -gA SVC_TARGET_OF=(
   [money_key_optional]='TestApiMoney30_AContributionCarriesItsIdempotencyKey'
   [money_self_recording_ok]='TestApiMoney31_NobodyRecordsTheirOwnContribution|TestApiMoney33_NobodyRecordsTheirOwnPayout'
   [money_self_authorising_ok]='TestApiMoney32_NobodyAuthorisesTheirOwnPayout'
+  [money_self_releasing_ok]='TestApiMoney35_NobodyReleasesTheirOwnHold'
   [money_authoriser_records_ok]='TestApiMoney34_TheAuthoriserNeverRecordsThePayout'
 )
+if [[ -f "$REPO_DIR/migrations/0015_benefit_and_duties.up.sql" && $SUITE_BASE == *0015_interface.sql* ]]; then
+  die "suite money_api: 0015's migration exists, and this suite's base still names 0015_interface.sql. Move SUITE_BASE to migrations/0015_benefit_and_duties.up.sql (the temporary arrangement has outlived its reason)."
+fi

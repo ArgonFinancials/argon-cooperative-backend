@@ -1,6 +1,6 @@
--- OVER-STRICT/INVERTED (a control must go red). OVER-STRICT: any member of the society who records is conflicted, not only the member who benefits.
+-- OVER-STRICT/INVERTED (a control must go red). OVER-STRICT: any member of the society who records or releases is conflicted, not only the member who benefits.
 --
--- Must turn red: TestBenefit_Control_TheCorrectFormIsAccepted, TestBenefit_Control_AnOfficerRecordsAnotherMembersContribution.
+-- Must turn red: TestBenefit_Control_TheCorrectFormIsAccepted, TestBenefit_Control_AnOfficerRecordsAnotherMembersContribution, TestBenefit_Control_AnotherSignatoryReleasesTheHold.
 BEGIN;
 CREATE FUNCTION hold_not_by_beneficiary() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
@@ -11,6 +11,15 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER withdrawal_holds_not_by_beneficiary BEFORE INSERT ON withdrawal_holds
   FOR EACH ROW EXECUTE FUNCTION hold_not_by_beneficiary();
+CREATE FUNCTION release_not_by_beneficiary() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM withdrawal_holds h JOIN members m ON m.society_id = h.society_id WHERE h.id = NEW.hold_id AND m.user_id = NEW.actor_user_id) THEN
+    PERFORM auth_refuse('releaser_not_beneficiary', 'nobody authorises a movement they benefit from (LEDGER_CONTRACT §10): releasing this hold frees the releaser''s own withdrawable, the precondition for their next payout. Another signatory releases it');
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER withdrawal_hold_releases_not_by_beneficiary BEFORE INSERT ON withdrawal_hold_releases
+  FOR EACH ROW EXECUTE FUNCTION release_not_by_beneficiary();
 CREATE FUNCTION entry_not_attested_by_beneficiary() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   e ledger_entries%ROWTYPE;

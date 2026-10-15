@@ -44,6 +44,7 @@
 //
 //	money_self_recording_ok       a member records money into or out of their own savings
 //	money_self_authorising_ok     a member authorises their own payout
+//	money_self_releasing_ok       a member releases the hold on their own payout
 //	money_authoriser_records_ok   the officer who authorised a hold records its payout
 //	money_retry_records_twice     the Idempotency-Key is not looked up: a retry is recorded again
 //	money_retry_needs_step_up     a repeat is judged on its step-up before the key is looked up
@@ -264,6 +265,7 @@ func (f *fakeAPI) beneficiary(ctx context.Context, user, member string) bool {
 var (
 	conflictRecord    = api.Problem{Code: "conflict_of_interest", Message: "nobody attests to a movement they benefit from: this is your own savings. Another officer records it"}
 	conflictAuthorise = api.Problem{Code: "conflict_of_interest", Message: "nobody authorises a movement they benefit from: this payout is from your own savings. Another signatory authorises it"}
+	conflictRelease   = api.Problem{Code: "conflict_of_interest", Message: "nobody releases the hold on their own payout: a release frees your own withdrawable. Another signatory releases it"}
 	dutiesSeparated   = api.Problem{Code: "duties_separated", Message: "you authorised this payout's hold: authorising and attesting are different duties. Another officer records it"}
 )
 
@@ -521,6 +523,11 @@ func (f *fakeAPI) ReleaseHold(ctx context.Context, req api.ReleaseHoldRequestObj
 	if req.Body == nil {
 		return api.ReleaseHold400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
+	var holdMember string
+	f.db.QueryRow(ctx, `SELECT member_id::text FROM withdrawal_holds WHERE id = $1`, req.HoldId.String()).Scan(&holdMember)
+	if f.beneficiary(ctx, caller, holdMember) && f.brk != "money_self_releasing_ok" {
+		return api.ReleaseHold403JSONResponse(conflictRelease), nil
+	}
 	if strings.TrimSpace(req.Body.Reason) == "" && f.brk != "money_release_no_reason" {
 		return api.ReleaseHold422JSONResponse{Code: "reason_required", Message: "say why the transfer will not happen"}, nil
 	}
@@ -530,6 +537,8 @@ func (f *fakeAPI) ReleaseHold(ctx context.Context, req api.ReleaseHoldRequestObj
 		switch c := pgConstraint(err); {
 		case c == "hold_release_unpaid" && f.brk != "money_paid_release_as_500":
 			return api.ReleaseHold409JSONResponse{Code: "hold_paid", Message: dbMessage(err)}, nil
+		case c == "releaser_not_beneficiary":
+			return api.ReleaseHold403JSONResponse(conflictRelease), nil
 		case c == "withdrawal_hold_releases_pkey":
 			return api.ReleaseHold409JSONResponse{Code: "hold_released", Message: "this hold was already released"}, nil
 		}

@@ -28,7 +28,8 @@
 //
 // Decided 2026-10-14 (0015, LEDGER_CONTRACT §10 widened):
 //   - NOBODY AUTHORISES, SIGNS OR ATTESTS TO A MOVEMENT THEY BENEFIT FROM:
-//     403 conflict_of_interest.
+//     403 conflict_of_interest. Releasing a hold is one of the four acts: it
+//     frees the releaser's own withdrawable.
 //   - The officer who authorised a hold never records its payout: 403
 //     duties_separated. Authorising is the judgement, recording the attestation.
 //   - A contribution carries the client's Idempotency-Key: a retry on a dropped
@@ -766,4 +767,23 @@ func TestApiMoney34_TheAuthoriserNeverRecordsThePayout(t *testing.T) {
 	}
 	decoded[mMovement](t, w.payOut(t, w.poster, payoutCall{hold: h.HoldId, member: w.bMem, ref: w.ref(), kobo: payKobo, proof: stepUp(t, w.poster, "withdrawal_payout")}),
 		http.StatusCreated, "the treasurer recording it instead")
+}
+
+// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
+// suite's base has only 0015's column); from it, the API and, behind it, the
+// DATABASE (releaser_not_beneficiary). With the API's check removed the database
+// refuses and the API answers 500: red either way, and a red reading "500"
+// means the database caught what the API should have.
+func TestApiMoney35_NobodyReleasesTheirOwnHold(t *testing.T) {
+	w := newMoneyAPI(t)
+	req := w.ownRequest(t)
+	h := decoded[mHold](t, w.authorise(t, w.s2, req, stepUp(t, w.s2, "withdrawal_authorisation")), http.StatusCreated, "the chairman authorising it")
+	wantProblem(t, w.releaseVia(t, w.poster, h.HoldId, "the transfer failed"), http.StatusForbidden, "conflict_of_interest",
+		"the treasurer releasing the hold on their own payout")
+	var released bool
+	fixture(t, db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM withdrawal_hold_releases WHERE hold_id = $1)`, h.HoldId).Scan(&released), "the release")
+	if released {
+		t.Fatalf("ACCEPTED — the treasurer freed their own withdrawable")
+	}
+	decoded[mHold](t, w.releaseVia(t, w.s2, h.HoldId, "the transfer failed"), http.StatusCreated, "the chairman releasing it instead")
 }

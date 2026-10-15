@@ -13,7 +13,13 @@
 // rule now names the acts, so the next object inherits it:
 //
 //   - AUTHORISES: the hold is never authorised by the person whose savings pay
-//     out.
+//     out, and never RELEASED by them either (added 2026-10-14 at review): a
+//     release pays nothing, which is why it is easy to miss, but it frees the
+//     member's withdrawable, the precondition for their next payout. A
+//     beneficiary-treasurer could have a hold authorised, a colleague decline
+//     to pay it, release it themselves, and reach the money again with no
+//     second person touching the amount. An act with a financial effect on
+//     the actor.
 //   - ATTESTS: a contribution or payout is never recorded by the person it
 //     credits or pays. Refusing a record is right here, under finding 33's own
 //     test: the record is malformed (its attestation is the beneficiary's own)
@@ -72,7 +78,14 @@ func (w *benefitWorld) heldBy(t *testing.T, req, member, by string) string {
 	return h
 }
 
-func recordedOnce() want { return want{codes: []string{"23505"}, constraint: "contribution_recorded_once"} }
+// releaseBy: `by` releases a hold, with a reason.
+func (w *benefitWorld) releaseBy(hold, by string) error {
+	return one(`INSERT INTO withdrawal_hold_releases (hold_id, actor_user_id, reason) VALUES ($1, $2, $3)`, hold, by, "NIP returned: beneficiary bank unavailable")
+}
+
+func recordedOnce() want {
+	return want{codes: []string{"23505"}, constraint: "contribution_recorded_once"}
+}
 
 // =============================================================================
 // NOBODY AUTHORISES OR ATTESTS TO A MOVEMENT THEY BENEFIT FROM
@@ -103,6 +116,14 @@ func TestBenefit04_NobodyRecordsTheirOwnContribution(t *testing.T) {
 	w := newBenefitWorld(t)
 	err := w.post(t, move{kind: "contribution_in", actor: w.s1, lines: w.contribution(w.s1Mem, 2500000, fees{})})
 	refused(t, err, "the treasurer recording money into their own savings", refusedAs("contribution_not_recorded_by_beneficiary"))
+}
+
+// A release frees the member's withdrawable: the beneficiary never releases
+// the hold on their own payout.
+func TestBenefit08_NobodyReleasesTheirOwnHold(t *testing.T) {
+	w := newBenefitWorld(t)
+	hold := w.heldBy(t, w.ownRequest(t), w.s1Mem, w.s2)
+	refused(t, w.releaseBy(hold, w.s1), "the treasurer releasing the hold on their own payout", refusedAs("releaser_not_beneficiary"))
 }
 
 // =============================================================================
@@ -171,4 +192,10 @@ func TestBenefit_Control_AnotherOfficerRecordsTheHeldPayout(t *testing.T) {
 	hold := w.heldBy(t, req, w.bMem, w.s1)
 	_, err := w.record(t, payoutRec{req: req, hold: hold, member: w.bMem, amount: payKobo, ch: payFees(), by: w.s2})
 	accepted(t, err, "the payout the treasurer authorised, recorded by the chairman")
+}
+
+func TestBenefit_Control_AnotherSignatoryReleasesTheHold(t *testing.T) {
+	w := newBenefitWorld(t)
+	hold := w.heldBy(t, w.ownRequest(t), w.s1Mem, w.s2)
+	accepted(t, w.releaseBy(hold, w.s2), "the chairman releasing the hold on the treasurer's payout")
 }

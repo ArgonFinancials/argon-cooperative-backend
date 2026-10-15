@@ -18,7 +18,8 @@ declare -gA TARGET_OF=(
   [m_authoriser_records_ok]='TestBenefit05_TheAuthoriserNeverRecordsThePayout'
   [m_reference_optional]='TestBenefit06_ASingleContributionNamesItsClientReference'
   [m_reference_reusable]='TestBenefit07_AClientReferenceIsRecordedOnce'
-  [c_any_member_conflicted]='TestBenefit_Control_TheCorrectFormIsAccepted|TestBenefit_Control_AnOfficerRecordsAnotherMembersContribution'
+  [m_self_release_ok]='TestBenefit08_NobodyReleasesTheirOwnHold'
+  [c_any_member_conflicted]='TestBenefit_Control_TheCorrectFormIsAccepted|TestBenefit_Control_AnOfficerRecordsAnotherMembersContribution|TestBenefit_Control_AnotherSignatoryReleasesTheHold'
   [c_reference_global]='TestBenefit_Control_AnotherSocietyMayUseTheSameReference'
   [c_authoriser_must_record]='TestBenefit_Control_AnotherOfficerRecordsTheHeldPayout'
 )

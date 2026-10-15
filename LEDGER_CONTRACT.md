@@ -438,7 +438,7 @@ They appear only as illustrative test data, marked so, pending the compliance ow
 
 **NOBODY AUTHORISES, SIGNS OR ATTESTS TO A MOVEMENT THEY BENEFIT FROM.** Widened 2026-10-14 from "nobody signs a request they benefit from", which was written for signatures and so did not reach the payout hold, a different object: a treasurer who was the member being paid could authorise their own payout and record it, the money leaving on one person's judgement and one person's attestation, both theirs. That was the fourth time the same conflict appeared, and the worst, because it bypasses signatures entirely. The rule now names the acts, not the object, so the next object inherits it instead of waiting to be caught a fifth time:
 - **signs**: a signature on an approval request;
-- **authorises**: a payout hold (authorised to execute);
+- **authorises**: a payout hold (authorised to execute), and releasing one: a release pays nothing, but it frees the member's withdrawable, the precondition for their next payout, so it is an act with a financial effect on the actor (added 2026-10-14 at review);
 - **attests**: recording a movement as having happened (a contribution, a payout).
 
 Checked per PERSON, not per member record. Where it is enforced:
@@ -449,6 +449,7 @@ Checked per PERSON, not per member record. Where it is enforced:
 | Loan write-off | the borrower (debt extinguished), and every guarantor (liability extinguished) | the same two rules: any request naming the loan |
 | Withdrawal | the member whose savings pay out | 0011 `requester_never_signs_own_withdrawal` (accepted 2026-10-11) |
 | Payout hold (authorising a withdrawal to execute) | the member whose savings pay out | 0015 (tests first, 2026-10-14) |
+| Releasing a hold | the member whose withdrawable it frees | 0015 |
 | Recorded payout (attesting it happened) | the member whose savings pay out | 0015 |
 | Recorded contribution (attesting money arrived) | the member credited | 0015 |
 

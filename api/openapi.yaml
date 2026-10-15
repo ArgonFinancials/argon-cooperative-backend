@@ -1748,7 +1748,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "not_permitted (an officer here who is not a signatory)."
+          description: "not_permitted (an officer here who is not a signatory); conflict_of_interest (the hold is on the releaser's own payout: a release frees their own withdrawable)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
