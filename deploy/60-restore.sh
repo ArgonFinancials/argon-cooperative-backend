@@ -127,6 +127,7 @@ if [[ $mode == drill ]]; then
     "write-offs (0009)|^TestWriteOff|"
     "signing step-up (0010)|^TestSignStep|"
     "approvals API|^TestApiApprovals|"
+    "money API|^TestApiMoney|"
     "contributions and withdrawals (0011)|^TestMoney|"
     "the payout hold (0012)|^TestPayout|"
     "VAT on Argon's own fee (0013)|^TestVAT|"
