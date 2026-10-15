@@ -55,7 +55,7 @@ store_get "$key.sha256"   "$work/sha256"
 ok "sha256 $(cut -c1-16 "$work/sha256")…"
 
 if [[ $mode == drill ]]; then
-  target="argon_drill_$(date -u +%Y%m%dt%H%M%S | tr 'T' 't')"
+  target="argon_drill_$(date -u +%Y%m%dt%H%M%S | tr 'T' 't')_$$"   # and the process (finding 38)
   create_scratch_db "$target"
   ((keep)) || trap 'drop_scratch_db "$target" || true; cleanup' EXIT
 else
@@ -110,7 +110,7 @@ if [[ $mode == drill ]]; then
   # against what the restore brought back.)
   covered=()
   suites=(
-    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator)"
+    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit)"
     "auth (0003)|^TestAuth|"
     "roles (0004)|^TestRole|"
     "statement API|^TestApiStatement|"
@@ -131,6 +131,7 @@ if [[ $mode == drill ]]; then
     "the payout hold (0012)|^TestPayout|"
     "VAT on Argon's own fee (0013)|^TestVAT|"
     "the operator's functions (0014)|^TestOperator|"
+    "nobody benefits from what they authorise or attest (0015)|^TestBenefit|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"

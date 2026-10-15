@@ -75,7 +75,9 @@ func run(m *testing.M) int {
 
 	name := existing
 	if name == "" {
-		name = fmt.Sprintf("argon_verify_t%d", time.Now().UnixNano())
+		// The time AND the process: Windows' clock ticks in 100 ns, and two
+		// concurrent runs once made the same name in one tick (finding 38).
+		name = fmt.Sprintf("argon_verify_t%d%07d", time.Now().UnixNano(), os.Getpid()%10000000)
 	}
 	adminURL, dbName = admin, name
 	ac, err := pgx.Connect(ctx, admin)
@@ -101,12 +103,17 @@ func run(m *testing.M) int {
 			fmt.Fprintf(os.Stderr, "tier1: refusing to create or drop %q: not a scratch name\n", name)
 			os.Exit(2)
 		}
-		defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
 	}
-	for _, q := range setup {
+	for i, q := range setup {
 		if _, err := ac.Exec(ctx, q); err != nil {
 			fmt.Fprintln(os.Stderr, "tier1:", q, err)
 			return 2
+		}
+		// Armed only once THIS process's CREATE has succeeded. Armed before
+		// it, a CREATE that failed on a name another process had just made
+		// dropped that process's database out from under it (finding 38).
+		if i == 0 && existing == "" {
+			defer ac.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
 		}
 	}
 

@@ -9,17 +9,17 @@
 # charges, refusals that carry the database's reasons, and flags in the answer.
 SUITE_INCLUDE='^TestApiMoney'
 #
-# TEMPORARY ARRANGEMENT (2026-10-14), kept visible so it cannot outlive its
-# reason: the base has 0015's INTERFACE (the column) because 0015's migration
-# does not exist yet, and so the fake (apifake_money_test.go) checks 0015's
-# rules itself. The moment the migration exists, this suite refuses to run
-# until SUITE_BASE names it instead.
+# WAS TEMPORARY (2026-10-14 to 2026-10-15): the base carried 0015's INTERFACE
+# until 0015's migration existed, and the fake checked 0015's rules itself.
+# The guard below refused this suite the moment the migration appeared (it
+# fired, as designed) and the base moved to the real 0015. The fake still
+# checks first; behind it the database now refuses too (the WHICH LAYER notes).
 SUITE_EXCLUDE='^$'
 SUITE_SKIP=''
 SUITE_RUN='^TestApiMoney'
 SVC_RUN='^TestApiMoney'
 SVC_ENV='ARGON_TEST_API_FAKE'
-SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,test/tier1/0015_interface.sql'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,migrations/0015_benefit_and_duties.up.sql'
 SUITE_MUTDIR='mutants_api_none'
 SUITE_GREEN_NEEDS='internal/api/money.go'          # the real handlers, written after review
 CONTROL_RE='^$'

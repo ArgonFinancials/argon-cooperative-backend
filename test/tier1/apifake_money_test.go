@@ -42,18 +42,21 @@
 // Breaks — 0015 (nobody authorises or attests to what they benefit from; the
 // authoriser never records; a contribution is recorded once):
 //
-//	money_self_recording_ok       a member records money into or out of their own savings
-//	money_self_authorising_ok     a member authorises their own payout
-//	money_self_releasing_ok       a member releases the hold on their own payout
-//	money_authoriser_records_ok   the officer who authorised a hold records its payout
+//	money_self_recording_ok       the database's refusal of recording one's own money is not mapped (answers 500)
+//	money_self_authorising_ok     the refusal of authorising one's own payout is not mapped (500)
+//	money_self_releasing_ok       the refusal of releasing one's own hold is not mapped (500)
+//	money_authoriser_records_ok   the refusal of the authoriser recording is not mapped (500)
 //	money_retry_records_twice     the Idempotency-Key is not looked up: a retry is recorded again
 //	money_retry_needs_step_up     a repeat is judged on its step-up before the key is looked up
 //	money_key_optional            a contribution with no Idempotency-Key is given one and recorded
 //
-// Until 0015's migration exists the suite's base has only its column, so this
-// fake checks 0015's rules itself before writing, and also maps the
-// database's refusals for when the rules are there. The real handlers rely on
-// the database (their GREEN runs on the real 0015).
+// 0015's rules are the database's; this fake, like the real handlers, maps
+// their refusals. (From 2026-10-14 to 15, while the suite's base had only
+// 0015's column, the fake checked those rules itself. When the base moved to
+// the real 0015, its breaks, which skipped those checks, passed on the broken
+// service: the database refused and the mapping answered the same 403. The
+// checks had outlived their reason and were removed; a break now removes the
+// mapping, and the refusal answers 500.)
 package tier1
 
 import (
@@ -255,13 +258,6 @@ func (f *fakeAPI) movement(ctx context.Context, caller, post, entry, kind, socie
 	return m
 }
 
-// beneficiary: does `user` own the member record `member`? (per PERSON, §10)
-func (f *fakeAPI) beneficiary(ctx context.Context, user, member string) bool {
-	var mine bool
-	f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND user_id = $2)`, member, user).Scan(&mine)
-	return mine
-}
-
 var (
 	conflictRecord    = api.Problem{Code: "conflict_of_interest", Message: "nobody attests to a movement they benefit from: this is your own savings. Another officer records it"}
 	conflictAuthorise = api.Problem{Code: "conflict_of_interest", Message: "nobody authorises a movement they benefit from: this payout is from your own savings. Another signatory authorises it"}
@@ -362,9 +358,6 @@ func (f *fakeAPI) RecordContribution(ctx context.Context, req api.RecordContribu
 	if !here && f.brk != "money_member_any_society" {
 		return api.RecordContribution422JSONResponse{Code: "unknown_member", Message: "not a member of this society"}, nil
 	}
-	if f.beneficiary(ctx, caller, member) && f.brk != "money_self_recording_ok" {
-		return api.RecordContribution403JSONResponse(conflictRecord), nil
-	}
 	date := b.ValueDate.Format("2006-01-02")
 	c, determined, err := f.quoteOf(ctx, society, "contribution_in", amount, date)
 	if err != nil {
@@ -382,7 +375,7 @@ func (f *fakeAPI) RecordContribution(ctx context.Context, req api.RecordContribu
 		switch c := pgConstraint(err); {
 		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.RecordContribution403JSONResponse(stepUpProblem("contribution_record")), nil
-		case c == "contribution_not_recorded_by_beneficiary":
+		case c == "contribution_not_recorded_by_beneficiary" && f.brk != "money_self_recording_ok":
 			return api.RecordContribution403JSONResponse(conflictRecord), nil
 		case c == "contribution_recorded_once": // a retry that raced the first
 			if r, done, err := f.contributionByKey(ctx, society, key); err != nil || done {
@@ -446,9 +439,6 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 	if req.Body == nil {
 		return api.AuthorisePayout400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
-	if r.member != nil && f.beneficiary(ctx, caller, *r.member) && f.brk != "money_self_authorising_ok" {
-		return api.AuthorisePayout403JSONResponse(conflictAuthorise), nil
-	}
 	var hold string
 	err = f.actThen(ctx, caller, "withdrawal_authorisation", req.Body.PinProofId.String(), false, func(x pgx.Tx, act *string) error {
 		// The charges are the database's to fix (0012); these zeros are overwritten.
@@ -464,7 +454,7 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 		switch c := pgConstraint(err); {
 		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.AuthorisePayout403JSONResponse(stepUpProblem("withdrawal_authorisation")), nil
-		case c == "authoriser_not_beneficiary":
+		case c == "authoriser_not_beneficiary" && f.brk != "money_self_authorising_ok":
 			return api.AuthorisePayout403JSONResponse(conflictAuthorise), nil
 		case c == "hold_request_approved":
 			return api.AuthorisePayout409JSONResponse{Code: "not_approved", Message: msg}, nil
@@ -523,11 +513,6 @@ func (f *fakeAPI) ReleaseHold(ctx context.Context, req api.ReleaseHoldRequestObj
 	if req.Body == nil {
 		return api.ReleaseHold400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
-	var holdMember string
-	f.db.QueryRow(ctx, `SELECT member_id::text FROM withdrawal_holds WHERE id = $1`, req.HoldId.String()).Scan(&holdMember)
-	if f.beneficiary(ctx, caller, holdMember) && f.brk != "money_self_releasing_ok" {
-		return api.ReleaseHold403JSONResponse(conflictRelease), nil
-	}
 	if strings.TrimSpace(req.Body.Reason) == "" && f.brk != "money_release_no_reason" {
 		return api.ReleaseHold422JSONResponse{Code: "reason_required", Message: "say why the transfer will not happen"}, nil
 	}
@@ -537,7 +522,7 @@ func (f *fakeAPI) ReleaseHold(ctx context.Context, req api.ReleaseHoldRequestObj
 		switch c := pgConstraint(err); {
 		case c == "hold_release_unpaid" && f.brk != "money_paid_release_as_500":
 			return api.ReleaseHold409JSONResponse{Code: "hold_paid", Message: dbMessage(err)}, nil
-		case c == "releaser_not_beneficiary":
+		case c == "releaser_not_beneficiary" && f.brk != "money_self_releasing_ok":
 			return api.ReleaseHold403JSONResponse(conflictRelease), nil
 		case c == "withdrawal_hold_releases_pkey":
 			return api.ReleaseHold409JSONResponse{Code: "hold_released", Message: "this hold was already released"}, nil
@@ -587,26 +572,20 @@ func (f *fakeAPI) RecordPayout(ctx context.Context, req api.RecordPayoutRequestO
 	if !here {
 		return api.RecordPayout422JSONResponse{Code: "unknown_member", Message: "not a member of this society"}, nil
 	}
-	if f.beneficiary(ctx, caller, member) && f.brk != "money_self_recording_ok" {
-		return api.RecordPayout403JSONResponse(conflictRecord), nil
-	}
 	date := b.ValueDate.Format("2006-01-02")
 	var c chg
 	determined := true
 	var hold, request *string
 	if b.HoldId != nil {
 		id := b.HoldId.String()
-		var rq, authoriser string
-		err := f.db.QueryRow(ctx, `SELECT request_id::text, partner_fee_kobo, vat_kobo, statutory_levy_kobo, argon_margin_kobo, actor_user_id::text
-			FROM withdrawal_holds WHERE id = $1 AND society_id = $2`, id, society).Scan(&rq, &c.fee, &c.vat, &c.levy, &c.margin, &authoriser)
+		var rq string
+		err := f.db.QueryRow(ctx, `SELECT request_id::text, partner_fee_kobo, vat_kobo, statutory_levy_kobo, argon_margin_kobo
+			FROM withdrawal_holds WHERE id = $1 AND society_id = $2`, id, society).Scan(&rq, &c.fee, &c.vat, &c.levy, &c.margin)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return api.RecordPayout422JSONResponse{Code: "unknown_hold", Message: "not a hold of this society"}, nil
 		}
 		if err != nil {
 			return nil, err
-		}
-		if authoriser == caller && f.brk != "money_authoriser_records_ok" {
-			return api.RecordPayout403JSONResponse(dutiesSeparated), nil
 		}
 		hold, request = &id, &rq
 		if f.brk == "money_payout_charges_dropped" {
@@ -628,9 +607,9 @@ func (f *fakeAPI) RecordPayout(ctx context.Context, req api.RecordPayoutRequestO
 		switch c := pgConstraint(err); {
 		case moneyStepUpRefusals[c] && f.brk != "money_step_up_as_500":
 			return api.RecordPayout403JSONResponse(stepUpProblem("withdrawal_payout")), nil
-		case c == "payout_not_recorded_by_beneficiary":
+		case c == "payout_not_recorded_by_beneficiary" && f.brk != "money_self_recording_ok":
 			return api.RecordPayout403JSONResponse(conflictRecord), nil
-		case c == "authoriser_never_records":
+		case c == "authoriser_never_records" && f.brk != "money_authoriser_records_ok":
 			return api.RecordPayout403JSONResponse(dutiesSeparated), nil
 		case c == "payout_recorded_once" && f.brk != "money_duplicate_as_500":
 			var first string

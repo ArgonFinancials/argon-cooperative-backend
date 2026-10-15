@@ -30,7 +30,7 @@ esac; done
 [[ -z $db ]] || assert_scratch "$db"
 
 if [[ -z $db ]]; then
-  db="argon_verify_$(date -u +%Y%m%dt%H%M%S)"
+  db="argon_verify_$(date -u +%Y%m%dt%H%M%S)_$$"   # and the process: two runs in one second (finding 38)
   info "building scratch database $db from $MIGRATIONS_DIR"
   create_scratch_db "$db"
   ((keep)) || trap 'drop_scratch_db "$db" >/dev/null || true' EXIT
@@ -95,6 +95,16 @@ has_money=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schem
 # and whatever happened is recorded, any difference flagged.
 has_holds=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
   WHERE table_name = 'ledger_entries' AND column_name = 'hold_id'" </dev/null)
+# 0015: a single contribution names the client's reference; nobody authorises
+# or attests to a movement they benefit from; the authoriser never records.
+# From the catalog (finding 34), not a privilege-filtered view.
+has_benefit=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.ledger_entries'::regclass
+  AND attname = 'client_reference' AND NOT attisdropped" </dev/null)
+# cref NAME: the column and value a single contribution carries from 0015.
+CR_COL="" ; [[ $has_benefit == 1 ]] && CR_COL=", client_reference"
+# Never `[[ … ]] && printf` here: false on an older schema, the function
+# returns 1, and an assignment from it exits the probe silently (finding 7).
+cref() { if [[ $has_benefit == 1 ]]; then printf ", 'PROBE-%s'" "$1"; fi; }
 # VAT's era (0013): before it, VAT was on the partner's fee and the probe's ₦10
 # sat there; from it, VAT is on Argon's own fee, the ₦10 is Argon's, and the
 # partner's is zero AS PROBE DATA ONLY (unknown in reality, and refused).
@@ -104,6 +114,7 @@ if [[ $has_vat_era == 1 ]]; then VAT_COMP=vat_on_argon_fee VAT_ROLE=vat FEE_COMP
 else VAT_COMP=partner_fee_vat VAT_ROLE=partner_vat FEE_COMP=partner_fee FEE_ROLE=partner_charge; fi
 A5=$(U 25)
 H1=$(U 65) E5=$(U 48) SP13=$(U 143) SP14=$(U 144) SA13=$(U 153) SA14=$(U 154)
+E6=$(U 49) E7=$(U 50) E8=$(U 51) E9=$(U 52) SP15=$(U 145) SP16=$(U 146) SP17=$(U 147) SP18=$(U 148) SA15=$(U 155) SA16=$(U 156) SA17=$(U 157) SA18=$(U 158)
 if [[ $has_sig_acts == 1 ]]; then
   require_env ARGON_AUTH_PASSWORD
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
@@ -136,7 +147,11 @@ SQL
     ($SP10, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
   if [[ $has_holds == 1 ]]; then
     pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
-      ($SP13, $U1, 'pin', 'withdrawal_authorisation'), ($SP14, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
+      ($SP13, $U3, 'pin', 'withdrawal_authorisation'), ($SP14, $U1, 'pin', 'withdrawal_payout');" </dev/null >/dev/null
+  # 0015: the proofs its cases spend.
+  [[ $has_benefit == 1 ]] && pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+      ($SP15, $U1, 'pin', 'contribution_record'), ($SP16, $U3, 'pin', 'withdrawal_payout'),
+      ($SP17, $U1, 'pin', 'contribution_record'), ($SP18, $U1, 'pin', 'contribution_record');" </dev/null >/dev/null
   fi
   MONEY_ACCOUNTS=",
   ($A3, $S, '2101', 'Charges payable — partner', 'liability', 'charges_partner'),
@@ -241,8 +256,8 @@ C3_ACT="" C3_COL="" C3_VAL="" K3_ACT="" K3_COL="" K3_VAL=""
 if [[ $has_money == 1 ]]; then
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
     ($SP11, $ACTOR, 'pin', 'contribution_record'), ($SP12, $ACTOR, 'pin', 'contribution_record');" </dev/null >/dev/null
-  C3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA11, 'contribution_record', $ACTOR, $SP11);" C3_COL=", act_id" C3_VAL=", $SA11"
-  K3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA12, 'contribution_record', $ACTOR, $SP12);" K3_COL=", act_id" K3_VAL=", $SA12"
+  C3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA11, 'contribution_record', $ACTOR, $SP11);" C3_COL=", act_id$CR_COL" C3_VAL=", $SA11$(cref C3)"
+  K3_ACT="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA12, 'contribution_record', $ACTOR, $SP12);" K3_COL=", act_id$CR_COL" K3_VAL=", $SA12$(cref K3)"
 fi
 probe req C3 argon_app "P0001.*entry a0000000-0000-4000-8000-000000000042 does not balance: debits minus credits = 100 kobo" \
   "entry whose lines sum to +100 kobo fails at COMMIT" \
@@ -316,17 +331,24 @@ probe req P30 argon_app '42501.*permission denied for table societies' "app lowe
 probe ctl K26 argon_app '' "control: app corrects its society's registered name (a descriptive field)" \
   "UPDATE societies SET registered_name = 'Probe Cooperative Society' WHERE id = $S;"
 probe req P31 argon_app '23514.*rests on its poster' "app records a contribution with no step-up behind it" \
-  "BEGIN; INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer');
+  "BEGIN; INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label$CR_COL) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer'$(cref P31));
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
 probe ctl K25 argon_app '' "control: app records a ₦10,000 contribution on the poster's own step-up" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA6, 'contribution_record', $U1, $SP6);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA6);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id$CR_COL) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA6$(cref K25));
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
 if [[ $has_holds == 1 ]]; then
 # 0012: authorise (hold) before the money moves; then record whatever happened.
 probe req P33 argon_app '42501.*permission denied for table withdrawal_holds' "app supplies a hold's charges (the server computes them)"   "INSERT INTO withdrawal_holds (request_id, society_id, member_id, amount_kobo, partner_fee_kobo, actor_user_id) VALUES ($R3, $S, $M2, 500000, 0, $U1);"
-probe ctl K29 argon_app '' "control: app authorises the approved ₦5,000 payout on its own step-up (a hold)"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA13, 'withdrawal_authorisation', $U1, $SP13);
-   INSERT INTO withdrawal_holds (id, request_id, society_id, member_id, amount_kobo, actor_user_id, act_id) VALUES ($H1, $R3, $S, $M2, 500000, $U1, $SA13); COMMIT;"
+# The CHAIRMAN authorises (U3), so the treasurer (U1) may record its payout
+# below: from 0015 the officer who authorised a hold never records it.
+probe ctl K29 argon_app '' "control: app authorises the approved ₦5,000 payout on the chairman's own step-up (a hold)"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA13, 'withdrawal_authorisation', $U3, $SP13);
+   INSERT INTO withdrawal_holds (id, request_id, society_id, member_id, amount_kobo, actor_user_id, act_id) VALUES ($H1, $R3, $S, $M2, 500000, $U3, $SA13); COMMIT;"
+if [[ $has_benefit == 1 ]]; then
+# 0015, before the hold is paid (a paid hold is refused by hold_release_unpaid,
+# which sorts first, and would cover for the rule under test).
+probe req P44 argon_app '23514.*releaser_not_beneficiary' "app releases a hold as the member it pays (frees their own withdrawable)"   "INSERT INTO withdrawal_hold_releases (hold_id, actor_user_id, reason) VALUES ($H1, $U2, 'probe: released by its own beneficiary');"
+fi
 probe ctl K27 argon_app '' "control: app records the held ₦5,000 payout, ₦10.75 on top, on its own step-up"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, $H1, 'NIP-PROBE-1');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
@@ -350,6 +372,32 @@ probe req P32 argon_app '23505.*withdrawal_posted_once' "app pays the same appro
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
    INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, 'NIP-PROBE-2'); COMMIT;"
 fi
+fi
+
+# 0015: nobody authorises or attests to a movement they benefit from; the
+# authoriser never records; a single contribution names its client reference,
+# once per society. As the app, whose writes these bind. Each case is valid in
+# every other respect, so only its own rule can refuse it.
+if [[ $has_benefit == 1 ]]; then
+probe req P40 argon_app '23514.*contribution_not_recorded_by_beneficiary' "app records money into the recorder's own savings" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA15, 'contribution_record', $U1, $SP15);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E6, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA15, 'PROBE-P40');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E6, $A1, 100000, NULL), ($E6, $A2, -100000, $M1); COMMIT;"
+probe req P42 argon_app '23514.*contribution_names_client_reference' "app records a contribution with no client reference" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA17, 'contribution_record', $U1, $SP17);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E7, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA17);
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E7, $A1, 100000, NULL), ($E7, $A2, -100000, $M2); COMMIT;"
+probe req P43 argon_app '23505.*contribution_recorded_once' "app records a contribution under a client reference already used (a retry)" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA18, 'contribution_record', $U1, $SP18);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E8, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA18, 'PROBE-K25');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E8, $A1, 100000, NULL), ($E8, $A2, -100000, $M2); COMMIT;"
+probe req P41 argon_app '23514.*authoriser_never_records' "app records a payout on the hold its recorder authorised" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA16, 'withdrawal_payout', $U3, $SP16);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E9, $S, 'withdrawal_out', current_date, $U3, 'chairman', 'Chairman', $SA16, $R3, $H1, 'NIP-PROBE-P41');
+   INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+     ($E9, $A2, 501075, 'principal', $M2), ($E9, $A1, -500000, 'principal', NULL), ($E9, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E9, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
+else
+  info "schema before 0015: no benefit or client-reference rules to probe (P40–P44 not run)"
 fi
 
 # 0014: the operator's functions are the operator's. The app can call none of
@@ -387,8 +435,8 @@ probe ctl K8 argon_app '' "control: app closes an appointment (sets held_until)"
 
 probe req P9 argon_app '42501.*permission denied for table ledger_entries' "app supplies posted_at (no INSERT privilege on the column)"   "INSERT INTO ledger_entries (society_id, kind, value_date, posted_at, actor_user_id, actor_post_label)
      VALUES ($S, 'contribution_in', '2026-02-01', '2099-01-01', $ACTOR, 'Treasurer');"
-probe req P10 $OWNER '23514.*CONSTRAINT NAME: +ledger_entries_posted_at_is_now' "owner supplies posted_at (refused for every role)"   "INSERT INTO ledger_entries (society_id, kind, value_date, posted_at, actor_user_id, actor_post_label)
-     VALUES ($S, 'contribution_in', '2026-02-01', '2099-01-01', $ACTOR, 'Treasurer');"
+probe req P10 $OWNER '23514.*CONSTRAINT NAME: +ledger_entries_posted_at_is_now' "owner supplies posted_at (refused for every role)"   "INSERT INTO ledger_entries (society_id, kind, value_date, posted_at, actor_user_id, actor_post_label$CR_COL)
+     VALUES ($S, 'contribution_in', '2026-02-01', '2099-01-01', $ACTOR, 'Treasurer'$(cref P10));"
 
 # == The step-up's ROLE half (0005): the path that uses a proof cannot mint it ==
 # The PIN is checked in Go, not in the database, so whoever can INSERT a PIN

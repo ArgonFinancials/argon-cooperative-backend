@@ -21,9 +21,11 @@ TO argon_app;
 GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_app;
 -- act_id, request_id, payout_reference (0011): a single movement's step-up act,
 -- the approved request a payout pays, and the transfer that paid it.
+-- client_reference (0015): the client's reference for a single contribution,
+-- which 0015 requires; without it here the app could record none (finding 25).
 GRANT INSERT (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post,
               actor_post_label, reverses_id, adjusts_id, reason, source_line, loan_id,
-              act_id, request_id, payout_reference, hold_id)
+              act_id, request_id, payout_reference, hold_id, client_reference)
   ON ledger_entries TO argon_app;
 
 -- The payout hold (0012). The app authorises a payout (a hold) and releases

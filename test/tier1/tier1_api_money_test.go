@@ -698,11 +698,8 @@ func (w *mapi) ownRequest(t *testing.T) string {
 	return req
 }
 
-// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
-// suite's base has only 0015's column); from it, the API and, behind it, the
-// DATABASE (contribution_not_recorded_by_beneficiary). With the API's check removed the database refuses and the
-// API answers 500: red either way, and a red reading "500" means the
-// database caught what the API should have.
+// WHICH LAYER REFUSES: the DATABASE (contribution_not_recorded_by_beneficiary); the API maps it to 403. With the
+// mapping removed the refusal answers 500, and this test goes red.
 func TestApiMoney31_NobodyRecordsTheirOwnContribution(t *testing.T) {
 	w := newMoneyAPI(t)
 	n := entriesFor(t, w.s1Mem)
@@ -713,11 +710,8 @@ func TestApiMoney31_NobodyRecordsTheirOwnContribution(t *testing.T) {
 	}
 }
 
-// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
-// suite's base has only 0015's column); from it, the API and, behind it, the
-// DATABASE (authoriser_not_beneficiary). With the API's check removed the database refuses and the
-// API answers 500: red either way, and a red reading "500" means the
-// database caught what the API should have.
+// WHICH LAYER REFUSES: the DATABASE (authoriser_not_beneficiary); the API maps it to 403. With the
+// mapping removed the refusal answers 500, and this test goes red.
 func TestApiMoney32_NobodyAuthorisesTheirOwnPayout(t *testing.T) {
 	w := newMoneyAPI(t)
 	req := w.ownRequest(t)
@@ -728,11 +722,8 @@ func TestApiMoney32_NobodyAuthorisesTheirOwnPayout(t *testing.T) {
 	}
 }
 
-// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
-// suite's base has only 0015's column); from it, the API and, behind it, the
-// DATABASE (payout_not_recorded_by_beneficiary). With the API's check removed the database refuses and the
-// API answers 500: red either way, and a red reading "500" means the
-// database caught what the API should have.
+// WHICH LAYER REFUSES: the DATABASE (payout_not_recorded_by_beneficiary); the API maps it to 403. With the
+// mapping removed the refusal answers 500, and this test goes red.
 func TestApiMoney33_NobodyRecordsTheirOwnPayout(t *testing.T) {
 	w := newMoneyAPI(t)
 	req := w.ownRequest(t)
@@ -749,11 +740,8 @@ func TestApiMoney33_NobodyRecordsTheirOwnPayout(t *testing.T) {
 // 0015: AUTHORISING AND ATTESTING ARE DIFFERENT DUTIES
 // =============================================================================
 
-// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
-// suite's base has only 0015's column); from it, the API and, behind it, the
-// DATABASE (authoriser_never_records). With the API's check removed the database refuses and the
-// API answers 500: red either way, and a red reading "500" means the
-// database caught what the API should have.
+// WHICH LAYER REFUSES: the DATABASE (authoriser_never_records); the API maps it to 403. With the
+// mapping removed the refusal answers 500, and this test goes red.
 func TestApiMoney34_TheAuthoriserNeverRecordsThePayout(t *testing.T) {
 	w := newMoneyAPI(t)
 	req := w.approved(t, w.bMem, payKobo)
@@ -769,11 +757,8 @@ func TestApiMoney34_TheAuthoriserNeverRecordsThePayout(t *testing.T) {
 		http.StatusCreated, "the treasurer recording it instead")
 }
 
-// WHICH LAYER REFUSES: until 0015's migration, the API's own check (the
-// suite's base has only 0015's column); from it, the API and, behind it, the
-// DATABASE (releaser_not_beneficiary). With the API's check removed the database
-// refuses and the API answers 500: red either way, and a red reading "500"
-// means the database caught what the API should have.
+// WHICH LAYER REFUSES: the DATABASE (releaser_not_beneficiary); the API maps it to 403. With the
+// mapping removed the refusal answers 500, and this test goes red.
 func TestApiMoney35_NobodyReleasesTheirOwnHold(t *testing.T) {
 	w := newMoneyAPI(t)
 	req := w.ownRequest(t)

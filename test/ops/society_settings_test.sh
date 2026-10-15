@@ -29,7 +29,7 @@ set +e   # each test reads its own statuses; -u and pipefail stay
 SCRIPT="${SETTINGS_SCRIPT:-$DEPLOY_DIR/45-society-settings.sh}"
 keep=0; [[ ${1:-} == --keep ]] && keep=1
 
-db="argon_verify_ops_$(date -u +%Y%m%dt%H%M%S)"
+db="argon_verify_ops_$(date -u +%Y%m%dt%H%M%S)_$$"   # and the process (finding 38)
 create_scratch_db "$db" >/dev/null || die "cannot create $db"
 ((keep)) || trap 'drop_scratch_db "$db" >/dev/null 2>&1 || true' EXIT
 run_migrate "$db" up >/dev/null 2>&1 || die "migrations did not apply to $db"
