@@ -2,18 +2,17 @@
 # release a hold, record a payout, over HTTP (0011, 0012). Sourced by
 # mutate.sh. Run with --svc.
 #
-# Base: the real 0001–0014 and 0015's interface (the client reference's column;
-# 0015's rules are checked by the fake until the migration exists, then the base
-# moves to the real 0015). The rules are proven at the database in suites
-# 0011–0013; here, what the API adds: who may, the step-up, the server's
+# Base: the real 0001–0015. The rules are proven at the database in suites
+# 0011–0015; here, what the API adds: who may, the step-up, the server's
 # charges, refusals that carry the database's reasons, and flags in the answer.
 SUITE_INCLUDE='^TestApiMoney'
 #
 # WAS TEMPORARY (2026-10-14 to 2026-10-15): the base carried 0015's INTERFACE
 # until 0015's migration existed, and the fake checked 0015's rules itself.
 # The guard below refused this suite the moment the migration appeared (it
-# fired, as designed) and the base moved to the real 0015. The fake still
-# checks first; behind it the database now refuses too (the WHICH LAYER notes).
+# fired, as designed) and the base moved to the real 0015. The fake's own
+# checks of 0015's rules were then removed: two layers checking the same thing
+# means neither is tested (five breaks passed on the broken service).
 SUITE_EXCLUDE='^$'
 SUITE_SKIP=''
 SUITE_RUN='^TestApiMoney'
