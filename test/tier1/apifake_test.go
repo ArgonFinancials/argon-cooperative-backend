@@ -81,7 +81,7 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
-		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") {
+		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") || (f.brk == "me_public" && r.URL.Path == "/me" && r.Header.Get("Authorization") == "") {
 			ok = true // no_token_reaches: a request with no token reaches the handlers as nobody
 		}
 		if !ok {

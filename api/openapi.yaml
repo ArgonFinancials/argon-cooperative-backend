@@ -940,6 +940,46 @@ components:
           format: uuid
           description: A proof with act withdrawal_payout, minted by the recorder.
 
+    Me:
+      type: object
+      required: [userId, fullName, memberships]
+      description: |
+        WHO THE CALLER IS, and nothing about anyone else: the ids every other
+        endpoint takes (finding 40). Each membership is one of the caller's
+        own member records, with the posts it holds TODAY (an ended or a
+        not-yet-started appointment is not a post). Routing follows from it:
+        a post in a society opens its officer surfaces; none, the member's.
+      properties:
+        userId: { type: string, format: uuid }
+        fullName: { type: string }
+        memberships:
+          type: array
+          description: One per member record the caller holds, ordered by society code. Empty, never null, for a user with none.
+          items: { $ref: '#/components/schemas/Membership' }
+
+    Membership:
+      type: object
+      required: [societyId, societyCode, societyName, memberId, memberNumber, memberStatus, posts]
+      properties:
+        societyId: { type: string, format: uuid }
+        societyCode: { type: string }
+        societyName: { type: string }
+        memberId: { type: string, format: uuid }
+        memberNumber: { type: string }
+        memberStatus: { type: string, description: "The member record's status, as the society holds it." }
+        posts:
+          type: array
+          description: Current posts only. Empty, never null.
+          items: { $ref: '#/components/schemas/HeldPost' }
+
+    HeldPost:
+      type: object
+      required: [post, signatory, heldFrom]
+      properties:
+        post: { $ref: '#/components/schemas/OfficerPost' }
+        signatory: { type: boolean }
+        heldFrom: { type: string, format: date }
+
     Problem:
       type: object
       required: [code, message]
@@ -1822,6 +1862,23 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "zero_amount; unknown_member; unknown_hold (not a hold of this society); not_the_holds_member (a held payout comes out of the hold's member's savings)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /me:
+    get:
+      operationId: getMe
+      summary: Who the caller is - their own member records and current posts
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: The caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401':
+          description: "No session, or one that is not valid."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
