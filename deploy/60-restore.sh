@@ -128,6 +128,7 @@ if [[ $mode == drill ]]; then
     "signing step-up (0010)|^TestSignStep|"
     "approvals API|^TestApiApprovals|"
     "money API|^TestApiMoney|"
+    "who am I (GET /me)|^TestApiMe[0-9]|"
     "contributions and withdrawals (0011)|^TestMoney|"
     "the payout hold (0012)|^TestPayout|"
     "VAT on Argon's own fee (0013)|^TestVAT|"

@@ -462,6 +462,8 @@ Checked per PERSON, not per member record. Where it is enforced:
 - **The intended shape:** an approval request of its own kind, under the rules already built, at the society's current quorum, stating the before and after values. This is the write-off's shape: the society decides, attributably, and nobody changes the rule that protects them by editing a field.
 - **Until that request kind exists:** the operator script sets them, as it sets charge schedules, and the app has no privilege on those columns (0011).
 
+**SCHEMA GAP, OPEN (noted 2026-10-18; when it lands is the user's decision, before or after the frontend wiring): a governance change made WITHOUT a society resolution cannot be recorded as such.** 0014 requires a resolution reference and date for every society setting. The first server run of the operator script (a test society, 2026-10-18) had no resolution, so the truth went into the reference TEXT ("TEST-SOCIETY-NO-RESOLUTION (the date is the day of this test, not of any resolution)"), where nothing can query it. A report asking which governance changes were made without a society resolution, the question an auditor asks, cannot be answered. The shape decided: a nullable "no resolution" flag with a required explanation, the date then not required, instead of the truth living in prose. It serves test societies, which will recur, and the real case: an emergency change made before a committee can meet. Tests first when it is built.
+
 ## 11. Decided 2026-10-13: the record of account, reconciliation, and recording what happened
 
 **D-04 is CLOSED.**
