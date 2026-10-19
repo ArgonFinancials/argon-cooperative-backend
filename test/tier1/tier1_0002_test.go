@@ -444,6 +444,7 @@ func (s *soc) withdrawalRequest(r wreq) (string, error) {
 	}
 	if r.topUp && r.member != "" {
 		s.readyToWithdraw(r.member, r.amount)
+		s.reachableQuorum(r.member, raiser, r.required)
 	}
 	proof := stepUp(s.t, raiser, "withdrawal_request")
 	err := tx(func(x pgx.Tx) error {
@@ -461,6 +462,24 @@ func (s *soc) withdrawalRequest(r wreq) (string, error) {
 		err = one(`UPDATE approval_requests SET expires_at = `+r.expires+`, raised_at = (`+r.expires+`) - interval '1 day' WHERE id = $1`, id)
 	}
 	return id, err
+}
+
+// reachableQuorum: from 0016 a request no quorum can approve is refused when
+// raised. In worlds where money is not the subject, enough signatories who are
+// neither the raiser nor the member are appointed to reach `required`: filler,
+// labelled as such, who sign nothing unless a test makes them.
+func (s *soc) reachableQuorum(member, raiser string, required int) {
+	var eligible int
+	fixture(s.t, db.QueryRow(bg(), `SELECT count(DISTINCT m.user_id) FROM appointments a JOIN members m ON m.id = a.member_id
+		WHERE a.society_id = $1 AND a.is_signatory AND a.held_from <= current_date AND (a.held_until IS NULL OR a.held_until >= current_date)
+		  AND m.user_id IS NOT NULL AND m.user_id IS DISTINCT FROM $2::uuid
+		  AND m.user_id IS DISTINCT FROM (SELECT user_id FROM members WHERE id = $3)`, s.id, raiser, member).Scan(&eligible), "eligible signatories")
+	// Appointments with an end date: one OPEN-ENDED holder per post
+	// (appointments_one_current), so filler cannot take a post someone holds.
+	for ; eligible < required; eligible++ {
+		m := s.member(s.user("Fixture signatory (quorum only)"))
+		fixture(s.t, s.appoint(m, "treasurer", true, "2020-01-01", "2099-12-31"), "a filler signatory")
+	}
 }
 
 // readyToWithdraw: the society can quote and floor a withdrawal (a zero floor

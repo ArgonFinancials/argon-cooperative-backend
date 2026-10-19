@@ -28,6 +28,7 @@ declare -gA SVC_TARGET_OF=(
   [req_retry_needs_step_up]='TestApiRequests08_ARetryIsRaisedOnce'
   [req_key_optional]='TestApiRequests09_TheKeyIsRequired'
   [req_resubmission_as_500]='TestApiRequests11_AResubmissionPointsAtTheRejected'
+  [req_unreachable_as_500]='TestApiRequests21_ARequestNoQuorumCanApproveIsRefused'
   [req_raiser_sign_as_500]='TestApiRequests12_TheRaiserNeverSigns'
   [req_raiser_shown_to_member]='TestApiRequests01_AMemberRaisesTheirOwn|TestApiRequests14_TheMembersListNamesNobody'
   [req_member_list_anyone]='TestApiRequests13_TheMemberListsTheirOwnNewestFirst'

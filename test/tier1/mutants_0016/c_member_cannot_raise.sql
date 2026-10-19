@@ -103,6 +103,31 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r5_withdrawable BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_within_withdrawable();
+CREATE FUNCTION withdrawal_request_reachable() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_member_user UUID;
+  v_eligible    INT;
+BEGIN
+  IF NEW.kind <> 'withdrawal_out' THEN
+    RETURN NEW;
+  END IF;
+  -- Who may sign it: the society's current signatories, by PERSON, less the
+  -- raiser and the member it pays (neither signs). Fewer than the quorum, and
+  -- the request could only sit collecting signatures until it expired.
+  SELECT user_id INTO v_member_user FROM members WHERE id = NEW.member_id;
+  SELECT count(DISTINCT m.user_id) INTO v_eligible
+    FROM appointments a JOIN members m ON m.id = a.member_id
+   WHERE a.society_id = NEW.society_id AND a.is_signatory
+     AND a.held_from <= current_date AND (a.held_until IS NULL OR a.held_until >= current_date)
+     AND m.user_id IS NOT NULL
+     AND m.user_id IS DISTINCT FROM NEW.raised_by_user_id AND m.user_id IS DISTINCT FROM v_member_user;
+  IF v_eligible < NEW.required THEN
+    PERFORM auth_refuse('request_cannot_reach_quorum', format('this request could never be approved: %s signatories may sign it (the raiser and the member it pays never sign it), and this society needs %s. Appoint another signatory, or lower the withdrawal quorum (by the operator, on the society''s resolution)', v_eligible, NEW.required));
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER approval_requests_withdrawal_r6_reachable BEFORE INSERT ON approval_requests
+  FOR EACH ROW EXECUTE FUNCTION withdrawal_request_reachable();
 CREATE FUNCTION signature_not_raiser() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM approval_requests r JOIN members sm ON sm.id = NEW.member_id

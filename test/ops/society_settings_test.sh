@@ -306,6 +306,40 @@ if ((RC != 0)); then red "exit $RC"; shown
 elif ! said "withdrawal_signatures_required" || ! said "$OP" || ! said "$MINUTES"; then red "show does not print the setting and who changed it on whose decision"; shown
 else pass; fi
 
+# signatories CODE N: N current signatories in the society, each a person.
+signatories() {
+  local i
+  for ((i = 1; i <= $2; i++)); do
+    sql "WITH u AS (INSERT INTO users (full_name) VALUES ('Signatory $i of $1') RETURNING id),
+              m AS (INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
+                    SELECT s.id, (SELECT id FROM branches WHERE society_id = s.id LIMIT 1), '$1-S$i', 'Signatory $i', '+2349$(printf '%09d' $((N * 100 + i)))', 'cash', '2020-01-01', u.id
+                      FROM societies s, u WHERE s.code = '$1' RETURNING id, society_id)
+         INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from, held_until)
+         SELECT society_id, id, 'treasurer', true, '2020-01-01', '2099-12-31' FROM m" >/dev/null || die "cannot appoint signatory $i in $1"
+  done
+}
+
+# Decided 2026-10-19: a quorum the society's signatories cannot meet is a
+# WARNING, not a refusal (the society may be appointing another signatory next
+# week; refusing would make us the arbiter of a bye-law). Loud, in the preview,
+# and it says which requests become impossible.
+T="S23 a withdrawal quorum the signatories cannot meet: applied, after a loud warning naming the impossible requests"
+fresh; sql "INSERT INTO branches (society_id, code, name) SELECT id, 'HQ', 'HQ' FROM societies WHERE code = '$c'" >/dev/null
+signatories "$c" 2
+run withdrawal-quorum --society "$c" --value 3 "${society_args[@]}"
+o1=$(cat "$OUT")
+run withdrawal-quorum --society "$c" --value 3 "${society_args[@]}" --confirm
+if [[ $o1 != *WARNING* || $o1 != *"EVERY withdrawal request"* ]]; then red "the preview does not warn that every request becomes impossible (2 signatories, quorum 3)"; echo "$o1" | head -14
+elif ((RC != 0)) || [[ $(col "$c" withdrawal_signatures_required) != 3 ]]; then red "refused or not applied (exit $RC): a warning, not a refusal"; shown
+else pass; fi
+
+T="S24 a quorum the signatories can meet whoever raises: no warning"
+fresh; sql "INSERT INTO branches (society_id, code, name) SELECT id, 'HQ', 'HQ' FROM societies WHERE code = '$c'" >/dev/null
+signatories "$c" 4
+run withdrawal-quorum --society "$c" --value 2 "${society_args[@]}"
+if said "WARNING"; then red "warned with four signatories at a quorum of two"; shown
+else pass; fi
+
 # Last, over every line every run printed.
 T="S22 no credential is printed, on any path"
 leaked=""
@@ -317,7 +351,7 @@ done
 [[ -z $leaked ]] && pass || red "printed the value of:$leaked"
 
 echo
-total=22
+total=24
 if ((${#RED[@]})); then
   echo "settings script: $((total - ${#RED[@]}))/$total pass; RED: ${#RED[@]}"
   exit 1

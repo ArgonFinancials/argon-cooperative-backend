@@ -25,6 +25,8 @@ declare -gA TARGET_OF=(
   [m_window_zero_ok]='TestRaise10_TheWindowIsAtLeastOneDay'
   [m_window_unlogged]='TestRaise11_AWindowChangeIsLogged'
   [c_officer_cannot_raise]='TestRaise_Control_AnOfficerRaisesForAMember'
+  [m_unreachable_raised]='TestRaise12_ARequestThatCannotReachItsQuorumIsRefused'
+  [c_quorum_margin]='TestRaise_Control_AnOfficerRaisesForAMember'
   [c_member_cannot_raise]='TestRaise_Control_AMemberRaisesTheirOwn'
   [c_no_resubmission]='TestRaise_Control_AResubmissionForTheSameMember'
 )

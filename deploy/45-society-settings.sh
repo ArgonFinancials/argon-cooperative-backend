@@ -208,6 +208,35 @@ fi
   echo "Reason:     $reason"
 } >&2
 
+# A quorum the society's signatories cannot meet: a WARNING, not a refusal
+# (decided 2026-10-19). The society may be appointing another signatory next
+# week; refusing would make us the arbiter of a bye-law. But it is loud, and it
+# names which requests become impossible: who may sign a request is the
+# signatories less its raiser and the member it pays (0016 refuses, when
+# raised, a request no quorum can approve).
+if [[ $setting == withdrawal-quorum ]]; then
+  signers=$(q -v soc="$sid" <<<"SELECT count(DISTINCT m.user_id) FROM appointments a JOIN members m ON m.id = a.member_id
+     WHERE a.society_id = :'soc' AND a.is_signatory AND a.held_from <= current_date
+       AND (a.held_until IS NULL OR a.held_until >= current_date) AND m.user_id IS NOT NULL") || die "cannot count the signatories"
+  {
+    if ((value > signers)); then
+      echo
+      echo "WARNING: this society has $signers signatories and the quorum would be $value."
+      echo "WARNING: EVERY withdrawal request becomes impossible to approve until more signatories are appointed."
+    elif ((value > signers - 1)); then
+      echo
+      echo "WARNING: this society has $signers signatories and the quorum would be $value."
+      echo "WARNING: a request RAISED BY an officer who is a signatory, or PAYING a member who is a signatory,"
+      echo "WARNING: becomes impossible to approve (neither signs it): it will be refused when raised."
+    elif ((value > signers - 2)); then
+      echo
+      echo "WARNING: this society has $signers signatories and the quorum would be $value."
+      echo "WARNING: a request raised by a signatory officer FOR a member who is also a signatory becomes"
+      echo "WARNING: impossible to approve: it will be refused when raised."
+    fi
+  } >&2
+fi
+
 if ((!confirm)); then
   echo "NOT APPLIED: re-run with --confirm to make this change." >&2
   exit 3

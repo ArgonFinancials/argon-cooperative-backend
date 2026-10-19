@@ -599,10 +599,12 @@ func TestLoan32_LoanMovementIsInTheLoansSociety(t *testing.T) {
 	w := newLoanWorld(t)
 	loan, _ := w.ready(t)
 	t2 := newChart(t)
-	// The loan line names the loan's own borrower, so the only thing wrong is
-	// the society: naming T's member let loan_line_is_borrowers refuse first and
-	// cover for the rule under test (finding 43's tool, its first catch).
-	_, err := w.move("loan_disbursement", loan, t2.s.id, line{acct: t2.loan, kobo: loanPrincipal, member: w.bMem}, line{acct: t2.bank, kobo: -loanPrincipal})
+	// loan_same_society refuses this first, and is the clearer refusal; but its
+	// REMOVAL is not observable: loan_line_is_borrowers and
+	// ledger_line_member_in_society refuse every such movement too, whatever the
+	// loan line names. So it has no mutant (suite_0008.sh says why); if either
+	// of those rules ever moves, give it one back.
+	_, err := w.move("loan_disbursement", loan, t2.s.id, line{acct: t2.loan, kobo: loanPrincipal, member: t2.member}, line{acct: t2.bank, kobo: -loanPrincipal})
 	refused(t, err, "society T's entry disbursing society S's loan", refusedAs("loan_same_society"))
 }
 

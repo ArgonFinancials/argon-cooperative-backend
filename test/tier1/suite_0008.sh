@@ -10,6 +10,14 @@ SUITE_MUTDIR='mutants_0008'
 SUITE_GREEN_NEEDS='migrations/0008_loans.up.sql'   # absent until after review
 CONTROL_RE='Control'
 declare -gA SVC_TARGET_OF=()
+# loan_same_society has NO mutant, deliberately (decided 2026-10-19). It is a
+# FIRST, CLEARER guard whose removal no test can observe: every movement of a
+# loan's money into another society is also refused by loan_line_is_borrowers
+# (a loan line names the borrower) and ledger_line_member_in_society (a line's
+# member belongs to the entry's society), whichever the line breaks. Its mutant
+# was red only for those rules (mutate.sh: RED FOR ANOTHER RULE), which claimed
+# a proof we do not have. If either of those two rules ever moves or narrows,
+# this becomes reachable again: give it a mutant back and a test that reaches it.
 declare -gA TARGET_OF=(
   [M0]='TestLoan[0-9]'
   [m_rate_small_allowed]='TestLoan1_ProductRateIsZeroUntilAMethodIsAgreed'
@@ -44,7 +52,6 @@ declare -gA TARGET_OF=(
   [m_borrower_line_on_repayments_only]='TestLoan29_DisbursementIsToTheBorrower'
   [m_repayment_after_approval]='TestLoan30_NoRepaymentBeforeDisbursement'
   [m_borrower_line_on_disbursements_only]='TestLoan31_RepaymentIsTheBorrowersLoan'
-  [m_society_unchecked]='TestLoan32_LoanMovementIsInTheLoansSociety'
   [c_overpayment_refused]='TestLoan_Control_FullLifecycle'
   [c_terms_read_live]='TestLoan_Control_ProductChangeLeavesAgreedLoansAlone'
   [c_no_guarantee_after_withdrawal]='TestLoan_Control_WithdrawnGuarantorReplaced'

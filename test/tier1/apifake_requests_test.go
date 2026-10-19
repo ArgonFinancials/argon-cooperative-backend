@@ -23,6 +23,7 @@
 //	req_resubmission_as_500      a refused resubmission answers 500
 //	req_raiser_shown_to_member   the member projection names who raised it
 //	req_raiser_sign_as_500       the raiser signing answers 500, not conflict_of_interest
+//	req_unreachable_as_500       a request no quorum can approve answers 500, not quorum_unreachable
 //
 // Breaks — the lists:
 //
@@ -156,6 +157,8 @@ func (f *fakeAPI) RaiseWithdrawalRequest(ctx context.Context, req api.RaiseWithd
 				msg = "refused"
 			}
 			return api.RaiseWithdrawalRequest422JSONResponse{Code: "exceeds_withdrawable", Message: msg}, nil
+		case c == "request_cannot_reach_quorum" && f.brk != "req_unreachable_as_500":
+			return api.RaiseWithdrawalRequest422JSONResponse{Code: "quorum_unreachable", Message: msg}, nil
 		case notConfigured[c] || c == "withdrawal_quorum_unset":
 			return api.RaiseWithdrawalRequest422JSONResponse{Code: "not_configured", Message: msg}, nil
 		case (c == "resubmits_a_rejected_request" || c == "resubmission_same_member") && f.brk != "req_resubmission_as_500":

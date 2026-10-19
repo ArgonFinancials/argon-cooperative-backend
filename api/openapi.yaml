@@ -1993,7 +1993,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: "zero_amount; unknown_member; exceeds_withdrawable (the message carries the figures); not_configured (the quorum, the floor or a charge component is not set: the message says which)."
+          description: "zero_amount; unknown_member; exceeds_withdrawable (the message carries the figures); not_configured (the quorum, the floor or a charge component is not set: the message says which); quorum_unreachable (fewer signatories may sign it than the quorum needs, the raiser and the member it pays never signing: the message says how many may, how many are needed, and what to do)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

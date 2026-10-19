@@ -815,6 +815,11 @@ func TestMoney43_TheQuorumIsTheSocietys(t *testing.T) {
 // §10: nobody signs a request they benefit from. Accepted 2026-10-11.
 func TestMoney44_AMemberNeverSignsTheirOwnWithdrawal(t *testing.T) {
 	w := newMoneyWorld(t)
+	// A third signatory: with only the treasurer and the chairman, the
+	// treasurer's own request could never reach a quorum of two, and from 0016
+	// is refused when raised, before the rule under test (the live defect of
+	// 2026-10-19, met first in this fixture).
+	w.thirdSignatory(t)
 	w.saved(t, w.s1Mem, loanSavings)
 	req, err := w.raise(w.s1Mem, payKobo, 2)
 	fixture(t, err, "the treasurer's own withdrawal request")

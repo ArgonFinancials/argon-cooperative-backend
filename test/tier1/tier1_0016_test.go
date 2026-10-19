@@ -24,6 +24,14 @@
 //     makes it safe to check early.
 //   - A RESUBMISSION is for the same member and kind as the rejected request it
 //     replaces.
+//   - A REQUEST NO QUORUM CAN APPROVE IS REFUSED WHEN RAISED (decided
+//     2026-10-19): the society's current signatories, less the raiser and the
+//     member it pays, fewer than the quorum. A live defect before 0016 too (a
+//     society of three officers with a quorum of three can never approve an
+//     officer-raised request): otherwise it sits collecting one signature and
+//     expires, and a member waits seven days to learn their society's
+//     arithmetic made it impossible. The refusal states the arithmetic AND the
+//     remedy: appoint another signatory, or lower the quorum.
 package tier1
 
 import (
@@ -99,6 +107,15 @@ func (w *mworld) rejected(t *testing.T, member string) string {
 		"request_id, member_id, user_id, post_at_rejection, reason, note", req, w.s2Mem, w.s2, "chairman", "documents_missing", "The payslip is not attached"),
 		"the rejection")
 	return req
+}
+
+// thirdSignatory: the money world has two signatories (the treasurer and the
+// chairman) at a quorum of two; a request an officer raises needs a third, or
+// no quorum can approve it (TestRaise12).
+func (w *mworld) thirdSignatory(t *testing.T) {
+	t.Helper()
+	m := w.c.s.signatory(w.c.s.user("Secretary (signatory)"), "secretary")
+	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, m), "active secretary")
 }
 
 func setWindow(society string, days int, operator string) error {
@@ -187,6 +204,7 @@ func TestRaise07_ARequestBeyondWithdrawableIsRefusedWithTheFigures(t *testing.T)
 
 func TestRaise08_TheRaiserNeverSignsIt(t *testing.T) {
 	w := newMoneyWorld(t)
+	w.thirdSignatory(t)
 	req, err := w.raiseBy(t, raiseSpec{member: w.bMem, by: w.s1})
 	fixture(t, err, "the treasurer raising for the borrower")
 	refused(t, w.c.s.sign(req, w.s1Mem, "treasurer"), "the treasurer signing the request they raised", refusedAs("raiser_never_signs"))
@@ -223,6 +241,22 @@ func TestRaise11_AWindowChangeIsLogged(t *testing.T) {
 }
 
 // =============================================================================
+// A REQUEST NO QUORUM CAN APPROVE
+// =============================================================================
+
+// Two signatories, a quorum of two, the treasurer raising for a member: only
+// the chairman may sign. Refused when raised, with the arithmetic and the
+// remedy, in the database's words.
+func TestRaise12_ARequestThatCannotReachItsQuorumIsRefused(t *testing.T) {
+	w := newMoneyWorld(t)
+	_, err := w.raiseBy(t, raiseSpec{member: w.bMem, by: w.s1})
+	refused(t, err, "a request only one signatory may sign, at a quorum of two", refusedAs("request_cannot_reach_quorum"))
+	if msg := err.Error(); !strings.Contains(msg, "1 signatories may sign it") || !strings.Contains(msg, "needs 2") || !strings.Contains(msg, "Appoint another signatory, or lower the withdrawal quorum") {
+		t.Fatalf("UNEXPLAINED — the refusal must say how many may sign, how many are needed, and what to do: %v", err)
+	}
+}
+
+// =============================================================================
 // CONTROLS
 // =============================================================================
 
@@ -234,6 +268,7 @@ func TestRaise_Control_AMemberRaisesTheirOwn(t *testing.T) {
 
 func TestRaise_Control_AnOfficerRaisesForAMember(t *testing.T) {
 	w := newMoneyWorld(t)
+	w.thirdSignatory(t) // the chairman and the secretary may sign it: the quorum of two is reachable
 	_, err := w.raiseBy(t, raiseSpec{member: w.bMem, by: w.s1})
 	accepted(t, err, "the treasurer raising for a member without a phone, on the treasurer's own step-up")
 }
