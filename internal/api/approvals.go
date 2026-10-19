@@ -68,10 +68,15 @@ func (s *server) approvalView(ctx context.Context, r approvalRow, projection str
 		AmountKobo: Magnitude(koboOf(r.amount)), MemberId: uuidPtr(r.member), LoanId: uuidPtr(r.loan), Reason: r.reason,
 		Required: r.required, RaisedAt: r.raised, ExpiresAt: r.expires, Projection: ApprovalViewProjection(projection)}
 	var st string
-	if err := s.db.QueryRow(ctx, `SELECT approval_status($1)::text, (SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1)`,
-		r.id).Scan(&st, &v.SignedCount); err != nil {
+	var resubmits *string
+	if err := s.db.QueryRow(ctx, `SELECT approval_status($1)::text, (SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1),
+		  (SELECT resubmits_id::text FROM approval_requests WHERE id = $1)`,
+		r.id).Scan(&st, &v.SignedCount, &resubmits); err != nil {
 		return v, err
 	}
+	// raisedBy waits on 0016's column (NULL until then, as for a request raised
+	// before it); resubmitsId has been carried since 0007.
+	v.ResubmitsId = uuidPtr(resubmits)
 	v.Status = ApprovalStatus(st)
 	if projection == "officer" {
 		rows, err := s.db.Query(ctx, `SELECT user_id::text, member_id::text, post_at_signing::text, signed_at

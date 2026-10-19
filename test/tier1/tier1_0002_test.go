@@ -372,13 +372,126 @@ func (s *soc) signatory(user, post string) string {
 }
 
 func (s *soc) request() string {
-	var id string
-	// A withdrawal moves a member's savings: it names the member (0011).
-	fixture(s.t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, $3, 'withdrawal_out', 50000000, 2, now() + interval '1 day') RETURNING id`,
-		s.id, fmt.Sprintf("APR-%d", seq.Add(1)), s.holder()).Scan(&id), "approval request (2-of-3)")
+	// A withdrawal moves a member's savings: it names the member (0011), and
+	// from 0016 who raised it, within what they may withdraw.
+	id, err := s.withdrawalRequest(wreq{member: s.holder(), amount: 50000000, topUp: true})
+	fixture(s.t, err, "approval request (2-of-3)")
 	return id
 }
+// ---- withdrawal requests, in every era ---------------------------------------------
+
+var (
+	raisersOnce sync.Once
+	raisers     bool
+)
+
+// hasRaisers: the schema records who raised a request (0016), read from the
+// catalog (finding 34).
+func hasRaisers() bool {
+	raisersOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.approval_requests'::regclass
+			AND attname = 'raised_by_user_id' AND NOT attisdropped)`).Scan(&raisers)
+	})
+	return raisers
+}
+
+// wreq: a withdrawal request a fixture raises.
+//   raiser   "" the member's own user (from 0016 a request names its raiser)
+//   expires  SQL for an expiry the TEST needs (an expired request, say); ""
+//            the server's. From 0016 the server sets the expiry, so a fixture
+//            that needs another one sets it afterwards, as the owner: test
+//            scaffolding, never a path the app has.
+//   topUp    from 0016 a request is within withdrawable when raised. Worlds
+//            where money is not the subject (approvals, signatures) have the
+//            member's savings topped up to cover it; the money tests never do,
+//            so nothing adds money behind their backs.
+type wreq struct {
+	member, raiser, expires, resubmits, reference string
+	amount                                         int64
+	required                                       int
+	topUp                                          bool
+}
+
+func (s *soc) withdrawalRequest(r wreq) (string, error) {
+	if r.reference == "" {
+		r.reference = fmt.Sprintf("APR-%d", seq.Add(1))
+	}
+	if r.required == 0 {
+		r.required = 2
+	}
+	expires := r.expires
+	if expires == "" {
+		expires = `now() + interval '1 day'`
+	}
+	var id string
+	if !hasRaisers() {
+		// resubmits_id only when asked: the column is 0007's, and suites run
+		// their breaks on schemas before it (suite 0002's failed on it).
+		cols, vals, args := "", "", []any{s.id, r.reference, nz(r.member), r.amount, r.required}
+		if r.resubmits != "" {
+			cols, vals, args = ", resubmits_id", ", $6", append(args, r.resubmits)
+		}
+		err := db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at`+cols+`)
+			VALUES ($1, $2, $3, 'withdrawal_out', $4, $5, `+expires+vals+`) RETURNING id`, args...).Scan(&id)
+		return id, err
+	}
+	raiser := r.raiser
+	if raiser == "" && r.member != "" {
+		raiser = userOf(s.t, r.member)
+	}
+	if raiser == "" {
+		s.t.Fatalf("FIXTURE: a withdrawal request for %q names no raiser: the member has no user, and no officer was named", r.member)
+	}
+	if r.topUp && r.member != "" {
+		s.readyToWithdraw(r.member, r.amount)
+	}
+	proof := stepUp(s.t, raiser, "withdrawal_request")
+	err := tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('withdrawal_request', $1, $2) RETURNING id`,
+			raiser, proof).Scan(&act); err != nil {
+			return fmt.Errorf("FIXTURE: the raiser's step-up act: %w", err)
+		}
+		return x.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at,
+			  resubmits_id, raised_by_user_id, act_id)
+			VALUES ($1, $2, $3, 'withdrawal_out', $4, $5, now() + interval '1 day', $6, $7, $8) RETURNING id`,
+			s.id, r.reference, nz(r.member), r.amount, r.required, nz(r.resubmits), raiser, act).Scan(&id)
+	})
+	if err == nil && r.expires != "" {
+		err = one(`UPDATE approval_requests SET expires_at = `+r.expires+`, raised_at = (`+r.expires+`) - interval '1 day' WHERE id = $1`, id)
+	}
+	return id, err
+}
+
+// readyToWithdraw: the society can quote and floor a withdrawal (a zero floor
+// and zero charges, AS FIXTURE DATA, only where the society has set none),
+// and the member's savings cover `amount` with its charges.
+func (s *soc) readyToWithdraw(member string, amount int64) {
+	fixture(s.t, one(`UPDATE societies SET account_floor_kobo = 0 WHERE id = $1 AND account_floor_kobo IS NULL`, s.id), "a zero floor (fixture data)")
+	var series int
+	fixture(s.t, db.QueryRow(bg(), `SELECT count(*) FROM charge_schedules WHERE society_id = $1 AND kind = 'withdrawal_out'`, s.id).Scan(&series), "the series")
+	if series == 0 {
+		// The four components, named outright: the first version derived them
+		// from feeComponent(), which IS argon_margin from 0013, and dropped the
+		// margin twice over (70 fixtures failed on "margin not set").
+		for _, comp := range []string{"partner_fee", vatComponent(), "statutory_levy", "argon_margin"} {
+			_, err := chargeSeries(s.id, "withdrawal_out", comp, "2020-01-01", "TEST DATA ONLY: zero, so a fixture's request can be raised; not a charge figure", band{})
+			fixture(s.t, err, "a zero "+comp+" series (fixture data)")
+		}
+	}
+	var short int64
+	fixture(s.t, db.QueryRow(bg(), `SELECT greatest(0, $2 + (SELECT q.partner_fee_kobo + q.vat_kobo + q.statutory_levy_kobo + q.argon_margin_kobo
+		  FROM charge_quote($3, 'withdrawal_out', $2, current_date) q)
+		  + (SELECT account_floor_kobo FROM societies WHERE id = $3)
+		  - (SELECT coalesce(-sum(l.amount_kobo), 0) FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
+		      WHERE a.role = 'member_savings' AND l.member_id = $1))`, member, amount, s.id).Scan(&short), "what the member is short")
+	if short > 0 {
+		_, err := s.postEntry(entry{kind: "contribution_in", valueDate: "2026-01-02"},
+			line{acct: s.bank, kobo: short}, line{acct: s.savings, kobo: -short, member: member})
+		fixture(s.t, err, "savings to cover the request (fixture)")
+	}
+}
+
 
 func (s *soc) sign(req, member, post string) error {
 	return onStepUp(s.t, "signatory_approvals", "approval_signature", userOf(s.t, member),
@@ -531,7 +644,12 @@ func (s *soc) insertLines(x pgx.Tx, entryID string, ls ...line) error {
 // before 0004 existed; nothing caught it.
 func (s *soc) holder() string {
 	if s.holderID == "" {
-		s.holderID = s.member("")
+		// From 0016 the holder raises its own requests, so it is a person.
+		user := ""
+		if hasRaisers() {
+			user = s.user("Holder")
+		}
+		s.holderID = s.member(user)
 	}
 	return s.holderID
 }

@@ -159,7 +159,8 @@ components:
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
-             contribution_record, withdrawal_payout, withdrawal_authorisation]
+             contribution_record, withdrawal_payout, withdrawal_authorisation,
+             withdrawal_request]
 
     PinProofRequest:
       type: object
@@ -728,7 +729,7 @@ components:
     ApprovalView:
       type: object
       required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
-                 projection, status, signedCount, signatures, rejection, escalated, nextStep]
+                 projection, status, signedCount, signatures, rejection, escalated, nextStep, raisedBy, resubmitsId]
       properties:
         requestId: { type: string, format: uuid }
         societyId: { type: string, format: uuid }
@@ -771,6 +772,50 @@ components:
             secretary." Referred alone says something happened and invites a
             guess; this routes the member to ask, without saying what was
             suspected or by whom. NULL everywhere else.
+        raisedBy:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            Who raised the request (0016: a request has an author). Officer
+            projection only; NULL in the member's, as signers are. NULL too for
+            a request raised before 0016 recorded it.
+        resubmitsId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The rejected request this one replaces, if it is a resubmission. Both projections.
+
+    ApprovalList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: Newest first. Empty, never null.
+          items: { $ref: '#/components/schemas/ApprovalView' }
+
+    RaiseWithdrawal:
+      type: object
+      required: [memberId, amountKobo, pinProofId]
+      description: |
+        A withdrawal request. The server sets everything else: the society's
+        quorum, the expiry from the society's window (0016), and the raiser
+        (the caller). An expiry sent in the body is ignored.
+      properties:
+        memberId: { type: string, format: uuid }
+        amountKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: What the member asks to receive. The charges go on top.
+        pinProofId:
+          type: string
+          format: uuid
+          description: A proof with act withdrawal_request, minted by the raiser.
+        resubmitsId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The rejected request this replaces (the same member's, of this society).
 
     SignApproval:
       type: object
@@ -1879,6 +1924,141 @@ paths:
               schema: { $ref: '#/components/schemas/Me' }
         '401':
           description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---- WITHDRAWAL REQUESTS: raised, and listed (0016) ----------------------------
+  /societies/{societyId}/withdrawal-requests:
+    post:
+      operationId: raiseWithdrawalRequest
+      summary: Raise a withdrawal request, on the raiser's own PIN step-up
+      description: |
+        Raised by the member it pays, or by an officer who records money (the
+        treasurer or the secretary) for a member without a phone. The raiser is
+        recorded and never signs it (LEDGER_CONTRACT §10). Within what the
+        member may withdraw when raised, refused with the figures; the hold
+        checks again before money moves. The expiry is the society's window,
+        set by the server.
+
+        Idempotency-Key is the request's reference, minted CLIENT-SIDE once per
+        request and reused on every retry (unique within the society). A repeat
+        answers 200 with the FIRST request, writes nothing, and needs no step-up.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RaiseWithdrawal' }
+      responses:
+        '201':
+          description: Raised. The request, in the raiser's projection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalView' }
+        '200':
+          description: Already raised under this key. NOTHING WAS WRITTEN. The first request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalView' }
+        '400':
+          description: "bad_request: malformed, or no Idempotency-Key."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (neither the member nor an officer who records money: another member, the auditor, the chairman)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller has no member record or post in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_resubmittable: resubmitsId is not a rejected request of the same member in this society (the message says which)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "zero_amount; unknown_member; exceeds_withdrawable (the message carries the figures); not_configured (the quorum, the floor or a charge component is not set: the message says which)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/withdrawal-requests:
+    get:
+      operationId: getMemberWithdrawalRequests
+      summary: A member's own withdrawal requests, newest first, in the member projection
+      description: |
+        Progress and outcome, never who signed or rejected (the member
+        projection). On the fraud path the member sees "referred" and what to do
+        next, nothing else. Only the member: anyone else gets 404, identical to a
+        member that does not exist.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The member's requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/approval-requests:
+    get:
+      operationId: getSocietyApprovalRequests
+      summary: The society's approval requests, newest first, in the officer projection
+      description: |
+        For the society's officers, the auditor included: who raised, who signed,
+        who rejected. Filter by status (as the officer projection reads it:
+        referred is a member's word and never appears here).
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [awaiting, approved, rejected, expired]
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller holds no current post in."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

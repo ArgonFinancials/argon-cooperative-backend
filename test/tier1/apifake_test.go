@@ -104,6 +104,9 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		}
 		// money_key_optional: a contribution with no Idempotency-Key is given
 		// one (the router refuses a missing required header before any handler).
+		if f.brk == "req_key_optional" && strings.HasSuffix(r.URL.Path, "/withdrawal-requests") && r.Method == http.MethodPost && r.Header.Get("Idempotency-Key") == "" {
+			r.Header.Set("Idempotency-Key", "AUTO-"+digest()[:16])
+		}
 		if f.brk == "money_key_optional" && strings.HasSuffix(r.URL.Path, "/contributions") && r.Header.Get("Idempotency-Key") == "" {
 			r.Header.Set("Idempotency-Key", "AUTO-"+digest()[:16])
 		}

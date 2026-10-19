@@ -58,10 +58,9 @@ func newApprovals(t *testing.T) *aworld {
 // expired: a request that expired yesterday (2 of 3).
 func (w *aworld) expired(t *testing.T) string {
 	t.Helper()
-	var id string
-	fixture(t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, $3, 'withdrawal_out', 50000000, 2, now() - interval '1 day') RETURNING id`,
-		w.s.id, "APR-X-"+digest()[:12], w.s.holder()).Scan(&id), "an expired request")
+	id, err := w.s.withdrawalRequest(wreq{member: w.s.holder(), amount: 50000000, expires: `now() - interval '1 day'`,
+		reference: "APR-X-" + digest()[:12], topUp: true})
+	fixture(t, err, "an expired request")
 	return id
 }
 
@@ -78,9 +77,20 @@ func (w *aworld) rejectNote(req, member, user, post, reason, note string) error 
 // resubmit raises a new request that points at `original`.
 func (w *aworld) resubmit(society, original string) error {
 	// The resubmission is for the same member as the original.
-	return one(`INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at, resubmits_id)
-		VALUES ($1, $2, (SELECT member_id FROM approval_requests WHERE id = $3), 'withdrawal_out', 50000000, 2, now() + interval '1 day', $3)`,
-		society, "APR-R-"+digest()[:12], original)
+	var member *string
+	var origSociety string
+	fixture(w.s.t, db.QueryRow(bg(), `SELECT member_id::text, society_id::text FROM approval_requests WHERE id = $1`, original).Scan(&member, &origSociety), "the original")
+	m := ""
+	if member != nil {
+		m = *member
+	}
+	// Resubmitting ANOTHER society's request: raised for this society's own
+	// holder, so the only thing wrong with it is the society, the rule under test.
+	if origSociety != society {
+		m = w.s.holder()
+	}
+	_, err := w.s.withdrawalRequest(wreq{member: m, amount: 50000000, resubmits: original, reference: "APR-R-" + digest()[:12], topUp: true})
+	return err
 }
 
 // status reads THE status, as at `at` ("" = now).

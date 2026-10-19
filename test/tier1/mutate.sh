@@ -25,7 +25,7 @@ require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_A
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
-  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|0014|0015|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api|money_api|me_api) SUITE=$1; shift ;;
+  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|0014|0015|0016|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api|money_api|me_api|requests_api) SUITE=$1; shift ;;
   --only) ONLY=$2; shift 2 ;;
   --partial) PARTIAL=1; shift ;;
   --svc) SVC=1; shift ;;
@@ -106,8 +106,15 @@ report() {  # label pattern describe-file
     [[ $t =~ ^($pattern) ]] || continue   # prefix match
     COVERED[$t]=1
     local st; st=$(status_of "$t" "$label")
+    # Red because ANOTHER rule refused is not red for this break: a neighbour
+    # covered for the rule under test (seven times by 2026-10-18, each caught
+    # only by reading the reasons; now a step). M0 has no rules to cover.
+    local detail; detail=$(detail_of "$t" "$label")
+    if [[ $st == RED && $label != M0 && $detail == "WRONG REFUSAL"* ]]; then
+      printf '   \033[31mRED FOR ANOTHER RULE ✗\033[0m %s — %s\n' "$t" "$(cut -c1-160 <<<"$detail")"; fail=1; continue
+    fi
     case $st in
-      RED)    printf '   \033[32mred   ✓\033[0m %-62s %s\n' "$t" "$(detail_of "$t" "$label" | cut -c1-88)" ;;
+      RED)    printf '   \033[32mred   ✓\033[0m %-62s %s\n' "$t" "$(cut -c1-88 <<<"$detail")" ;;
       PASS)   printf '   \033[31mPASSED ON BROKEN %s ✗\033[0m %s\n' "$( [[ $label == svc_* ]] && echo SERVICE || echo SCHEMA)" "$t"; fail=1 ;;
       BROKEN) printf '   \033[33mBROKEN FIXTURE ?\033[0m %s — %s\n' "$t" "$(detail_of "$t" "$label")"; fail=1 ;;
       *)      printf '   \033[31mNOT RUN ?\033[0m %s\n' "$t"; fail=1 ;;

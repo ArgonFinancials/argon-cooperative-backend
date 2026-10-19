@@ -460,7 +460,11 @@ func TestApiMoney14_OneOpenHoldPerRequest(t *testing.T) {
 // which only the database can give (savings, guarantees held, floor).
 func TestApiMoney15_BeyondWithdrawableIsRefusedWithTheFigures(t *testing.T) {
 	w := newMoneyAPI(t)
+	// From 0016 a request beyond withdrawable is not raised: raised while the
+	// floor is zero, the floor back before the hold, which judges it now.
+	w.floor(t, 0)
 	req := w.approved(t, w.bMem, borrowerWithdrawable)
+	w.floor(t, floorKobo)
 	r := w.authorise(t, w.poster, req, stepUp(t, w.poster, "withdrawal_authorisation"))
 	wantProblem(t, r, http.StatusUnprocessableEntity, "exceeds_withdrawable", "authorising all the borrower may withdraw, with the charges on top")
 	if !strings.Contains(string(r.body), "held for guarantees") || !strings.Contains(string(r.body), k(borrowerWithdrawable)) {
@@ -485,8 +489,9 @@ func TestApiMoney16_AuthorisingIsASignatorysDuty(t *testing.T) {
 // the database's words.
 func TestApiMoney17_AnUnsetFloorIsNamed(t *testing.T) {
 	w := newMoneyAPI(t)
+	req := w.approved(t, w.bMem, payKobo) // raised while the floor is set (0016 checks it at raising)
 	fixture(t, one(`UPDATE societies SET account_floor_kobo = NULL WHERE id = $1`, w.c.s.id), "no floor")
-	r := w.authorise(t, w.poster, w.approved(t, w.bMem, payKobo), stepUp(t, w.poster, "withdrawal_authorisation"))
+	r := w.authorise(t, w.poster, req, stepUp(t, w.poster, "withdrawal_authorisation"))
 	wantProblem(t, r, http.StatusUnprocessableEntity, "not_configured", "authorising where the society has set no floor")
 	if !strings.Contains(string(r.body), "has not set its account floor") {
 		t.Fatalf("UNEXPLAINED — the refusal does not say what is unset: %s", r.body)

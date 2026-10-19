@@ -20,6 +20,7 @@
 package tier1
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -322,7 +323,23 @@ func TestLoan5_AgreementIsImmutable(t *testing.T) {
 	loan := w.loan(t)
 	refused(t, one(`UPDATE loans SET principal_kobo = principal_kobo + 100000 WHERE id = $1`, loan),
 		"raising an agreed loan's principal", refusedAs("loan_agreement_immutable"))
-	refused(t, one(`DELETE FROM loans WHERE id = $1`, loan), "deleting an agreed loan", refusedAs("loan_agreement_immutable"))
+	// The DELETE is tried on a loan with no instalments yet, in the transaction
+	// that agreed it: an agreed loan with its schedule is also held by the
+	// instalments' foreign key, which refused first and covered for this rule
+	// (finding 43's tool, its first catch). Rolled back either way.
+	var del error
+	tx(func(x pgx.Tx) error {
+		var id string
+		if err := x.QueryRow(bg(), `INSERT INTO loans (society_id, member_id, product_id, principal_kobo, term_months, purpose,
+			guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment)
+			SELECT $1, $2, $3, $4, $5, 'School fees', 2, p.savings_multiple_pct, p.interest_rate_bp, p.allows_prepayment
+			  FROM loan_products p WHERE p.id = $3 RETURNING id`, w.c.s.id, w.bMem, w.product, loanPrincipal, loanTerm).Scan(&id); err != nil {
+			t.Fatalf("FIXTURE: the loan: %v", err)
+		}
+		_, del = x.Exec(bg(), `DELETE FROM loans WHERE id = $1`, id)
+		return errors.New("rolled back: a probe")
+	})
+	refused(t, del, "deleting an agreed loan", refusedAs("loan_agreement_immutable"))
 }
 
 func TestLoan6_ScheduleSumsToThePrincipal(t *testing.T) {
@@ -582,7 +599,10 @@ func TestLoan32_LoanMovementIsInTheLoansSociety(t *testing.T) {
 	w := newLoanWorld(t)
 	loan, _ := w.ready(t)
 	t2 := newChart(t)
-	_, err := w.move("loan_disbursement", loan, t2.s.id, line{acct: t2.loan, kobo: loanPrincipal, member: t2.member}, line{acct: t2.bank, kobo: -loanPrincipal})
+	// The loan line names the loan's own borrower, so the only thing wrong is
+	// the society: naming T's member let loan_line_is_borrowers refuse first and
+	// cover for the rule under test (finding 43's tool, its first catch).
+	_, err := w.move("loan_disbursement", loan, t2.s.id, line{acct: t2.loan, kobo: loanPrincipal, member: w.bMem}, line{acct: t2.bank, kobo: -loanPrincipal})
 	refused(t, err, "society T's entry disbursing society S's loan", refusedAs("loan_same_society"))
 }
 

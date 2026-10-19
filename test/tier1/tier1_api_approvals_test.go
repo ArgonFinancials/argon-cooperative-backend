@@ -47,12 +47,10 @@ func newApprovalAPI(t *testing.T) *aapi {
 // (or `expires` as SQL).
 func (w *aapi) memberRequest(t *testing.T, expires string) string {
 	t.Helper()
-	if expires == "" {
-		expires = `now() + interval '1 day'`
-	}
-	var id string
-	fixture(t, db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, $3, 'withdrawal_out', 5000000, 2, `+expires+`) RETURNING id`, w.s.id, "APR-"+digest()[:12], w.pMem).Scan(&id), "a withdrawal request")
+	// From 0016 the member raises it, within what they may withdraw (topped up:
+	// money is not this suite's subject); an expired one is set so afterwards.
+	id, err := w.s.withdrawalRequest(wreq{member: w.pMem, amount: 5000000, expires: expires, reference: "APR-" + digest()[:12], topUp: true})
+	fixture(t, err, "a withdrawal request")
 	return id
 }
 

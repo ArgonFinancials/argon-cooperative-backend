@@ -253,7 +253,12 @@ func TestPayout04_AnUnsetFloorRefusesTheHold(t *testing.T) {
 
 func TestPayout05_TheFloorStaysBehind(t *testing.T) {
 	w := newMoneyWorld(t)
+	// From 0016 a request beyond withdrawable is not raised, so the hold's own
+	// check is reached as it is in life: the position changes AFTER raising.
+	// Raised while the floor is zero; the floor is back before the hold.
+	w.floor(t, 0)
 	req := w.approved(t, w.bMem, 950000)
+	w.floor(t, floorKobo)
 	_, err := w.hold(t, holdSpec{req: req, member: w.bMem, amount: 950000})
 	refused(t, err, "₦9,500 + ₦10.75 out of ₦10,000 savings with a ₦1,000 floor", refusedAs("withdrawal_within_withdrawable"))
 }
@@ -261,28 +266,39 @@ func TestPayout05_TheFloorStaysBehind(t *testing.T) {
 // ₦8,990 fits within the ₦9,000 withdrawable; ₦8,990 + ₦10.75 does not.
 func TestPayout06_TheChargesCountAgainstWhatMayBeWithdrawn(t *testing.T) {
 	w := newMoneyWorld(t)
+	// From 0016 a request beyond withdrawable is not raised, so the hold's own
+	// check is reached as it is in life: the position changes AFTER raising.
+	// Raised while the floor is zero; the floor is back before the hold.
+	w.floor(t, 0)
 	req := w.approved(t, w.bMem, 899000)
+	w.floor(t, floorKobo)
 	_, err := w.hold(t, holdSpec{req: req, member: w.bMem, amount: 899000})
 	refused(t, err, "₦8,990 + ₦10.75 against ₦9,000 withdrawable", refusedAs("withdrawal_within_withdrawable"))
 }
 
 // guarantorWorld: a disbursed ₦24,000 loan both guarantors guarantee, and the
-// first guarantor's ₦10,000 savings.
-func guarantorWorld(t *testing.T) (*mworld, string) {
+// first guarantor's ₦10,000 savings. beforeDisbursing runs while nothing is yet
+// outstanding: from 0016 a request is within withdrawable when RAISED, so a
+// test of the hold's guarantee check raises its request there, and the
+// disbursement then changes the position before the hold.
+func guarantorWorld(t *testing.T, beforeDisbursing func(w *mworld)) (*mworld, string) {
 	t.Helper()
 	w := newMoneyWorld(t)
 	loan, _ := w.ready(t)
+	w.saved(t, w.g1Mem, loanSavings)
+	if beforeDisbursing != nil {
+		beforeDisbursing(w)
+	}
 	_, err := w.disburse(loan, loanPrincipal)
 	fixture(t, err, "the disbursement")
-	w.saved(t, w.g1Mem, loanSavings)
 	return w, loan
 }
 
 // The conservative default: the FULL outstanding ₦24,000 is held back while the
 // guarantee stands.
 func TestPayout07_AGuaranteeHoldsBackTheLoansOutstanding(t *testing.T) {
-	w, _ := guarantorWorld(t)
-	req := w.approved(t, w.g1Mem, payKobo)
+	var req string
+	w, _ := guarantorWorld(t, func(w *mworld) { req = w.approved(t, w.g1Mem, payKobo) })
 	_, err := w.hold(t, holdSpec{req: req, member: w.g1Mem, amount: payKobo})
 	refused(t, err, "₦6,000 authorised out of a guarantor's savings while ₦24,000 they guarantee is outstanding",
 		refusedAs("withdrawal_within_withdrawable"))
@@ -290,11 +306,13 @@ func TestPayout07_AGuaranteeHoldsBackTheLoansOutstanding(t *testing.T) {
 
 // Per PERSON, not per member record.
 func TestPayout08_AGuaranteeHoldsThroughThePersonsOtherRecord(t *testing.T) {
-	w, _ := guarantorWorld(t)
-	other := w.c.s.member(w.g1)
-	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, other), "the guarantor's second record")
-	w.saved(t, other, loanSavings)
-	req := w.approved(t, other, payKobo)
+	var other, req string
+	w, _ := guarantorWorld(t, func(w *mworld) {
+		other = w.c.s.member(w.g1)
+		fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, other), "the guarantor's second record")
+		w.saved(t, other, loanSavings)
+		req = w.approved(t, other, payKobo)
+	})
 	_, err := w.hold(t, holdSpec{req: req, member: other, amount: payKobo})
 	refused(t, err, "the guarantor authorising a payout through their second member record", refusedAs("withdrawal_within_withdrawable"))
 }
@@ -303,9 +321,13 @@ func TestPayout08_AGuaranteeHoldsThroughThePersonsOtherRecord(t *testing.T) {
 // held, then ₦6,010.75 more against ₦9,000.
 func TestPayout09_OpenHoldsCountAgainstWhatMayBeWithdrawn(t *testing.T) {
 	w := newMoneyWorld(t)
-	w.held(t, w.bMem, payKobo)
+	// Both raised while each fits on its own (0016 counts open holds at
+	// raising too); the first is then held, and the second's hold is judged.
+	first := w.approved(t, w.bMem, payKobo)
 	req := w.approved(t, w.bMem, payKobo)
-	_, err := w.hold(t, holdSpec{req: req, member: w.bMem, amount: payKobo})
+	_, err := w.hold(t, holdSpec{req: first, member: w.bMem, amount: payKobo})
+	fixture(t, err, "the first hold")
+	_, err = w.hold(t, holdSpec{req: req, member: w.bMem, amount: payKobo})
 	refused(t, err, "a second ₦6,010.75 authorised while the first is still held", refusedAs("withdrawal_within_withdrawable"))
 }
 
@@ -394,7 +416,7 @@ func TestPayout_Control_HoldingExactlyWhatMayBeWithdrawn(t *testing.T) {
 }
 
 func TestPayout_Control_ARepaidLoanHoldsNothing(t *testing.T) {
-	w, loan := guarantorWorld(t)
+	w, loan := guarantorWorld(t, nil)
 	_, err := w.repay(loan, loanPrincipal)
 	fixture(t, err, "the loan repaid in full")
 	req := w.approved(t, w.g1Mem, payKobo)

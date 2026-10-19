@@ -112,6 +112,16 @@ func (f *fakeAPI) apprView(ctx context.Context, r apprRow, projection string) (a
 		return v, err
 	}
 	v.Status = api.ApprovalStatus(st)
+	// Who raised it (0016, where the schema records it: officers only, unless
+	// broken) and what it resubmits (0007).
+	var resub *string
+	f.db.QueryRow(ctx, `SELECT resubmits_id::text FROM approval_requests WHERE id = $1`, r.id).Scan(&resub)
+	v.ResubmitsId = uuidPtr(resub)
+	if hasRaisers() && (projection == "officer" || f.brk == "req_raiser_shown_to_member") {
+		var by *string
+		f.db.QueryRow(ctx, `SELECT raised_by_user_id::text FROM approval_requests WHERE id = $1`, r.id).Scan(&by)
+		v.RaisedBy = uuidPtr(by)
+	}
 	f.db.QueryRow(ctx, `SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1`, r.id).Scan(&v.SignedCount)
 	if projection == "officer" && f.brk != "appr_officer_unnamed" || projection == "member" && f.brk == "appr_member_sees_names" {
 		rows, err := f.db.Query(ctx, `SELECT user_id::text, member_id::text, post_at_signing::text, signed_at
@@ -267,6 +277,8 @@ func (f *fakeAPI) SignApproval(ctx context.Context, req api.SignApprovalRequestO
 				return api.SignApproval404JSONResponse(f.apprNotFound(false)), nil
 			}
 			return api.SignApproval403JSONResponse(api.Problem{Code: "not_a_signatory", Message: "you hold no current signing post in this society"}), nil
+		case c == "raiser_never_signs" && f.brk != "req_raiser_sign_as_500":
+			return api.SignApproval403JSONResponse(api.Problem{Code: "conflict_of_interest", Message: "you raised this request: nobody signs a request they raised"}), nil
 		case c == "borrower_never_signs_own_loan" || c == "signatory_not_guarantor":
 			return api.SignApproval403JSONResponse(api.Problem{Code: "conflict_of_interest", Message: "the borrower and the guarantors of a loan never sign its requests"}), nil
 		case c == "signature_before_expiry" || c == "signature_on_open_request":

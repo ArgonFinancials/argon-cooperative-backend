@@ -431,12 +431,16 @@ func (w *mworld) chargeLines(ch fees) []line {
 }
 
 // raise: a withdrawal request for `member`, at `required` signatures.
+// From 0016 the member raises it (a request naming no member is raised by the
+// poster, an officer), on their own step-up, within what they may withdraw:
+// nothing tops up a money test's savings.
 func (w *mworld) raise(member string, amount int64, required int) (string, error) {
-	var id string
-	err := db.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-		VALUES ($1, $2, $3, 'withdrawal_out', $4, $5, now() + interval '7 days') RETURNING id`,
-		w.c.s.id, fmt.Sprintf("WDR-%d", seq.Add(1)), nz(member), amount, required).Scan(&id)
-	return id, err
+	raiser := ""
+	if member == "" {
+		raiser = w.poster
+	}
+	return w.c.s.withdrawalRequest(wreq{member: member, raiser: raiser, amount: amount, required: required,
+		reference: fmt.Sprintf("WDR-%d", seq.Add(1))})
 }
 
 // approved: a withdrawal request raised at the society's quorum and signed by

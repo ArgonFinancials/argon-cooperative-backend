@@ -440,6 +440,7 @@ They appear only as illustrative test data, marked so, pending the compliance ow
 - **signs**: a signature on an approval request;
 - **authorises**: a payout hold (authorised to execute), and releasing one: a release pays nothing, but it frees the member's withdrawable, the precondition for their next payout, so it is an act with a financial effect on the actor (added 2026-10-14 at review);
 - **attests**: recording a movement as having happened (a contribution, a payout).
+- **raises**: raising a request someone else will sign. The person who raises a request never signs it (decided 2026-10-18: an officer may raise a withdrawal request for a member without a phone, and is then recorded as its raiser; 0016). The same conflict as authorising and attesting: one person both asking and approving means nobody checked the other.
 
 Checked per PERSON, not per member record. Where it is enforced:
 
@@ -452,6 +453,7 @@ Checked per PERSON, not per member record. Where it is enforced:
 | Releasing a hold | the member whose withdrawable it frees | 0015 |
 | Recorded payout (attesting it happened) | the member whose savings pay out | 0015 |
 | Recorded contribution (attesting money arrived) | the member credited | 0015 |
+| Raising a request (any kind that records its raiser) | the raiser never signs it | 0016 |
 
 **For any new request kind, or any new act on money:** before its tests are written, name who benefits, and make "that person signs, authorises or attests to it" a refusal test of its own. A kind or act with no such test is not ready for review.
 
