@@ -44,12 +44,13 @@ import (
 
 // raiseSpec: a withdrawal request raised by `by` (default the member's own
 // user). act: "" the raiser's own withdrawal_request act in this transaction;
-// "none"; another kind. actBy: the act's owner, if not the raiser. noRaiser:
-// no raised_by at all. expires: an expiry the client supplies (SQL), if any.
+// "none"; another kind. actBy: the act's owner, if not the raiser. actID: an
+// act written elsewhere (another transaction), used instead. noRaiser: no
+// raised_by at all. expires: an expiry the client supplies (SQL), if any.
 type raiseSpec struct {
-	member, by, act, actBy, expires, resubmits string
-	amount                                     int64
-	noRaiser                                   bool
+	member, by, act, actBy, actID, expires, resubmits string
+	amount                                            int64
+	noRaiser                                          bool
 }
 
 func (w *mworld) raiseBy(t *testing.T, r raiseSpec) (string, error) {
@@ -72,13 +73,15 @@ func (w *mworld) raiseBy(t *testing.T, r raiseSpec) (string, error) {
 		actBy = r.actBy
 	}
 	var proof string
-	if r.act != "none" {
+	if r.act != "none" && r.actID == "" {
 		proof = stepUp(t, actBy, kind)
 	}
 	var id string
 	err := tx(func(x pgx.Tx) error {
 		var act *string
-		if r.act != "none" {
+		if r.actID != "" {
+			act = &r.actID
+		} else if r.act != "none" {
 			var a string
 			if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ($1, $2, $3) RETURNING id`,
 				kind, actBy, proof).Scan(&a); err != nil {
@@ -238,6 +241,51 @@ func TestRaise11_AWindowChangeIsLogged(t *testing.T) {
 	if r.setting != "withdrawal_request_days" || r.oldV != "7" || r.newV != "14" || r.operator != opName || r.ref != minutes {
 		t.Fatalf("UNRECORDED — log %+v; want withdrawal_request_days, 7 -> 14, by the operator, on the resolution", r)
 	}
+}
+
+// The four conditions every act meets (as 0010's for signatures): present (02),
+// the raiser's own (03), of the right kind (13), from this transaction (14),
+// used once (15). Each check runs only when an act is named, so none covers
+// for another.
+
+func TestRaise13_TheActIsAWithdrawalRequestAct(t *testing.T) {
+	w := newMoneyWorld(t)
+	_, err := w.raiseBy(t, raiseSpec{member: w.bMem, act: "approval_signature"})
+	refused(t, err, "a withdrawal request on a signature's step-up", refusedAs("withdrawal_request_act_kind"))
+}
+
+// The act was written in its own, earlier transaction.
+func TestRaise14_TheActIsFromThisTransaction(t *testing.T) {
+	w := newMoneyWorld(t)
+	proof := stepUp(t, w.borrower, "withdrawal_request")
+	var act string
+	fixture(t, db.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('withdrawal_request', $1, $2) RETURNING id`,
+		w.borrower, proof).Scan(&act), "an act, written and committed on its own")
+	_, err := w.raiseBy(t, raiseSpec{member: w.bMem, actID: act})
+	refused(t, err, "a request on an act from another transaction", refusedAs("withdrawal_request_act_same_transaction"))
+}
+
+// One act, two requests, one transaction: everything else about the second is
+// right, so only "once" can refuse it.
+func TestRaise15_OneStepUpRaisesOnce(t *testing.T) {
+	w := newMoneyWorld(t)
+	proof := stepUp(t, w.borrower, "withdrawal_request")
+	err := tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('withdrawal_request', $1, $2) RETURNING id`,
+			w.borrower, proof).Scan(&act); err != nil {
+			return fmt.Errorf("FIXTURE: the act: %w", err)
+		}
+		for i := 0; i < 2; i++ {
+			if _, err := x.Exec(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at,
+				  raised_by_user_id, act_id) VALUES ($1, $2, $3, 'withdrawal_out', 100000, 2, now() + interval '1 day', $4, $5)`,
+				w.c.s.id, fmt.Sprintf("WDR-%d", seq.Add(1)), w.bMem, w.borrower, act); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	refused(t, err, "two requests raised on one step-up", want{codes: []string{"23505"}, constraint: "approval_requests_act_once"})
 }
 
 // =============================================================================

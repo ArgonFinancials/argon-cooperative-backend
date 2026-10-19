@@ -1,6 +1,6 @@
--- DELIBERATELY WRONG. A request needs no step-up of the raiser's.
+-- DELIBERATELY WRONG. A request needs no step-up.
 --
--- Must turn red: TestRaise02_ARequestRestsOnTheRaisersStepUp, TestRaise03_TheActIsTheRaisersOwn.
+-- Must turn red: TestRaise02_ARequestRestsOnTheRaisersStepUp.
 BEGIN;
 CREATE FUNCTION withdrawal_request_authored() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -11,6 +11,19 @@ BEGIN
   END IF;
   IF NEW.raised_by_user_id IS NULL THEN
     PERFORM auth_refuse('withdrawal_request_names_raiser', 'a withdrawal request names who raised it: a request that moves money has an author');
+  END IF;
+  IF NEW.act_id IS NOT NULL THEN
+    SELECT kind, actor_user_id, act_xid INTO a FROM credential_acts WHERE id = NEW.act_id;
+    -- A missing raiser is the raiser rule's alone: compared only when one is named.
+    IF NEW.raised_by_user_id IS NOT NULL AND a.actor_user_id IS DISTINCT FROM NEW.raised_by_user_id THEN
+      PERFORM auth_refuse('withdrawal_request_act_is_raisers', 'a request rests on its raisers own step-up, not someone elses');
+    END IF;
+    IF a.kind IS DISTINCT FROM 'withdrawal_request' THEN
+      PERFORM auth_refuse('withdrawal_request_act_kind', format('a withdrawal request rests on a withdrawal_request act, not %s', a.kind));
+    END IF;
+    IF a.act_xid IS DISTINCT FROM pg_current_xact_id() THEN
+      PERFORM auth_refuse('withdrawal_request_act_same_transaction', 'the act and the request are one event: the act is written in the requests transaction');
+    END IF;
   END IF;
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
@@ -142,4 +155,6 @@ BEGIN
   INSERT INTO society_settings_log (society_id, setting, old_value, new_value, operator_name, server_login, resolution_ref, resolution_date, reason)
     VALUES (p_society, 'withdrawal_request_days', v_old::text, p_days::text, p_operator, p_login, p_ref, p_date, p_reason);
 END $$ LANGUAGE plpgsql;
+-- One step-up raises once: an act is spent by one request.
+CREATE UNIQUE INDEX approval_requests_act_once ON approval_requests (act_id) WHERE act_id IS NOT NULL;
 COMMIT;
