@@ -352,14 +352,23 @@ func TestApiRequests20_MoneyIsAStringOnTheWire(t *testing.T) {
 // A request no quorum can approve, refused when raised with the arithmetic and
 // the remedy (decided 2026-10-19). The secretary's appointment has ended: the
 // treasurer raising for a member leaves only the chairman to sign, at two.
+//
+// The arithmetic is asserted as well as the remedy: the API passes the
+// database's words through, and a handler writing its own sentence that
+// happens to name the remedy must fail here (break req_unreachable_rewritten).
 func TestApiRequests21_ARequestNoQuorumCanApproveIsRefused(t *testing.T) {
 	w := newMoneyAPI(t)
-	fixture(t, one(`UPDATE appointments SET held_until = current_date - 1 WHERE member_id = $1`, w.secMem), "the secretary's appointment ended")
+	// The secretary's term, held since 2020-01-01, ended yesterday: an end
+	// after its start (range_sane, 0001, refuses any other), read back so a
+	// missing appointment stops here rather than building another world.
+	var from string
+	fixture(t, db.QueryRow(bg(), `UPDATE appointments SET held_until = current_date - 1
+		WHERE member_id = $1 AND held_until IS NULL RETURNING held_from::text`, w.secMem).Scan(&from), "the secretary's appointment ended")
 	n := requestsFor(t, w.bMem)
 	r := w.raiseVia(t, w.poster, w.bMem, k(payKobo), stepUp(t, w.poster, "withdrawal_request"), "", nil)
 	wantProblem(t, r, http.StatusUnprocessableEntity, "quorum_unreachable", "a request only the chairman may sign, at a quorum of two")
-	if !strings.Contains(string(r.body), "Appoint another signatory") {
-		t.Fatalf("UNEXPLAINED — the refusal does not say what to do: %s", r.body)
+	if b := string(r.body); !strings.Contains(b, "1 signatories may sign it") || !strings.Contains(b, "needs 2") || !strings.Contains(b, "Appoint another signatory") {
+		t.Fatalf("UNEXPLAINED — the refusal must carry the database's arithmetic (1 may sign, 2 needed) and the remedy: %s", r.body)
 	}
 	if requestsFor(t, w.bMem) != n {
 		t.Fatalf("ACCEPTED — a request no quorum can approve was raised")

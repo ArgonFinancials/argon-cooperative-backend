@@ -13,7 +13,13 @@ SUITE_GREEN_NEEDS='migrations/0016_withdrawal_requests.up.sql'   # absent until 
 CONTROL_RE='Control'
 declare -gA SVC_TARGET_OF=()
 declare -gA TARGET_OF=(
-  [M0]='TestRaise[0-9]'
+  # M0 excludes TestRaise16: its rule is 0007's (approval_status reads the
+  # request's own `required`), so a schema with none of 0016's rules already
+  # holds it; mutate.sh caught that (PASSED ON BROKEN SCHEMA under M0,
+  # 2026-10-19). Proved instead by m_status_reads_society. It lives here, not
+  # in 0007's suite, because its world (money, the operator's quorum) needs
+  # 0011 and 0014.
+  [M0]='TestRaise(0[1-9]|1[0-5])_'
   [m_raiser_optional]='TestRaise01_ARequestNamesItsRaiser'
   [m_step_up_optional]='TestRaise02_ARequestRestsOnTheRaisersStepUp'
   [m_act_anyones]='TestRaise03_TheActIsTheRaisersOwn'
@@ -30,6 +36,7 @@ declare -gA TARGET_OF=(
   [m_window_unlogged]='TestRaise11_AWindowChangeIsLogged'
   [c_officer_cannot_raise]='TestRaise_Control_AnOfficerRaisesForAMember'
   [m_unreachable_raised]='TestRaise12_ARequestThatCannotReachItsQuorumIsRefused'
+  [m_status_reads_society]='TestRaise16_ALowerQuorumDoesNotApproveARaisedRequest'
   [c_quorum_margin]='TestRaise_Control_AnOfficerRaisesForAMember'
   [c_member_cannot_raise]='TestRaise_Control_AMemberRaisesTheirOwn'
   [c_no_resubmission]='TestRaise_Control_AResubmissionForTheSameMember'

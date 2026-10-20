@@ -32,6 +32,9 @@
 //     expires, and a member waits seven days to learn their society's
 //     arithmetic made it impossible. The refusal states the arithmetic AND the
 //     remedy: appoint another signatory, or lower the quorum.
+//   - A REQUEST CARRIES THE QUORUM IT WAS RAISED AT (decided 2026-10-19, as
+//     write-offs): a society that lowers its quorum does not make a pending
+//     request easier to approve than it was when the signatories saw it.
 package tier1
 
 import (
@@ -93,9 +96,12 @@ func (w *mworld) raiseBy(t *testing.T, r raiseSpec) (string, error) {
 		if r.noRaiser {
 			raiser = nil
 		}
+		// required: the society's quorum, copied when raised (as the handler
+		// does; 0011 refuses any other value), never a literal that happens to
+		// equal it.
 		return x.QueryRow(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at,
 			  raised_by_user_id, act_id, resubmits_id)
-			VALUES ($1, $2, $3, 'withdrawal_out', $4, 2, `+r.expires+`, $5, $6, $7) RETURNING id`,
+			VALUES ($1, $2, $3, 'withdrawal_out', $4, (SELECT withdrawal_signatures_required FROM societies WHERE id = $1), `+r.expires+`, $5, $6, $7) RETURNING id`,
 			w.c.s.id, fmt.Sprintf("WDR-%d", seq.Add(1)), r.member, r.amount, raiser, act, nz(r.resubmits)).Scan(&id)
 	})
 	return id, err
@@ -114,11 +120,12 @@ func (w *mworld) rejected(t *testing.T, member string) string {
 
 // thirdSignatory: the money world has two signatories (the treasurer and the
 // chairman) at a quorum of two; a request an officer raises needs a third, or
-// no quorum can approve it (TestRaise12).
-func (w *mworld) thirdSignatory(t *testing.T) {
+// no quorum can approve it (TestRaise12). Returns the secretary's member record.
+func (w *mworld) thirdSignatory(t *testing.T) string {
 	t.Helper()
 	m := w.c.s.signatory(w.c.s.user("Secretary (signatory)"), "secretary")
 	fixture(t, one(`UPDATE members SET status = 'active' WHERE id = $1`, m), "active secretary")
+	return m
 }
 
 func setWindow(society string, days int, operator string) error {
@@ -278,7 +285,8 @@ func TestRaise15_OneStepUpRaisesOnce(t *testing.T) {
 		}
 		for i := 0; i < 2; i++ {
 			if _, err := x.Exec(bg(), `INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at,
-				  raised_by_user_id, act_id) VALUES ($1, $2, $3, 'withdrawal_out', 100000, 2, now() + interval '1 day', $4, $5)`,
+				  raised_by_user_id, act_id) VALUES ($1, $2, $3, 'withdrawal_out', 100000,
+				  (SELECT withdrawal_signatures_required FROM societies WHERE id = $1), now() + interval '1 day', $4, $5)`,
 				w.c.s.id, fmt.Sprintf("WDR-%d", seq.Add(1)), w.bMem, w.borrower, act); err != nil {
 				return err
 			}
@@ -301,6 +309,32 @@ func TestRaise12_ARequestThatCannotReachItsQuorumIsRefused(t *testing.T) {
 	refused(t, err, "a request only one signatory may sign, at a quorum of two", refusedAs("request_cannot_reach_quorum"))
 	if msg := err.Error(); !strings.Contains(msg, "1 signatories may sign it") || !strings.Contains(msg, "needs 2") || !strings.Contains(msg, "Appoint another signatory, or lower the withdrawal quorum") {
 		t.Fatalf("UNEXPLAINED — the refusal must say how many may sign, how many are needed, and what to do: %v", err)
+	}
+}
+
+// A request carries the quorum it was raised at (its own `required`, copied
+// from the society then; decided 2026-10-19, as write-offs in 0009). Raised at
+// three, the society then lowers its quorum to two: two signatures must not
+// approve it, because the signatories saw a request that needed three. The
+// third does. (Today the request's `required` and the society's quorum are
+// equal at every raise, 0011 refuses otherwise, so only a change AFTER the
+// raise can tell a rule reading one from a rule reading the other.)
+func TestRaise16_ALowerQuorumDoesNotApproveARaisedRequest(t *testing.T) {
+	w := newMoneyWorld(t)
+	sec := w.thirdSignatory(t)
+	// Both changes the way a society's quorum changes: by the operator, on its resolution.
+	fixture(t, setQuorum(w.c.s.id, 3, opName, opHost, minutes, resolved, opWhy), "the quorum raised to three")
+	req, err := w.raiseBy(t, raiseSpec{member: w.bMem})
+	fixture(t, err, "the borrower's request, raised at a quorum of three")
+	fixture(t, setQuorum(w.c.s.id, 2, opName, opHost, minutes, resolved, opWhy), "the quorum lowered to two")
+	fixture(t, w.c.s.sign(req, w.s1Mem, "treasurer"), "the treasurer's signature")
+	fixture(t, w.c.s.sign(req, w.s2Mem, "chairman"), "the chairman's signature")
+	if got := status(t, req, ""); got != "awaiting" {
+		t.Fatalf("APPROVED EARLY — two signatures on a request raised at three read %q after the society lowered its quorum; want awaiting", got)
+	}
+	fixture(t, w.c.s.sign(req, sec, "secretary"), "the secretary's signature")
+	if got := status(t, req, ""); got != "approved" {
+		t.Fatalf("NEVER APPROVED — the third signature leaves it %q", got)
 	}
 }
 
