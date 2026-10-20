@@ -143,6 +143,13 @@ func TestApiRequests04_AnotherMemberCannotRaiseForYou(t *testing.T) {
 	}
 }
 
+// TWO LAYERS, TWO RULES, DELIBERATELY: this rule is the API's ALONE. The
+// database allows any officer of the society to raise for a member
+// (raiser_is_member_or_officer, TestRaise04); only this handler narrows it to
+// the treasurer and the secretary. Remove this check and the database will
+// not catch it: a branch officer or the chairman raising for a member will
+// simply start working. Only this test (break req_any_officer_raises) stands
+// between them.
 func TestApiRequests05_TheAuditorAndTheChairmanDoNotRaise(t *testing.T) {
 	w := newMoneyAPI(t)
 	n := requestsFor(t, w.bMem)

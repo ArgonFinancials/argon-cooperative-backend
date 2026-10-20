@@ -164,6 +164,13 @@ func TestRaise03_TheActIsTheRaisersOwn(t *testing.T) {
 }
 
 // Neither the member nor an officer: another member raising for them.
+//
+// TWO LAYERS, TWO RULES, DELIBERATELY: the database allows ANY officer of the
+// society to raise for a member; the API narrows that to the treasurer and the
+// secretary (TestApiRequests05). If the API's check is ever removed, nothing
+// here catches it: a branch officer or the chairman raising for a member will
+// simply start working. Narrow this rule, or keep the API's check, never
+// neither.
 func TestRaise04_OnlyTheMemberOrAnOfficerRaises(t *testing.T) {
 	w := newMoneyWorld(t)
 	_, err := w.raiseBy(t, raiseSpec{member: w.bMem, by: w.g1})
