@@ -45,6 +45,9 @@ BT=$(U 31) E1=$(U 41) EBAD=$(U 42) EOK=$(U 43) EZERO=$(U 44) L1=$(U 51) L2=$(U 5
 R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91)
 R3=$(U 63) E2=$(U 45) E3=$(U 46) E4=$(U 47) A3=$(U 23) A4=$(U 24)
 SP6=$(U 116) SP7=$(U 117) SP8=$(U 118) SP9=$(U 119) SP10=$(U 120) SA6=$(U 126) SA7=$(U 127) SA8=$(U 128) SA9=$(U 129) SA10=$(U 130)
+E0=$(U 40) L3=$(U 53) L4=$(U 54) RK45=$(U 64)
+SPW1=$(U 161) SPW2=$(U 162) SPW3=$(U 163) SPW4=$(U 164) SPW5=$(U 165) SPW6=$(U 166) SPW7=$(U 167)
+SAW1=$(U 171) SAW2=$(U 172) SAW3=$(U 173) SAW4=$(U 174) SAW5=$(U 175) SAW6=$(U 176) SAW7=$(U 177)
 R2=$(U 62) SP5=$(U 115) SA5=$(U 125) SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
 # Written for the schema at migration 0005 (users, line-level member_id, no
@@ -64,10 +67,10 @@ if [[ $has_acts == 1 ]]; then
   pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES ($PROOF, $ACTOR, 'pin', 'ledger_batch');" </dev/null >/dev/null
   BATCH_SQL="INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($ACT, 'ledger_batch', $ACTOR, $PROOF);
 INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo, authorised_by)
-  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000, $ACT);"
+  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 2, 1010000, $ACT);"
 else
   BATCH_SQL="INSERT INTO ledger_batches (id, society_id, reference, actor_user_id, row_count, total_kobo)
-  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 1, 10000);"
+  VALUES ($BT, $S, 'sha256:probe', $ACTOR, 2, 1010000);"
 fi
 # A signature rests on the signer's own step-up act (0010), where the schema has
 # them: argon_auth mints each proof in its own transaction; the act that spends
@@ -105,6 +108,34 @@ CR_COL="" ; [[ $has_benefit == 1 ]] && CR_COL=", client_reference"
 # Never `[[ … ]] && printf` here: false on an older schema, the function
 # returns 1, and an assignment from it exits the probe silently (finding 7).
 cref() { if [[ $has_benefit == 1 ]]; then printf ", 'PROBE-%s'" "$1"; fi; }
+# 0016: a withdrawal request names its raiser and rests on the raiser's own
+# step-up act, written in its transaction; it is within withdrawable when
+# raised. From the catalog (finding 34).
+has_raisers=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.approval_requests'::regclass
+  AND attname = 'raised_by_user_id' AND NOT attisdropped" </dev/null)
+# raised_sql REQUEST REFERENCE AMOUNT PROOF ACT: M2's own withdrawal request.
+# From 0016 on M2's own withdrawal_request act, in the same transaction; before
+# it a request names no raiser. (if/fi, never `[[ ]] &&`: finding 7.)
+raised_sql() {
+  if [[ $has_raisers == 1 ]]; then
+    echo "INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($5, 'withdrawal_request', $U2, $4);
+INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at, raised_by_user_id, act_id)
+  VALUES ($1, $S, '$2', $M2, 'withdrawal_out', $3, 2, now() + interval '1 day', $U2, $5);"
+  else
+    echo "INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
+  VALUES ($1, $S, '$2', $M2, 'withdrawal_out', $3, 2, now() + interval '1 day');"
+  fi
+}
+if [[ $has_raisers == 1 ]]; then
+  # The proofs 0016's raises spend: R1-R3, K45 and P45 are M2's own (U2);
+  # P46's act is the treasurer's (U1) for M2's request; P47 is the treasurer
+  # raising for M2.
+  pg_as argon_auth "$db" -q -c "INSERT INTO auth_proofs (id, user_id, method, act_kind) VALUES
+    ($SPW1, $U2, 'pin', 'withdrawal_request'), ($SPW2, $U2, 'pin', 'withdrawal_request'),
+    ($SPW3, $U2, 'pin', 'withdrawal_request'), ($SPW4, $U2, 'pin', 'withdrawal_request'),
+    ($SPW5, $U1, 'pin', 'withdrawal_request'), ($SPW6, $U1, 'pin', 'withdrawal_request'),
+    ($SPW7, $U2, 'pin', 'withdrawal_request');" </dev/null >/dev/null
+fi
 # VAT's era (0013): before it, VAT was on the partner's fee and the probe's ₦10
 # sat there; from it, VAT is on Argon's own fee, the ₦10 is Argon's, and the
 # partner's is zero AS PROBE DATA ONLY (unknown in reality, and refused).
@@ -159,8 +190,7 @@ SQL
   ($A5, $S, '2111', 'Charges payable — Argon', 'liability', 'charges_margin')"
   [[ $FEE_ROLE == argon_margin ]] && FEE_ACCT=$A5 || FEE_ACCT=$A3
   # R3: ₦5,000 out of M2's savings, approved by M1 and M3 (neither is M2).
-  MONEY_REQUEST="INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-  VALUES ($R3, $S, 'APR-PROBE-3', $M2, 'withdrawal_out', 500000, 2, now() + interval '1 day');
+  MONEY_REQUEST="$(raised_sql "$R3" APR-PROBE-3 500000 "$SPW3" "$SAW3")
 $(sign_on_sql "$R3" "$SP7" "$SA7" "$U1" "$M1" treasurer)
 $(sign_on_sql "$R3" "$SP8" "$SA8" "$U3" "$M3" chairman)"
 fi
@@ -183,16 +213,24 @@ INSERT INTO ledger_entries (id, society_id, batch_id, kind, value_date, actor_us
 INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
   ($L1, $E1, $A1,  10000, 'principal', NULL),
   ($L2, $E1, $A2, -10000, 'principal', $M1);
-INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at)
-  VALUES ($R1, $S, 'APR-PROBE-1', $M2, 'withdrawal_out', 50000000, 2, now() + interval '1 day'),
-         ($R2, $S, 'APR-PROBE-2', $M2, 'withdrawal_out', 50000000, 2, now() + interval '1 day');
+-- M2's ₦10,000, imported in the same batch, BEFORE anything is asked of them:
+-- from 0016 a request is within withdrawable when raised, and a request for
+-- money a member does not have describes a world the society cannot be in
+-- (finding 44). R1 and R2 asked ₦500,000 each against nothing until 2026-10-20.
+INSERT INTO ledger_entries (id, society_id, batch_id, kind, value_date, actor_user_id, actor_post, actor_post_label)
+  VALUES ($E0, $S, $BT, 'contribution_in', '2026-01-31', $ACTOR, 'treasurer', 'Treasurer');
+INSERT INTO ledger_lines (id, entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
+  ($L3, $E0, $A1,  1000000, 'principal', NULL),
+  ($L4, $E0, $A2, -1000000, 'principal', $M2);
+$(raised_sql "$R1" APR-PROBE-1 100000 "$SPW1" "$SAW1")
+$(raised_sql "$R2" APR-PROBE-2 100000 "$SPW2" "$SAW2")
 $(sign_sql "$SP1" "$SA1" "$U1" "$M1" treasurer)
 $MONEY_REQUEST
 COMMIT;
 SQL
 n=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM ledger_lines WHERE entry_id = $E1" </dev/null)
 [[ $n == 2 ]] || die "fixtures not in place (ledger_lines for E1 = '$n') — every result below would be meaningless"
-ok "fixtures committed: 1 posted entry with 2 lines, 2 approval requests, 1 signature"
+ok "fixtures committed: a batch of 2 posted entries (M1's and M2's savings), M2's approval requests, R1's first signature"
 
 # ---- harness -----------------------------------------------------------------
 declare -a ROWS; req_fail=0; gaps=0
@@ -398,6 +436,32 @@ probe req P41 argon_app '23514.*authoriser_never_records' "app records a payout 
      ($E9, $A2, 501075, 'principal', $M2), ($E9, $A1, -500000, 'principal', NULL), ($E9, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E9, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
 else
   info "schema before 0015: no benefit or client-reference rules to probe (P40–P44 not run)"
+fi
+
+# 0016: a withdrawal request has an author, on their own step-up, and a quorum
+# that can approve it. As the app, whose writes these bind; each case valid in
+# every other respect (₦1,000, within M2's withdrawable), so only its own rule
+# can refuse it.
+if [[ $has_raisers == 1 ]]; then
+probe req P45 argon_app '23514.*withdrawal_request_names_raiser' "app raises a withdrawal request that names no raiser" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SAW7, 'withdrawal_request', $U2, $SPW7);
+   INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at, act_id)
+     VALUES ($S, 'APR-PROBE-P45', $M2, 'withdrawal_out', 100000, 2, now() + interval '1 day', $SAW7); COMMIT;"
+probe req P46 argon_app '23514.*withdrawal_request_act_is_raisers' "app raises M2's request on the treasurer's step-up" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SAW5, 'withdrawal_request', $U1, $SPW5);
+   INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at, raised_by_user_id, act_id)
+     VALUES ($S, 'APR-PROBE-P46', $M2, 'withdrawal_out', 100000, 2, now() + interval '1 day', $U2, $SAW5); COMMIT;"
+probe req P47 argon_app '23514.*request_cannot_reach_quorum' "app raises, as the treasurer, a request only the chairman could sign (quorum 2)" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SAW6, 'withdrawal_request', $U1, $SPW6);
+   INSERT INTO approval_requests (society_id, reference, member_id, kind, amount_kobo, required, expires_at, raised_by_user_id, act_id)
+     VALUES ($S, 'APR-PROBE-P47', $M2, 'withdrawal_out', 100000, 2, now() + interval '1 day', $U1, $SAW6); COMMIT;" \
+  '1 signatories may sign it.*needs 2.*Appoint another signatory'
+probe req P48 argon_app '42501.*permission denied for function operator_set_withdrawal_request_days' "app sets its society's request window through the operator's function" \
+  "SELECT operator_set_withdrawal_request_days($S, 30, 'app', 'app', 'none', current_date, 'app');"
+probe ctl K45 argon_app '' "control: app raises M2's own ₦1,000 request on M2's own step-up (the server sets its expiry)" \
+  "BEGIN; $(raised_sql "$RK45" APR-PROBE-K45 100000 "$SPW4" "$SAW4") COMMIT;"
+else
+  info "schema before 0016: no withdrawal-request authorship rules to probe (P45-P48, K45 not run)"
 fi
 
 # 0014: the operator's functions are the operator's. The app can call none of

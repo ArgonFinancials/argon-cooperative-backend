@@ -1,9 +1,65 @@
--- 0016's REFERENCE rules, committed as TEST SCAFFOLDING for the tests-first
--- period only: the API suites' base carries them so their fake maps the
--- database's refusals as the real handlers will, instead of re-implementing
--- the rules (two layers checking the same thing means neither is tested).
--- suite_requests_api.sh refuses this base once migrations/0016 exists.
+-- =============================================================================
+-- ARGON — 0016: A WITHDRAWAL REQUEST HAS AN AUTHOR
+--
+-- Written against test/tier1/tier1_0016_test.go (approved 2026-10-20 on its
+-- mutation evidence, without being read: finding 46; mutation-tested with
+-- test/tier1/mutants_0016 before this file existed). LEDGER_CONTRACT.md §10.
+--
+-- Finding 41: approval_requests recorded whom a request was for, never who
+-- raised it; raising needed no step-up; the client chose the expiry. It
+-- survived because nothing had needed to ask who raised a request until a
+-- member could raise one. Now a withdrawal request:
+--
+--   NAMES ITS RAISER (withdrawal_request_names_raiser): the member it pays,
+--     or an officer of the society raising for a member without a phone
+--     (raiser_is_member_or_officer). THE API NARROWS THIS to the treasurer and
+--     the secretary; this rule allows any officer. Two layers, two rules,
+--     deliberately: if the API's check is removed, nothing here catches it.
+--   RESTS ON THE RAISER'S OWN STEP-UP, each condition its own check so none
+--     covers for another: present (withdrawal_request_needs_step_up), the
+--     raiser's own (withdrawal_request_act_is_raisers), a withdrawal_request
+--     act (withdrawal_request_act_kind), written in this transaction
+--     (withdrawal_request_act_same_transaction), used once
+--     (approval_requests_act_once).
+--   EXPIRES WHEN THE SOCIETY SAYS: the server sets raised_at and expires_at
+--     from the society's window (seven days shipped; the operator sets it on
+--     the society's resolution, logged, 1..366 days). A client's expiry is
+--     overwritten, not refused: there is no safe refusal, since a request
+--     with no expiry never expires.
+--   IS WITHIN WITHDRAWABLE WHEN RAISED, refused with the figures
+--     (withdrawal_request_within_withdrawable). The hold checks again before
+--     money moves (0012); that is what makes it safe to check early.
+--   CAN BE APPROVED: the society's current signatories, by person, less the
+--     raiser and the member it pays, at least the request's quorum, else
+--     refused with the arithmetic and the remedy (request_cannot_reach_quorum).
+--     The request's own `required` is read: it is the society's quorum copied
+--     at raise (0011 refuses any other), and 0007's status judges against it,
+--     so a quorum lowered later does not approve a pending request early.
+--   A RESUBMISSION is for the same member and kind (resubmission_same_member).
+--   ITS RAISER NEVER SIGNS IT (raiser_never_signs; §10, "raises").
+--
+-- TRIGGER NAMES ORDER THE RULES (same-timing triggers fire alphabetically).
+-- 0016's sort after 0007's, 0008's and 0011's on the same table, so an older
+-- rule refuses first where both would (finding 43).
+-- =============================================================================
+
 BEGIN;
+ALTER TABLE approval_requests ADD COLUMN raised_by_user_id UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN act_id UUID REFERENCES credential_acts(id);
+ALTER TABLE societies ADD COLUMN withdrawal_request_days SMALLINT NOT NULL DEFAULT 7;
+
+ALTER TABLE credential_acts DROP CONSTRAINT credential_acts_kind_check;
+ALTER TABLE credential_acts ADD CONSTRAINT credential_acts_kind_check CHECK (kind IN ('pin_change', 'member_reset',
+  'phone_change', 'lock_release', 'signatory_reset_request', 'signatory_phone_request', 'signatory_approval',
+  'ledger_batch', 'guarantee', 'guarantee_withdrawal', 'approval_signature', 'approval_rejection',
+  'contribution_record', 'withdrawal_payout', 'withdrawal_authorisation', 'withdrawal_request'));
+ALTER TABLE auth_proofs DROP CONSTRAINT proof_act_kind_known;
+ALTER TABLE auth_proofs ADD CONSTRAINT proof_act_kind_known CHECK (act_kind IS NULL OR act_kind IN (
+  'ledger_batch', 'pin_change', 'member_reset', 'phone_change', 'lock_release', 'signatory_reset_request',
+  'signatory_phone_request', 'signatory_approval', 'guarantee', 'guarantee_withdrawal', 'approval_signature',
+  'approval_rejection', 'contribution_record', 'withdrawal_payout', 'withdrawal_authorisation', 'withdrawal_request'));
+
+-- ---- an author, on their own step-up ---------------------------------------------
 CREATE FUNCTION withdrawal_request_authored() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   a RECORD;
@@ -15,25 +71,33 @@ BEGIN
     PERFORM auth_refuse('withdrawal_request_names_raiser', 'a withdrawal request names who raised it: a request that moves money has an author');
   END IF;
   IF NEW.act_id IS NULL THEN
-    PERFORM auth_refuse('withdrawal_request_needs_step_up', 'a withdrawal request is raised on its raisers own PIN step-up: it names its act');
+    PERFORM auth_refuse('withdrawal_request_needs_step_up', 'a withdrawal request is raised on its raiser''s own PIN step-up: it names its act');
   END IF;
+  -- Each of the act's conditions runs only when an act is named: a missing act
+  -- is the rule above's alone.
   IF NEW.act_id IS NOT NULL THEN
     SELECT kind, actor_user_id, act_xid INTO a FROM credential_acts WHERE id = NEW.act_id;
     -- A missing raiser is the raiser rule's alone: compared only when one is named.
     IF NEW.raised_by_user_id IS NOT NULL AND a.actor_user_id IS DISTINCT FROM NEW.raised_by_user_id THEN
-      PERFORM auth_refuse('withdrawal_request_act_is_raisers', 'a request rests on its raisers own step-up, not someone elses');
+      PERFORM auth_refuse('withdrawal_request_act_is_raisers', 'a request rests on its raiser''s own step-up, not someone else''s');
     END IF;
     IF a.kind IS DISTINCT FROM 'withdrawal_request' THEN
       PERFORM auth_refuse('withdrawal_request_act_kind', format('a withdrawal request rests on a withdrawal_request act, not %s', a.kind));
     END IF;
     IF a.act_xid IS DISTINCT FROM pg_current_xact_id() THEN
-      PERFORM auth_refuse('withdrawal_request_act_same_transaction', 'the act and the request are one event: the act is written in the requests transaction');
+      PERFORM auth_refuse('withdrawal_request_act_same_transaction', 'the act and the request are one event: the act is written in the request''s transaction');
     END IF;
   END IF;
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r1_authored BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_authored();
+
+-- One step-up raises once: an act is spent by one request.
+CREATE UNIQUE INDEX approval_requests_act_once ON approval_requests (act_id) WHERE act_id IS NOT NULL;
+
+-- The member it pays, or an officer of the society for them. (The API allows
+-- only the treasurer and the secretary: see the header.)
 CREATE FUNCTION withdrawal_request_raiser_admissible() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.kind <> 'withdrawal_out' OR NEW.raised_by_user_id IS NULL THEN
@@ -47,6 +111,8 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r2_raiser BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_raiser_admissible();
+
+-- ---- the server sets the expiry --------------------------------------------------
 CREATE FUNCTION withdrawal_request_window() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.kind <> 'withdrawal_out' THEN
@@ -60,6 +126,8 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r3_window BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_window();
+
+-- ---- a resubmission is for the same member ---------------------------------------
 CREATE FUNCTION resubmission_same_member() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.resubmits_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM approval_requests o
@@ -72,6 +140,10 @@ END $$ LANGUAGE plpgsql;
 -- that is not of a rejected request of this society is that rule's to refuse.
 CREATE TRIGGER approval_requests_resubmission_same_member BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION resubmission_same_member();
+
+-- ---- within withdrawable when raised ---------------------------------------------
+-- The same arithmetic as the hold's (0012), less what open holds have already
+-- authorised: refusing early respects the signatories' time.
 CREATE FUNCTION withdrawal_request_within_withdrawable() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   q        RECORD;
@@ -108,6 +180,8 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r5_withdrawable BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_within_withdrawable();
+
+-- ---- a request no quorum can approve ---------------------------------------------
 CREATE FUNCTION withdrawal_request_reachable() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_member_user UUID;
@@ -117,8 +191,8 @@ BEGIN
     RETURN NEW;
   END IF;
   -- Who may sign it: the society's current signatories, by PERSON, less the
-  -- raiser and the member it pays (neither signs). Fewer than the quorum, and
-  -- the request could only sit collecting signatures until it expired.
+  -- raiser and the member it pays (neither signs). Fewer than the request's
+  -- quorum, and it could only sit collecting signatures until it expired.
   SELECT user_id INTO v_member_user FROM members WHERE id = NEW.member_id;
   SELECT count(DISTINCT m.user_id) INTO v_eligible
     FROM appointments a JOIN members m ON m.id = a.member_id
@@ -133,6 +207,8 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER approval_requests_withdrawal_r6_reachable BEFORE INSERT ON approval_requests
   FOR EACH ROW EXECUTE FUNCTION withdrawal_request_reachable();
+
+-- ---- the raiser never signs (§10, "raises") --------------------------------------
 CREATE FUNCTION signature_not_raiser() RETURNS trigger SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM approval_requests r JOIN members sm ON sm.id = NEW.member_id
@@ -143,7 +219,9 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER signatory_approvals_raiser_never_signs BEFORE INSERT ON signatory_approvals
   FOR EACH ROW EXECUTE FUNCTION signature_not_raiser();
-CREATE OR REPLACE FUNCTION operator_set_withdrawal_request_days(p_society UUID, p_days INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+
+-- ---- the operator sets the window (as 0014's settings) ---------------------------
+CREATE FUNCTION operator_set_withdrawal_request_days(p_society UUID, p_days INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_old SMALLINT;
 BEGIN
@@ -160,6 +238,5 @@ BEGIN
   INSERT INTO society_settings_log (society_id, setting, old_value, new_value, operator_name, server_login, resolution_ref, resolution_date, reason)
     VALUES (p_society, 'withdrawal_request_days', v_old::text, p_days::text, p_operator, p_login, p_ref, p_date, p_reason);
 END $$ LANGUAGE plpgsql;
--- One step-up raises once: an act is spent by one request.
-CREATE UNIQUE INDEX approval_requests_act_once ON approval_requests (act_id) WHERE act_id IS NOT NULL;
+REVOKE EXECUTE ON FUNCTION operator_set_withdrawal_request_days(p_society UUID, p_days INT, p_operator TEXT, p_login TEXT, p_ref TEXT, p_date DATE, p_reason TEXT) FROM PUBLIC;
 COMMIT;

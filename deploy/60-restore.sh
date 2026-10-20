@@ -110,7 +110,7 @@ if [[ $mode == drill ]]; then
   # against what the restore brought back.)
   covered=()
   suites=(
-    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit)"
+    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit|TestRaise)"
     "auth (0003)|^TestAuth|"
     "roles (0004)|^TestRole|"
     "statement API|^TestApiStatement|"
@@ -129,11 +129,13 @@ if [[ $mode == drill ]]; then
     "approvals API|^TestApiApprovals|"
     "money API|^TestApiMoney|"
     "who am I (GET /me)|^TestApiMe[0-9]|"
+    "withdrawal requests API|^TestApiRequests|"
     "contributions and withdrawals (0011)|^TestMoney|"
     "the payout hold (0012)|^TestPayout|"
     "VAT on Argon's own fee (0013)|^TestVAT|"
     "the operator's functions (0014)|^TestOperator|"
     "nobody benefits from what they authorise or attest (0015)|^TestBenefit|"
+    "a withdrawal request has an author (0016)|^TestRaise|"
   )
   for suite in "${suites[@]}"; do
     IFS='|' read -r name re skip <<<"$suite"

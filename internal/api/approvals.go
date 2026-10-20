@@ -68,17 +68,18 @@ func (s *server) approvalView(ctx context.Context, r approvalRow, projection str
 		AmountKobo: Magnitude(koboOf(r.amount)), MemberId: uuidPtr(r.member), LoanId: uuidPtr(r.loan), Reason: r.reason,
 		Required: r.required, RaisedAt: r.raised, ExpiresAt: r.expires, Projection: ApprovalViewProjection(projection)}
 	var st string
-	var resubmits *string
+	var resubmits, raisedBy *string
 	if err := s.db.QueryRow(ctx, `SELECT approval_status($1)::text, (SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1),
-		  (SELECT resubmits_id::text FROM approval_requests WHERE id = $1)`,
-		r.id).Scan(&st, &v.SignedCount, &resubmits); err != nil {
+		  (SELECT resubmits_id::text FROM approval_requests WHERE id = $1), (SELECT raised_by_user_id::text FROM approval_requests WHERE id = $1)`,
+		r.id).Scan(&st, &v.SignedCount, &resubmits, &raisedBy); err != nil {
 		return v, err
 	}
-	// raisedBy waits on 0016's column (NULL until then, as for a request raised
-	// before it); resubmitsId has been carried since 0007.
 	v.ResubmitsId = uuidPtr(resubmits)
 	v.Status = ApprovalStatus(st)
 	if projection == "officer" {
+		// Who raised it (0016; null for a request raised before it): officers
+		// only. The member is told progress, never who.
+		v.RaisedBy = uuidPtr(raisedBy)
 		rows, err := s.db.Query(ctx, `SELECT user_id::text, member_id::text, post_at_signing::text, signed_at
 			FROM signatory_approvals WHERE request_id = $1 ORDER BY signed_at, id`, r.id)
 		if err != nil {
@@ -236,6 +237,8 @@ func (s *server) SignApproval(ctx context.Context, req SignApprovalRequestObject
 			return SignApproval403JSONResponse(Problem{Code: "not_a_signatory", Message: "you hold no current signing post in this society"}), nil
 		case c == "borrower_never_signs_own_loan" || c == "signatory_not_guarantor":
 			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: "the borrower and the guarantors of a loan never sign its requests"}), nil
+		case c == "raiser_never_signs": // §10, "raises" (0016)
+			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: "you raised this request: nobody signs a request they raised. Another signatory signs it"}), nil
 		case c == "signature_before_expiry" || c == "signature_on_open_request":
 			return SignApproval409JSONResponse(Problem{Code: "request_closed", Message: "this request has expired or been rejected"}), nil
 		case c == "signatory_approvals_one_per_user":
