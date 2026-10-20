@@ -359,8 +359,9 @@ func TestApiRequests20_MoneyIsAStringOnTheWire(t *testing.T) {
 func TestApiRequests21_ARequestNoQuorumCanApproveIsRefused(t *testing.T) {
 	w := newMoneyAPI(t)
 	// The secretary's term, held since 2020-01-01, ended yesterday: an end
-	// after its start (range_sane, 0001, refuses any other), read back so a
-	// missing appointment stops here rather than building another world.
+	// after its start (the database refuses any other, though for a signatory
+	// with PostgreSQL's range error, not range_sane: finding 45), read back so
+	// a missing appointment stops here rather than building another world.
 	var from string
 	fixture(t, db.QueryRow(bg(), `UPDATE appointments SET held_until = current_date - 1
 		WHERE member_id = $1 AND held_until IS NULL RETURNING held_from::text`, w.secMem).Scan(&from), "the secretary's appointment ended")
