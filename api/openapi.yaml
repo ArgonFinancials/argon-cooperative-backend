@@ -729,7 +729,8 @@ components:
     ApprovalView:
       type: object
       required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
-                 projection, status, signedCount, signatures, rejection, escalated, nextStep, raisedBy, resubmitsId]
+                 projection, status, signedCount, signatures, rejection, escalated, nextStep, raisedBy, resubmitsId,
+                 authorisedCharges]
       properties:
         requestId: { type: string, format: uuid }
         societyId: { type: string, format: uuid }
@@ -785,6 +786,15 @@ components:
           format: uuid
           nullable: true
           description: The rejected request this one replaces, if it is a resubmission. Both projections.
+        authorisedCharges:
+          nullable: true
+          description: |
+            THE FINAL CHARGE: fixed when the payout was authorised (its hold),
+            from the society's series in force that day. NULL until then. Both
+            projections: this is where the member is told the figure that
+            applies. A quote before it (GET /members/{id}/withdrawal-quote) is
+            indicative only.
+          allOf: [{ $ref: '#/components/schemas/Charges' }]
 
     ApprovalList:
       type: object
@@ -853,6 +863,86 @@ components:
         statutoryLevyKobo: { $ref: '#/components/schemas/Magnitude' }
         argonMarginKobo: { $ref: '#/components/schemas/Magnitude' }
         totalKobo: { $ref: '#/components/schemas/Magnitude' }
+
+    Deduction:
+      type: object
+      required: [kind, amountKobo, reason, loanId, borrowerName]
+      description: |
+        One thing standing between a member's savings and what they may
+        withdraw, with WHY, as a sentence to show as written. A member whose
+        figure is smaller than their savings is told what took it, not only
+        that something did.
+      properties:
+        kind:
+          type: string
+          enum: [floor, guarantee, authorised_payout]
+          description: |
+            floor: the society's minimum balance. guarantee: a loan the member
+            guarantees, held IN FULL (the loan's whole outstanding balance: the
+            conservative default until the society decides how much a guarantor
+            answers for). authorised_payout: payouts already authorised (held)
+            and not yet paid or released, their charges included.
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        reason: { type: string }
+        loanId: { type: string, format: uuid, nullable: true, description: The guaranteed loan; guarantee only. }
+        borrowerName: { type: string, nullable: true, description: Whose loan; guarantee only. }
+
+    Withdrawable:
+      type: object
+      required: [memberId, asOf, savingsBalanceKobo, withdrawableKobo, unavailable, deductions]
+      description: |
+        A member's savings and what they may withdraw now. The withdrawable
+        figure is the savings less every deduction, never below zero, and A
+        WITHDRAWAL'S CHARGE COMES OUT OF IT: a request is accepted when the
+        amount and its charge together fit (0016 checks exactly this when it is
+        raised, and the hold again before money moves). Ask
+        GET /members/{id}/withdrawal-quote for a given amount.
+      properties:
+        memberId: { type: string, format: uuid }
+        asOf: { type: string, format: date-time }
+        savingsBalanceKobo:
+          $ref: '#/components/schemas/SavingsBalance'
+          description: ALWAYS shown, whatever else cannot be worked out.
+        withdrawableKobo:
+          nullable: true
+          description: NULL when it cannot be worked out; `unavailable` says why.
+          allOf: [{ $ref: '#/components/schemas/Magnitude' }]
+        unavailable:
+          nullable: true
+          description: Why withdrawableKobo is NULL (floor_unset), in words to show. NULL when it is shown.
+          allOf: [{ $ref: '#/components/schemas/Problem' }]
+        deductions:
+          type: array
+          description: Everything deducted, with why. Empty, never null.
+          items: { $ref: '#/components/schemas/Deduction' }
+
+    WithdrawalQuote:
+      type: object
+      required: [memberId, amountKobo, charges, totalOutKobo, withinWithdrawable, indicative, quotedOn, note]
+      description: |
+        WHAT A WITHDRAWAL OF THIS AMOUNT WOULD COST TODAY. INDICATIVE, NOT
+        BINDING: the charge that applies is fixed when the payout is authorised
+        (its hold), from the society's series in force that day, and is shown
+        on the request (authorisedCharges). If the series changes between the
+        two, the hold's figure applies.
+      properties:
+        memberId: { type: string, format: uuid }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        charges: { $ref: '#/components/schemas/Charges' }
+        totalOutKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The amount and its charges together, what leaves the member's savings.
+        withinWithdrawable:
+          type: boolean
+          nullable: true
+          description: Whether the total fits the member's withdrawable figure now; NULL when that figure cannot be worked out.
+        indicative:
+          type: boolean
+          description: Always true. Present so that no client can mistake a quote for the charge.
+        quotedOn: { type: string, format: date }
+        note:
+          type: string
+          description: The sentence to show beside a quote, saying it is indicative and when the figure is fixed.
 
     Discrepancy:
       type: object
@@ -2024,6 +2114,76 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
           description: "No such member, or not the caller's own."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/withdrawable:
+    get:
+      operationId: getMemberWithdrawable
+      summary: A member's savings, what they may withdraw now, and what was deducted and why
+      description: |
+        For the member, and for an officer of the member's society (who raises
+        for a member without a phone). Anyone else gets 404, identical to a
+        member that does not exist. The savings are always shown; the
+        withdrawable figure is NULL with the reason when it cannot be worked
+        out (the society has set no floor).
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The member's position.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Withdrawable' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not one the caller may read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/withdrawal-quote:
+    get:
+      operationId: getWithdrawalQuote
+      summary: What a withdrawal of an amount would cost today (indicative)
+      description: |
+        The society's series in force today, applied to the amount; whether
+        the amount and its charges fit the member's withdrawable figure.
+        INDICATIVE: the charge is fixed when the payout is authorised. Same
+        readers as /withdrawable.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: amountKobo, in: query, required: true, schema: { $ref: '#/components/schemas/Magnitude' } }
+      responses:
+        '200':
+          description: The quote.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WithdrawalQuote' }
+        '400':
+          description: "amountKobo is not a non-negative kobo string."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not one the caller may read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "not_configured: the society's charges cannot be determined for this amount (a component or band not set), with the database's reason."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

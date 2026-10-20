@@ -122,6 +122,11 @@ func (f *fakeAPI) apprView(ctx context.Context, r apprRow, projection string) (a
 		f.db.QueryRow(ctx, `SELECT raised_by_user_id::text FROM approval_requests WHERE id = $1`, r.id).Scan(&by)
 		v.RaisedBy = uuidPtr(by)
 	}
+	// The final charge, once a hold fixes it (both projections; see the
+	// balance fake). Before 0012 there are no holds, and so no charge.
+	if r.kind == "withdrawal_out" {
+		v.AuthorisedCharges = f.authorisedChargesOf(ctx, r.id, r.amount, r.society)
+	}
 	f.db.QueryRow(ctx, `SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1`, r.id).Scan(&v.SignedCount)
 	if projection == "officer" && f.brk != "appr_officer_unnamed" || projection == "member" && f.brk == "appr_member_sees_names" {
 		rows, err := f.db.Query(ctx, `SELECT user_id::text, member_id::text, post_at_signing::text, signed_at
