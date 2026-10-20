@@ -15,6 +15,8 @@
 //	bal_guarantee_unexplained     a guarantee is deducted, but says only "held", naming nobody
 //	bal_guarantee_ignored         guarantees hold nothing back
 //	bal_repaid_listed             a loan repaid in full is listed, holding ₦0
+//	bal_repaid_settled            a guarantee seen at zero is settled for good (a transition): a loan that owes again holds nothing
+//	bal_zero_hides_savings        a figure of 0 shows savings of 0, as if the account were empty
 //	bal_floor_unset_zero          no floor: the figure reads 0, as if the member had nothing
 //	bal_floor_unset_hides_savings no floor: the whole answer is refused, savings with it
 //	bal_holds_ignored             authorised, unpaid payouts are not spoken for
@@ -31,12 +33,16 @@ package tier1
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/argon/backend/internal/api"
 )
+
+// settledGuarantees: the state bal_repaid_settled keeps (test code only).
+var settledGuarantees sync.Map
 
 const quoteNote = "This quote is indicative: the charge is fixed when the payout is authorised, from your society's charges that day, and you will be shown it then."
 
@@ -105,6 +111,16 @@ func (f *fakeAPI) positionOf(ctx context.Context, society, member string) (posit
 		}
 		rows.Close()
 		for _, x := range gs {
+			if f.brk == "bal_repaid_settled" {
+				// A TRANSITION, not a computation: a guarantee once seen at
+				// zero is settled for good, whatever the loan owes later.
+				if _, done := settledGuarantees.Load(member + "/" + x.loan); done {
+					continue
+				}
+				if x.owed == 0 {
+					settledGuarantees.Store(member+"/"+x.loan, true)
+				}
+			}
 			if x.owed == 0 && f.brk != "bal_repaid_listed" {
 				continue
 			}
@@ -172,6 +188,9 @@ func (f *fakeAPI) GetMemberWithdrawable(ctx context.Context, req api.GetMemberWi
 	if w := f.withdrawableOf(p); w != nil {
 		m := magOf(*w)
 		out.WithdrawableKobo = &m
+		if *w == 0 && f.brk == "bal_zero_hides_savings" {
+			out.SavingsBalanceKobo = "0"
+		}
 	} else {
 		if f.brk == "bal_floor_unset_hides_savings" {
 			return api.GetMemberWithdrawable404JSONResponse{Code: "not_configured", Message: "this society has not set its account floor"}, nil

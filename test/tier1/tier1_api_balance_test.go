@@ -38,6 +38,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type bDeduction struct {
@@ -134,14 +136,39 @@ func TestApiBalance02_AGuaranteeIsHeldInFullAndSaysWhy(t *testing.T) {
 	}
 }
 
-// A loan repaid in full holds nothing, and is not listed as if it did.
-func TestApiBalance03_ARepaidLoanHoldsNothing(t *testing.T) {
+// A loan repaid in full holds nothing, and is not listed as if it did. The
+// absence is COMPUTED, not a state the guarantee moved into: the guarantee
+// still exists and holds nothing, so when the loan owes again (here the last
+// repayment is reversed, as when a bank returns it) the deduction comes back by
+// itself.
+func TestApiBalance03_ARepaidLoanHoldsNothingUntilItOwesAgain(t *testing.T) {
 	w := newMoneyAPI(t)
-	w.guarantorWorld(t, 0)
+	loan := w.guarantorWorld(t, 300000)
+	last, err := w.repay(loan, 300000)
+	fixture(t, err, "the last ₦3,000 repaid")
 	p := w.position(t, w.g1, w.g1Mem)
 	if g := deductionsOf(p, "guarantee"); len(g) != 0 || p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(loanSavings-floorKobo) {
 		t.Fatalf("HELD — a loan repaid in full: %+v; want no guarantee deduction and %s", p, k(loanSavings-floorKobo))
 	}
+	fixture(t, w.reverse(loan, last, 300000, "The bank returned this repayment: the transfer was recalled"), "the last repayment reversed")
+	p = w.position(t, w.g1, w.g1Mem)
+	if g := deductionsOf(p, "guarantee"); len(g) != 1 || g[0].AmountKobo != k(300000) || *p.WithdrawableKobo != k(loanSavings-300000-floorKobo) {
+		t.Fatalf("SETTLED FOR GOOD — the loan owes ₦3,000 again and the guarantee holds %+v; want the deduction back, computed from what is owed now", p)
+	}
+}
+
+// reverse: a reversal of a repayment of `kobo` on `loan`, a NEW entry pointing
+// at it (0001: the original is never altered).
+func (w *mapi) reverse(loan, original string, kobo int64, reason string) error {
+	return tx(func(x pgx.Tx) error {
+		var id string
+		if err := x.QueryRow(bg(), `INSERT INTO ledger_entries (society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, loan_id, reverses_id, reason)
+			VALUES ($1, 'loan_repayment', '2026-10-06', $2, 'treasurer', 'Treasurer', $3, $4, $5) RETURNING id`,
+			w.c.s.id, w.c.s.actor, loan, original, reason).Scan(&id); err != nil {
+			return err
+		}
+		return w.c.s.insertLines(x, id, line{acct: w.c.loan, kobo: kobo, member: w.bMem}, line{acct: w.c.bank, kobo: -kobo})
+	})
 }
 
 // D2: the society has set no floor. Savings shown; the figure NULL, with why.
@@ -175,13 +202,18 @@ func TestApiBalance05_AnAuthorisedPayoutIsSpokenFor(t *testing.T) {
 }
 
 // Owing more on the guaranteed loan than they saved: nothing to withdraw,
-// never a negative figure.
-func TestApiBalance06_NeverBelowZero(t *testing.T) {
+// never a negative figure. And the savings beside it, with the deduction
+// that took it: "you can withdraw ₦0" alone reads as an error or an empty
+// account.
+func TestApiBalance06_NeverBelowZeroAndTheSavingsBesideIt(t *testing.T) {
 	w := newMoneyAPI(t)
 	w.guarantorWorld(t, loanPrincipal)
 	p := w.position(t, w.g1, w.g1Mem)
 	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != "0" {
 		t.Fatalf("WRONG FIGURE — %+v; want 0 (₦24,000 held against ₦10,000 saved), never below", p)
+	}
+	if g := deductionsOf(p, "guarantee"); p.SavingsBalanceKobo != k(loanSavings) || len(g) != 1 || g[0].AmountKobo != k(loanPrincipal) {
+		t.Fatalf("UNEXPLAINED ZERO — %+v; want the ₦10,000 saved shown beside the 0, and the ₦24,000 guarantee that took it", p)
 	}
 }
 
