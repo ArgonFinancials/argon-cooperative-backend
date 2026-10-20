@@ -152,7 +152,10 @@ if [[ -f $REPO_DIR/$SUITE_GREEN_NEEDS ]]; then
       printf '   \033[32mprobe passes as argon_app ✓\033[0m\n'
     else
       printf '   \033[31mPROBE FAILED as argon_app ✗\033[0m — the rule may be right and the app unable to live with it:\n'
-      sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | grep -E 'ERROR|✗ [^G]|FAILED|FATAL' | grep -v '✗ GAP' | head -15 | sed 's/^/     /'
+      # `|| true`: under lib.sh's errexit and pipefail a grep that matches
+      # nothing ENDED THIS SCRIPT here, before the last lines below, and the
+      # trap deleted the probe's log: a failure with no reason (finding 47).
+      { sed 's/\x1b\[[0-9;]*m//g' "$out/probe.log" | grep -E 'ERROR|✗ [^G]|FAILED|FATAL' | grep -v '✗ GAP' | head -15 | sed 's/^/     /'; } || true
       # Always the last lines too: a probe that dies before its report (a
       # missing tool, a fixture) matches none of the above, and a failure
       # with no reason shown is the dangerous kind.
