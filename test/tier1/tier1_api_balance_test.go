@@ -249,16 +249,23 @@ func TestApiBalance07_TheFigureShownIsTheFigureEnforced(t *testing.T) {
 	wantProblem(t, r, http.StatusUnprocessableEntity, "exceeds_withdrawable", "one kobo more than the quote says fits")
 }
 
-// D5: the member and an officer of the society read it; nobody else.
+// D5 (decided 2026-10-21): READING IS TIED TO THE DUTY. The member; the
+// treasurer and the secretary, who raise for a member without a phone; the
+// auditor, whose task is auditing. A member's savings are their personal
+// position, not the society's books: an officer whose duty does not need it
+// (the chairman) gets the same 404 as anyone else.
 func TestApiBalance08_WhoReads(t *testing.T) {
 	w := newMoneyAPI(t)
 	own := w.position(t, w.borrower, w.bMem)
-	off := w.position(t, w.secretary, w.bMem)
-	if off.WithdrawableKobo == nil || own.WithdrawableKobo == nil || *off.WithdrawableKobo != *own.WithdrawableKobo {
-		t.Fatalf("REFUSED — the secretary, raising for a member without a phone, must see the member's figure: %+v", off)
+	for who, u := range map[string]string{"the treasurer": w.poster, "the secretary": w.secretary, "the internal auditor": w.auditor} {
+		off := w.position(t, u, w.bMem)
+		if off.WithdrawableKobo == nil || own.WithdrawableKobo == nil || *off.WithdrawableKobo != *own.WithdrawableKobo {
+			t.Fatalf("REFUSED — %s, whose duty needs it, must see the member's figure: %+v", who, off)
+		}
 	}
 	none := w.withdrawable(t, w.g1, noSuchRow)
-	for who, u := range map[string]string{"another member": w.g1, "the treasurer of another society": w.abroad} {
+	for who, u := range map[string]string{"another member": w.g1, "the treasurer of another society": w.abroad,
+		"the chairman (no duty needs a member's savings)": w.s2} {
 		if r := w.withdrawable(t, u, w.bMem); r.status != http.StatusNotFound || string(r.body) != string(none.body) {
 			t.Fatalf("ACCEPTED — %s read the borrower's savings: %d %s", who, r.status, r.body)
 		}

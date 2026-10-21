@@ -29,6 +29,7 @@ declare -gA SVC_TARGET_OF=(
   [bal_negative]='TestApiBalance06_NeverBelowZeroAndTheSavingsBesideIt'
   [bal_quote_ignores_charges]='TestApiBalance07_TheFigureShownIsTheFigureEnforced'
   [bal_anyone_reads]='TestApiBalance08_WhoReads'
+  [bal_any_officer_reads]='TestApiBalance08_WhoReads'
   [bal_officer_refused]='TestApiBalance08_WhoReads'
   [bal_quote_binding]='TestApiBalance09_AQuoteSaysItIsIndicative'
   [bal_quote_stale]='TestApiBalance10_TheHoldsChargeAppliesAndTheMemberIsShownIt'

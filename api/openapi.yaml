@@ -2134,9 +2134,14 @@ paths:
       operationId: getMemberWithdrawable
       summary: A member's savings, what they may withdraw now, and what was deducted and why
       description: |
-        For the member, and for an officer of the member's society (who raises
-        for a member without a phone). Anyone else gets 404, identical to a
-        member that does not exist. The savings are always shown; the
+        READING IS TIED TO THE DUTY (decided 2026-10-21): the member; the
+        treasurer and the secretary of the member's society, who raise for a
+        member without a phone; and the internal auditor, whose task it is. A
+        member's savings are their personal position, not the society's books:
+        any other officer (the chairman included) gets 404, identical to a
+        member that does not exist, as does anyone else. A member does NOT yet
+        see who read their figure (an open gap, deploy/README.md finding 50).
+        The savings are always shown; the
         withdrawable figure is NULL with the reason when it cannot be worked
         out (the society has set no floor).
       security: [{ session: [] }]

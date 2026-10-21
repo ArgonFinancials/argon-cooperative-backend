@@ -24,7 +24,8 @@
 //	bal_quote_ignores_charges     a quote "fits" when the amount alone fits, its charge forgotten
 //	bal_quote_reason_dropped      no floor: the quote's withinWithdrawable is null with no reason beside the fee
 //	bal_anyone_reads              any member of the society reads another's savings
-//	bal_officer_refused           (over-strict) an officer of the society may not read a member's figure
+//	bal_officer_refused           (over-strict) the treasurer, secretary and auditor may not read a member's figure
+//	bal_any_officer_reads         any officer reads a member's savings (the chairman), not only those whose duty needs it
 //	bal_quote_binding             a quote presents itself as the charge
 //	bal_quote_stale               a quote prices on the series in force long ago, not today's
 //	bal_final_charge_hidden       the hold's charge is never shown on the request
@@ -45,6 +46,9 @@ import (
 // settledGuarantees: the state bal_repaid_settled keeps (test code only).
 var settledGuarantees sync.Map
 
+// balanceReaders: the posts whose duty needs a member's figure (D5).
+var balanceReaders = []string{"treasurer", "secretary", "internal_auditor"}
+
 const quoteNote = "This quote is indicative: the charge is fixed when the payout is authorised, from your society's charges that day, and you will be shown it then."
 
 func magOf(n int64) api.Magnitude { return api.Magnitude(strconv.FormatInt(n, 10)) }
@@ -61,7 +65,9 @@ func (f *fakeAPI) balanceReader(ctx context.Context, caller, member string) (str
 	if f.beneficiaryOf(ctx, caller, member) {
 		return society, true
 	}
-	if f.officerHere(ctx, caller, society) {
+	// Reading is tied to the duty: the treasurer and the secretary (who raise
+	// for a member), the auditor (whose task it is). Not any officer.
+	if f.moneyPost(ctx, caller, society, balanceReaders, f.brk == "bal_any_officer_reads") != "" {
 		return society, f.brk != "bal_officer_refused"
 	}
 	return society, f.brk == "bal_anyone_reads" && f.memberOfSociety(ctx, caller, society)
