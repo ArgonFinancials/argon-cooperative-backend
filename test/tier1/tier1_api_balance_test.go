@@ -58,6 +58,7 @@ type bQuote struct {
 	AmountKobo, TotalOutKobo, QuotedOn, Note string
 	Charges                                  mCharges
 	WithinWithdrawable                       *bool
+	WithdrawableUnavailable                  *struct{ Code, Message string }
 	Indicative                               bool
 }
 
@@ -182,6 +183,14 @@ func TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest(t *testing.T) {
 	}
 	if p.WithdrawableKobo != nil || p.Unavailable == nil || p.Unavailable.Code != "floor_unset" || !strings.Contains(p.Unavailable.Message, "minimum balance") {
 		t.Fatalf("WRONG — %s; want withdrawableKobo null and floor_unset, saying the society has not set its minimum balance", r.body)
+	}
+	// The quote still prices the fee; whether it fits is unknown, and the quote
+	// says WHY beside the fee, or the fee reads as the live part of the screen
+	// and the blank beside it as a loading state.
+	q := w.quoteVia(t, w.borrower, w.bMem, payKobo)
+	if q.Charges.TotalKobo != "1075" || q.WithinWithdrawable != nil || q.WithdrawableUnavailable == nil ||
+		q.WithdrawableUnavailable.Code != "floor_unset" || q.WithdrawableUnavailable.Message != p.Unavailable.Message {
+		t.Fatalf("UNEXPLAINED BLANK — the quote with no floor: %+v; want the fee, withinWithdrawable null, and the same floor_unset reason as /withdrawable", q)
 	}
 }
 

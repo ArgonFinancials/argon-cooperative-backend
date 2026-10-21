@@ -21,6 +21,7 @@ declare -gA SVC_TARGET_OF=(
   [bal_guarantee_ignored]='TestApiBalance02_AGuaranteeIsHeldInFullAndSaysWhy|TestApiBalance06_NeverBelowZeroAndTheSavingsBesideIt'
   [bal_repaid_listed]='TestApiBalance03_ARepaidLoanHoldsNothingUntilItOwesAgain'
   [bal_floor_unset_zero]='TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest'
+  [bal_quote_reason_dropped]='TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest'
   [bal_floor_unset_hides_savings]='TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest'
   [bal_holds_ignored]='TestApiBalance05_AnAuthorisedPayoutIsSpokenFor'
   [bal_repaid_settled]='TestApiBalance03_ARepaidLoanHoldsNothingUntilItOwesAgain'

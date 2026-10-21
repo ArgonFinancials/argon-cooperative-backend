@@ -22,6 +22,7 @@
 //	bal_holds_ignored             authorised, unpaid payouts are not spoken for
 //	bal_negative                  the figure goes below zero
 //	bal_quote_ignores_charges     a quote "fits" when the amount alone fits, its charge forgotten
+//	bal_quote_reason_dropped      no floor: the quote's withinWithdrawable is null with no reason beside the fee
 //	bal_anyone_reads              any member of the society reads another's savings
 //	bal_officer_refused           (over-strict) an officer of the society may not read a member's figure
 //	bal_quote_binding             a quote presents itself as the charge
@@ -240,6 +241,9 @@ func (f *fakeAPI) GetWithdrawalQuote(ctx context.Context, req api.GetWithdrawalQ
 		}
 		fits := out <= *w
 		q.WithinWithdrawable = &fits
+	} else if f.brk != "bal_quote_reason_dropped" {
+		u := floorUnset
+		q.WithdrawableUnavailable = &u
 	}
 	return api.GetWithdrawalQuote200JSONResponse(q), nil
 }

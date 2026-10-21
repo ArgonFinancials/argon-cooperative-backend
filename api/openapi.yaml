@@ -918,7 +918,7 @@ components:
 
     WithdrawalQuote:
       type: object
-      required: [memberId, amountKobo, charges, totalOutKobo, withinWithdrawable, indicative, quotedOn, note]
+      required: [memberId, amountKobo, charges, totalOutKobo, withinWithdrawable, withdrawableUnavailable, indicative, quotedOn, note]
       description: |
         WHAT A WITHDRAWAL OF THIS AMOUNT WOULD COST TODAY. INDICATIVE, NOT
         BINDING: the charge that applies is fixed when the payout is authorised
@@ -935,7 +935,18 @@ components:
         withinWithdrawable:
           type: boolean
           nullable: true
-          description: Whether the total fits the member's withdrawable figure now; NULL when that figure cannot be worked out.
+          description: |
+            Whether the total fits the member's withdrawable figure now. NULL
+            when that figure cannot be worked out: "we cannot tell whether this
+            fits", never "it does not fit". withdrawableUnavailable then says why.
+        withdrawableUnavailable:
+          nullable: true
+          description: |
+            Why withinWithdrawable is NULL, the same reason /withdrawable gives
+            (floor_unset), in words to show BESIDE the fee: without it a
+            confident fee reads as the live part of the screen and the blank
+            beside it as a loading state. NULL when withinWithdrawable is set.
+          allOf: [{ $ref: '#/components/schemas/Problem' }]
         indicative:
           type: boolean
           description: Always true. Present so that no client can mistake a quote for the charge.
