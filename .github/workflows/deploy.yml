@@ -49,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ["0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", stepup, api, batch, stepup_api, signin_api, books, loans_api, approvals_api, money_api, me_api, requests_api]
+        suite: ["0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", stepup, api, batch, stepup_api, signin_api, books, loans_api, approvals_api, money_api, me_api, requests_api, balance_api]
     services:
       postgres:
         image: postgres:18-trixie
@@ -112,6 +112,17 @@ jobs:
         if: matrix.suite == '0014'
         run: bash test/ops/society_settings_test.sh
 
+  # Every suite runs here, or this fails (finding 52): the matrix above is a
+  # list written by hand, and balance_api reached main without ever running.
+  # Compared with the suite files both ways, and with mutate.sh's list.
+  suite-list:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every suite is in the matrix and in mutate.sh, and nothing else is
+        run: bash scripts/check-suite-list.sh
+
   # The gate: who, and which commit. Its own job so a refusal comes in seconds
   # and the deploy job never starts. Inputs reach the script as environment
   # variables, never as text pasted into it.
@@ -135,7 +146,7 @@ jobs:
           echo "deploying ${GITHUB_SHA:0:12}, confirmed by $ACTOR"
 
   deploy:
-    needs: [gate, tier1]
+    needs: [gate, tier1, suite-list]
     # Never on a push: only a person running the workflow by hand, on main.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

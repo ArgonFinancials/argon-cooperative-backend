@@ -10,11 +10,18 @@
 #   - the working tree must be CLEAN: no staged, unstaged or untracked change.
 #     Anything there is work that was meant to be in a commit and is not.
 #   - the commits about to go are listed, so the push is a decision about them.
+#   - every suite must be in the CI matrix and in mutate.sh (finding 52).
 # And after:
 #   - the remote's main must BE the local HEAD, read back from the remote,
 #     not taken from push's own report.
+#   - CI must PASS on it (finding 51): a push that landed is not a push that
+#     was verified. From 19 to 21 October four pushes went red for two days
+#     and nothing read it. This waits for the run and fails with GitHub's own
+#     reason; it takes as long as CI does (minutes), by design.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+bash scripts/check-suite-list.sh || { echo "REFUSED: a suite would not run in CI or in mutate.sh (above)" >&2; exit 1; }
 
 dirty=$(git status --porcelain)
 if [[ -n $dirty ]]; then
@@ -37,3 +44,7 @@ if [[ $landed != "$intended" ]]; then
   exit 1
 fi
 echo "main is now ${landed:0:7}, read back from the remote: what was intended"
+if ! bash scripts/ci-result.sh "$intended"; then
+  echo "PUSHED BUT NOT VERIFIED: main is ${landed:0:7} and CI did not pass on it (above). Say so to the reviewer now." >&2
+  exit 1
+fi
