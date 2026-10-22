@@ -69,11 +69,11 @@ jobs:
         with:
           python-version: "3.13"
       - name: PostgreSQL 18 client (the server's major)
-        run: |
-          sudo apt-get install -y -q postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -q postgresql-client-18
-          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+        # A stalled package mirror once hung this step for 40+ minutes, saying
+        # nothing (2026-10-22). The script fails fast and says it is CI setup,
+        # not a test; this limit is the backstop.
+        timeout-minutes: 10
+        run: bash scripts/ci-pg-client.sh
       - name: Env file (TARGET=local against the service container)
         run: |
           pw() { openssl rand -base64 24 | tr -d '/+='; }
@@ -112,6 +112,33 @@ jobs:
         if: matrix.suite == '0014'
         run: bash test/ops/society_settings_test.sh
 
+  # The client install's FAILURE PATH, made to fire on every push (a failure
+  # path is proven by making it fire, finding 47). apt is pointed at a proxy
+  # that never answers (TEST-NET-1, RFC 5737), and the real install script must
+  # fail FAST and SAY it is CI setup, not a test. This job passes only if it
+  # does; a script that hangs or reports success fails it.
+  ci-setup-selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: A stalled mirror fails fast and says so
+        run: |
+          printf 'Acquire::http::Proxy "http://192.0.2.1:3128";\nAcquire::https::Proxy "http://192.0.2.1:3128";\n' | sudo tee /etc/apt/apt.conf.d/99-never-answers >/dev/null
+          sudo rm -rf /var/lib/apt/lists/*
+          start=$(date +%s)
+          set +e
+          CI_APT_ATTEMPT_SECONDS=45 bash scripts/ci-pg-client.sh > out.log 2>&1
+          rc=$?
+          set -e
+          took=$(( $(date +%s) - start ))
+          tail -15 out.log
+          echo "exit $rc after ${took}s"
+          [[ $rc == 1 ]] || { echo "::error::the install did not fail against a mirror that never answers (exit $rc)"; exit 1; }
+          grep -q "CI SETUP FAILED, NOT A TEST" out.log || { echo "::error::the failure did not say it was CI setup, not a test"; exit 1; }
+          (( took < 240 )) || { echo "::error::it took ${took}s to fail: the cut-off did not fire"; exit 1; }
+          echo "fired as designed: failed in ${took}s, saying it was CI setup, not a test"
+
   # Every suite runs here, or this fails (finding 52): the matrix above is a
   # list written by hand, and balance_api reached main without ever running.
   # Compared with the suite files both ways, and with mutate.sh's list.
@@ -146,7 +173,7 @@ jobs:
           echo "deploying ${GITHUB_SHA:0:12}, confirmed by $ACTOR"
 
   deploy:
-    needs: [gate, tier1, suite-list]
+    needs: [gate, tier1, suite-list, ci-setup-selftest]
     # Never on a push: only a person running the workflow by hand, on main.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
