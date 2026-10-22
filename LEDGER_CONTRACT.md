@@ -206,8 +206,10 @@ does not sum to zero.
 
 Whoever owns this should see what they are actually deciding.
 
-A treasurer posts a member's ₦25,000 contribution twice by mistake. The member
-is charged ₦87.50 on each. The duplicate is reversed. **If Argon retains the
+A treasurer records a member's ₦20,000 withdrawal twice by mistake. The member
+is charged ₦60.75 on each (§7a). The duplicate is reversed. (Until 2026-10-22
+this read as a ₦25,000 contribution charged ₦87.50; contributions now carry no
+charge by default, §9, and §7a was rewritten.) **If Argon retains the
 charge on the reversal, that member is out of pocket for the society's error** —
 they did nothing, they were not asked, and the fee is for a transaction that no
 longer exists in their statement.
@@ -274,27 +276,65 @@ payment provider currently holds. A difference between them is a
 
 Figures in kobo. `₦` shown for readability only.
 
-### 7a. Member contribution of ₦25,000
+### 7a. Member withdrawal of ₦20,000 (rewritten 2026-10-22 under D-07)
 
-`contribution_in`, 0.35% capped at ₦200, borne by the member.
-Charge = `min(20_000, round(2_500_000 × 0.0035))` = **8,750 kobo (₦87.50)**.
+**Superseded:** until 2026-10-22 this example was a ₦25,000 *contribution*
+charged "0.35% capped at ₦200" (₦87.50, split between the partner and Argon).
+That rate came from no source anyone can name, and two later decisions replaced
+it: contributions carry **no charge by default** (§9), and the charge on a
+transfer is **the CBN band, in full, as Argon's own charge, the partner
+component zero** (D-07, §12). A charged contribution is now the exception, so
+the example shows the ordinary charged movement: a withdrawal. The uncharged
+contribution, the case a member sees most often, follows as 7a′.
+
+`withdrawal_out` of ₦20,000, paid to the member's bank account. The charge is
+ON TOP (§9): the member receives the ₦20,000 they asked for. Source: **CBN Guide
+to Charges, 2026 revision**, sourced-pending-confirmation (§12).
+
+**The charge, all four components** (the schema has four; this is the
+structure the example teaches):
+
+| Component | Rule | Kobo |
+|---|---|---:|
+| Partner fee (VFD's charge to Argon) | **ZERO BY DECISION (D-07).** VFD's cost is Argon's business expense, not the member's. Kept so that, if VFD ever reports its fee, there is somewhere to put it; the member's charge would not change. | 0 |
+| Argon's fee | The CBN band, in full: ₦10 on ₦5,000–₦50,000 | 1,000 |
+| VAT on Argon's fee | 7.5% of Argon's fee, its own line (0013) | 75 |
+| Transfer levy | ₦50 from ₦10,000, its own line, remitted not earned. **Its incidence is still open with Compliance (§6).** | 5,000 |
+| **Total** | | **6,075** |
+
+**The entry**, posted when the officer records the payout (the hold having
+authorised it first, §11):
+
+| Account | Dr | Cr |
+|---|---:|---:|
+| Member savings — ARG-0142 | 2,006,075 | |
+| Bank / cash | | 2,000,000 |
+| Charges payable — Argon (`charges_margin`) | | 1,000 |
+| VAT payable on charges (`charges_vat`) | | 75 |
+| Transfer levy payable (`statutory_levy_payable`) | | 5,000 |
+
+The partner component is in the charge and **not in the entry**: the ledger
+never writes a ₦0 line (a zero is the absence of a line, never a line of zero).
+If VFD's fee is ever set, a fifth line appears on `charges_partner`.
+
+Debits 2,006,075 = credits 2,000,000 + 1,000 + 75 + 5,000. ✅
+
+The member's statement reads: withdrew ₦20,000, charges ₦60.75, ₦20,060.75 out
+of savings. Three figures, because a member who sees ₦20,060.75 leave against a
+₦20,000 request reads the difference as money going missing.
+
+### 7a′. Member contribution of ₦25,000 (uncharged, the default)
+
+`contribution_in` of ₦25,000 in cash. A contribution carries **no charge by
+default** (§9): a society that charges none has no contribution series, and the
+member is credited in full.
 
 | Account | Dr | Cr |
 |---|---:|---:|
 | Bank / cash | 2,500,000 | |
-| Member savings — ARG-0142 | | 2,491,250 |
-| Charges payable — partner (VFD) | | *x* |
-| Charges payable — Argon margin | | *y* |
+| Member savings — ARG-0142 | | 2,500,000 |
 
-`x + y = 8,750`. The split is the open commercial question in §6; **two lines
-regardless of the split**, even if one is currently zero — in which case that
-line is omitted, not written as ₦0.
-
-Debits 2,500,000 = credits 2,491,250 + 8,750. ✅
-
-The member's statement reads: contributed ₦25,000, charge ₦87.50, credited
-₦24,912.50. Three figures, because a member who sees only ₦24,912.50 arrive
-against a ₦25,000 payment reads it as money going missing.
+Debits = credits. ✅ The statement reads: contributed ₦25,000, credited ₦25,000.
 
 ### 7b. Opening balance of ₦480,000 (migration)
 
@@ -318,22 +358,28 @@ Migration control accumulates the total of every opening balance and is
 reconciled against the society's actual position as a separate, explicit
 exercise. It is not expected to be zero.
 
-### 7c. Reversal of 7a (posted in error)
+### 7c. Reversal of 7a (the transfer came back)
 
-A **new** entry. 7a is untouched.
+A **new** entry. 7a is untouched. The bank returned the ₦20,000 (a wrong
+account number, say): the member did nothing wrong, and is made whole.
 
 | Account | Dr | Cr |
 |---|---:|---:|
-| Member savings — ARG-0142 | 2,491,250 | |
-| Charges payable — partner (VFD) | *x* | |
-| Charges payable — Argon margin | *y* | |
-| Bank / cash | | 2,500,000 |
+| Bank / cash | 2,000,000 | |
+| Charges payable — Argon (`charges_margin`) | 1,000 | |
+| VAT payable on charges (`charges_vat`) | 75 | |
+| Transfer levy payable (`statutory_levy_payable`) | 5,000 | |
+| Member savings — ARG-0142 | | 2,006,075 |
 
 Carries `reverses: <id of 7a>`, a written reason, and its own actor and
 timestamp. Debits = credits. ✅
 
-**This is D-02: the charge is reversed with the principal** (confirmed by
-Commercial, its owner, 2026-10-22 — §6, §12).
+**This is D-02: Argon's charge is refunded with the principal** (confirmed by
+Commercial, its owner, 2026-10-22 — §6, §12), and the VAT on it with it.
+**The levy line is OPEN:** D-02 is about Argon's charge, and whether a levy
+already remitted is refunded on a reversal is a statutory question, with
+Compliance alongside its incidence (§6). Shown refunded here; if it is not, the
+member's credit is 2,001,075 and this entry has no levy line.
 
 ---
 
@@ -511,7 +557,7 @@ That is how ₦1.39m of loan credits accumulated uncorrected, waiting on "VFD ba
 | # | Decision | Owner | State |
 |---|---|---|---|
 | **D-02** | **A reversal refunds the Argon charge** with the principal (§6, §7c). | **Commercial** | **ANSWERED: confirmed by Commercial.** Was assumed-pending; no longer blocks shipping. |
-| **D-07** | **The CBN bands are Argon's charge IN FULL,** not a bank fee passed through with a margin on top. The member pays the band; VFD's cost to Argon comes out of Argon's side as a business expense, as the loan platform already does (it books the ₦10 as Argon's income and captures VFD's fee nowhere). | Owner of record **not named in the decision**; §6 had Legal for Argon's own fee and the VFD relationship's holder for the partner component. To be recorded. | **DECIDED.** The reasons, for the record: nobody knows what VFD bills, so a partner component would be permanently unset and refuse every charge; and the CBN figure is a CEILING, so charging the band AND passing VFD's fee through would put the member above it. **All four components are kept:** the partner fee is **ZERO, deliberately**, its series' source saying so, NOT refused (the structure is right; if VFD reports its fee there is somewhere to put it); VAT stays on Argon's fee; the levy and the margin are unchanged. **FLAG, not acted on:** confirm with whoever runs the loan platform's books that booking the fee as Argon's income is deliberate there and not an oversight. |
+| **D-07** | **The CBN bands are Argon's charge IN FULL,** not a bank fee passed through with a margin on top. The member pays the band; VFD's cost to Argon comes out of Argon's side as a business expense, as the loan platform already does (it books the ₦10 as Argon's income and captures VFD's fee nowhere). | **Commercial** (recorded 2026-10-22: a pricing decision about what Argon charges, the same owner as D-02). The individual who signs it off is being confirmed by the reviewer. | **DECIDED.** The reasons, for the record: nobody knows what VFD bills, so a partner component would be permanently unset and refuse every charge; and the CBN figure is a CEILING, so charging the band AND passing VFD's fee through would put the member above it. **All four components are kept:** the partner fee is **ZERO, deliberately**, its series' source saying so, NOT refused (the structure is right; if VFD reports its fee there is somewhere to put it); VAT stays on Argon's fee; the levy and the margin are unchanged. **FLAG, not acted on:** confirm with whoever runs the loan platform's books that booking the fee as Argon's income is deliberate there and not an oversight. |
 | **D-13** | **A dispute correction requires a SECOND OFFICER.** | **Governance** | **ANSWERED: confirmed by Governance.** Not yet built: when dispute corrections are, the second officer is a refusal test of its own (§10: name who acts, and who may not act alone). |
 | **D-16** | **Insurance stays OUT.** | Commercial and Legal (GROUP_D_DECISIONS §4) | **UNCHANGED, not blocking:** the underwriter is not finalised. |
 | — | **Charge rates: the source is named.** The figures are from **"CBN Guide to Charges, 2026 revision"**, the edition in force, stored as the named source beside them. | Who confirms it: **being named by the reviewer.** | **SOURCED-PENDING-CONFIRMATION** (was sourced-and-unverified). |
