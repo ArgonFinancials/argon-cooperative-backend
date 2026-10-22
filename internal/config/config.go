@@ -15,6 +15,9 @@ type Config struct {
 	// with neither, sign-in and the step-up answer a deliberate 503.
 	AuthDatabaseURL string
 	AuthCodeKey     []byte // HMAC key for sign-in code digests; AUTH_CODE_KEY, hex, at least 32 bytes
+	// The browser origins that may call the API (ARGON_ALLOWED_ORIGINS,
+	// comma-separated, exact). Empty: no browser origin (closed by default).
+	AllowedOrigins string
 }
 
 func Load() (Config, error) {
@@ -22,6 +25,9 @@ func Load() (Config, error) {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		Port:        envOr("PORT", "8080"),
 		Env:         envOr("ENV", "development"),
+		// No default, deliberately: production's value is a decision someone
+		// makes, not one they inherit.
+		AllowedOrigins: os.Getenv("ARGON_ALLOWED_ORIGINS"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is not set — see .env.example")

@@ -20,8 +20,7 @@ type Deps struct {
 	Log  *slog.Logger // optional; slog.Default() when nil
 	Auth auth.Service // the step-up (POST /auth/pin-proofs); optional until it is built
 	// AllowedOrigins: the browser origins that may call this API (exact
-	// matches; empty = none). NOT YET HONOURED: cors.go is written after the
-	// review of test/tier1/tier1_api_cors_test.go.
+	// matches; empty = none, closed by default). cors.go.
 	AllowedOrigins []string
 }
 
@@ -53,7 +52,8 @@ func NewServer(d Deps) (http.Handler, error) {
 		RequestErrorHandlerFunc:  RequestError,
 		ResponseErrorHandlerFunc: ResponseError,
 	}), ChiServerOptions{ErrorHandlerFunc: RequestError})
-	return s.authenticate(h), nil
+	// CORS OUTSIDE authentication: a preflight carries no credentials (cors.go).
+	return CORS(d.AllowedOrigins, s.authenticate(h)), nil
 }
 
 // Paths that need no session.

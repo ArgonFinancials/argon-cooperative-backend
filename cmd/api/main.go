@@ -45,7 +45,12 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
-	deps := api.Deps{DB: pool, Log: log}
+	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins)}
+	if len(deps.AllowedOrigins) == 0 {
+		log.Info("no browser origin may call this API (ARGON_ALLOWED_ORIGINS is empty: closed by default)")
+	} else {
+		log.Info("browser origins allowed", "origins", deps.AllowedOrigins)
+	}
 	if cfg.AuthDatabaseURL == "" {
 		// Deliberate: sign-in and the PIN step-up answer 503 until the auth
 		// service has its own argon_auth connection (AUTH_DATABASE_URL).

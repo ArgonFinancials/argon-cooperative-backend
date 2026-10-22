@@ -35,6 +35,7 @@ AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@postgres:5432/${A
 AUTH_CODE_KEY=${ARGON_CODE_KEY}
 PORT=8080
 ENV=production
+ARGON_ALLOWED_ORIGINS=${ARGON_ALLOWED_ORIGINS:-}
 EOF
 chmod 0600 /etc/argon/argon.env "$ARGON_ENV"
 ok "image argon-api:$ARGON_RELEASE and /opt/argon/bin/tier1.test ready; the API is NOT started"
