@@ -46,7 +46,7 @@ R1=$(U 61) LP=$(U 101) LN=$(U 102) ACTOR=$(U 91)
 R3=$(U 63) E2=$(U 45) E3=$(U 46) E4=$(U 47) A3=$(U 23) A4=$(U 24)
 SP6=$(U 116) SP7=$(U 117) SP8=$(U 118) SP9=$(U 119) SP10=$(U 120) SA6=$(U 126) SA7=$(U 127) SA8=$(U 128) SA9=$(U 129) SA10=$(U 130)
 E0=$(U 40) L3=$(U 53) L4=$(U 54) RK45=$(U 64)
-SPW1=$(U 161) SPW2=$(U 162) SPW3=$(U 163) SPW4=$(U 164) SPW5=$(U 165) SPW6=$(U 166) SPW7=$(U 167)
+SPW1=$(U 161) SPW2=$(U 162) SPW3=$(U 163) SPW4=$(U 164) SPW5=$(U 165) SPW6=$(U 166) SPW7=$(U 167) SPW8=$(U 168) SAW8=$(U 178) RK47=$(U 66)
 SAW1=$(U 171) SAW2=$(U 172) SAW3=$(U 173) SAW4=$(U 174) SAW5=$(U 175) SAW6=$(U 176) SAW7=$(U 177)
 R2=$(U 62) SP5=$(U 115) SA5=$(U 125) SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=$(U 114) SA1=$(U 121) SA2=$(U 122) SA3=$(U 123) SA4=$(U 124) U1=$(U 81) U2=$(U 82) U3=$(U 83) PROOF=$(U 71) ACT=$(U 72)
 
@@ -113,6 +113,10 @@ cref() { if [[ $has_benefit == 1 ]]; then printf ", 'PROBE-%s'" "$1"; fi; }
 # raised. From the catalog (finding 34).
 has_raisers=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.approval_requests'::regclass
   AND attname = 'raised_by_user_id' AND NOT attisdropped" </dev/null)
+# 0017: a request keeps the charge it was quoted; the largest amount a member
+# may request. From the catalog (finding 34).
+has_quotes=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.approval_requests'::regclass
+  AND attname = 'quoted_on' AND NOT attisdropped" </dev/null)
 # raised_sql REQUEST REFERENCE AMOUNT PROOF ACT: M2's own withdrawal request.
 # From 0016 on M2's own withdrawal_request act, in the same transaction; before
 # it a request names no raiser. (if/fi, never `[[ ]] &&`: finding 7.)
@@ -134,7 +138,7 @@ if [[ $has_raisers == 1 ]]; then
     ($SPW1, $U2, 'pin', 'withdrawal_request'), ($SPW2, $U2, 'pin', 'withdrawal_request'),
     ($SPW3, $U2, 'pin', 'withdrawal_request'), ($SPW4, $U2, 'pin', 'withdrawal_request'),
     ($SPW5, $U1, 'pin', 'withdrawal_request'), ($SPW6, $U1, 'pin', 'withdrawal_request'),
-    ($SPW7, $U2, 'pin', 'withdrawal_request');" </dev/null >/dev/null
+    ($SPW7, $U2, 'pin', 'withdrawal_request'), ($SPW8, $U2, 'pin', 'withdrawal_request');" </dev/null >/dev/null
 fi
 # VAT's era (0013): before it, VAT was on the partner's fee and the probe's ₦10
 # sat there; from it, VAT is on Argon's own fee, the ₦10 is Argon's, and the
@@ -462,6 +466,26 @@ probe ctl K45 argon_app '' "control: app raises M2's own ₦1,000 request on M2'
   "BEGIN; $(raised_sql "$RK45" APR-PROBE-K45 100000 "$SPW4" "$SAW4") COMMIT;"
 else
   info "schema before 0016: no withdrawal-request authorship rules to probe (P45-P48, K45 not run)"
+fi
+
+# 0017, as the app whose balance handler calls it: the largest amount a member
+# may request, exactly (the probe's series is ₦10 flat at every amount and 7.5%
+# VAT on it, so from ₦10,000 it is ₦9,989.25); and a request the app raises
+# keeps the SERVER's quote, whatever the app sends (₦10.75 on ₦1,000, today).
+if [[ $has_quotes == 1 ]]; then
+probe ctl K46 argon_app '' "control: app asks the largest request from ₦10,000 and gets ₦9,989.25 exactly" \
+  "DO \$\$ BEGIN IF largest_withdrawal($S, 'withdrawal_out', 1000000, current_date) IS DISTINCT FROM 998925 THEN
+     RAISE EXCEPTION 'K46: largest_withdrawal(1000000) answered %, want 998925', largest_withdrawal($S, 'withdrawal_out', 1000000, current_date); END IF; END \$\$;"
+probe ctl K47 argon_app '' "control: app raises M2's request sending its own quote; the request keeps the server's" \
+  "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SAW8, 'withdrawal_request', $U2, $SPW8);
+   INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at, raised_by_user_id, act_id,
+     quoted_partner_fee_kobo, quoted_vat_kobo, quoted_statutory_levy_kobo, quoted_argon_margin_kobo, quoted_on)
+     VALUES ($RK47, $S, 'APR-PROBE-K47', $M2, 'withdrawal_out', 100000, 2, now() + interval '1 day', $U2, $SAW8, 1, 1, 1, 1, '2020-01-01');
+   DO \$\$ BEGIN IF (SELECT quoted_partner_fee_kobo + quoted_vat_kobo + quoted_statutory_levy_kobo + quoted_argon_margin_kobo FROM approval_requests WHERE id = $RK47) IS DISTINCT FROM 1075
+        OR (SELECT quoted_on FROM approval_requests WHERE id = $RK47) IS DISTINCT FROM current_date THEN
+     RAISE EXCEPTION 'K47: the request kept the client''s quote'; END IF; END \$\$; COMMIT;"
+else
+  info "schema before 0017: no kept quote or largest request to probe (K46, K47 not run)"
 fi
 
 # 0014: the operator's functions are the operator's. The app can call none of
