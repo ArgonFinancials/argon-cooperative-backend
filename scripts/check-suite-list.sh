@@ -29,5 +29,29 @@ report() {  # report LIST_NAME LIST
 }
 report "the CI matrix" "$matrix"
 report "mutate.sh" "$mutate"
+
+# And every test belongs to EXACTLY ONE suite, chosen as mutate.sh chooses
+# (SUITE_INCLUDE, less SUITE_EXCLUDE). Suite 0002 claims every test no other
+# suite's prefix is excluded from it, by a list written by hand: 0017's tests
+# went to main claimed by both 0002 and 0017, and 0002's CI run failed them as
+# unproven (2026-10-22). Claimed by none: never run. By two: run where no
+# mutant can prove them.
+tests=$(grep -ohE '^func (Test[A-Za-z0-9_]+)\(t \*testing\.T\)' test/tier1/*_test.go | sed -E 's/^func (Test[A-Za-z0-9_]+).*/\1/' | sort -u)
+claims=$(for f in test/tier1/suite_*.sh; do
+  n=$(basename "$f" .sh); n=${n#suite_}
+  ( SUITE_INCLUDE='^$' SUITE_EXCLUDE='^$'; REPO_DIR=$PWD; die() { :; }
+    # shellcheck disable=SC1090
+    source "$f" >/dev/null 2>&1 || true
+    echo "$tests" | grep -E "$SUITE_INCLUDE" | grep -vE "$SUITE_EXCLUDE" | sed "s/^/$n /" ) || true
+done)
+none=$(comm -23 <(echo "$tests") <(awk '{print $2}' <<<"$claims" | sort -u) | tr '\n' ' ')
+[[ -z ${none// /} ]] || { echo "FAILED: tests no suite runs: $none" >&2; fail=1; }
+twice=$(awk '{print $2}' <<<"$claims" | sort | uniq -d)
+if [[ -n $twice ]]; then
+  while read -r t; do
+    echo "FAILED: $t is claimed by more than one suite: $(grep " $t$" <<<"$claims" | awk '{print $1}' | tr '\n' ' ')" >&2
+  done <<<"$twice"
+  fail=1
+fi
 ((fail == 0)) || exit 1
-echo "suite list: all $(echo "$files" | wc -l) suites are in the CI matrix and in mutate.sh, and nothing else is"
+echo "suite list: all $(echo "$files" | wc -l) suites are in the CI matrix and in mutate.sh, and nothing else is; all $(echo "$tests" | wc -l) tests belong to exactly one suite"
