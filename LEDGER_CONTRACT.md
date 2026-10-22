@@ -563,5 +563,12 @@ That is how ₦1.39m of loan credits accumulated uncorrected, waiting on "VFD ba
 | — | **Charge rates: the source is named.** The figures are from **"CBN Guide to Charges, 2026 revision"**, the edition in force, stored as the named source beside them. | Who confirms it: **being named by the reviewer.** | **SOURCED-PENDING-CONFIRMATION** (was sourced-and-unverified). |
 | — | **FIVE SIGNING POSTS:** chairman, treasurer, secretary, branch officer, loan officer; everyone except the internal auditor (read-only by Directorate rule). | The reviewer (the PM question of §10, answered) | **DECIDED.** Already what the database permits; the three-post limit was the frontend's role matrix, a frontend defect being fixed in that session. Once corrected, §10's ceiling no longer applies; the operator warning stays (three designated at a quorum of 3 still hits the arithmetic). |
 
+**Decided the same day, on the frontend's questions:**
+
+| # | Decision | Owner | State |
+|---|---|---|---|
+| — | **SIGNING RIGHTS DO NOT FOLLOW THE POST.** A handover transfers the post; the society decides separately, and explicitly, whether the new holder signs. `appointments.is_signatory` is set per appointment and is NOT carried from the outgoing holder (as the schema already does): a successor's signature is refused until it is set, which is recoverable and visible; a new officer silently able to sign would be neither. The handover flow must ASK. | The reviewer | **DECIDED.** Signing rights are a society's decision about a person, not a property of a chair. **No appointments API exists: nobody can designate a signatory today. Queued after onboarding.** |
+| — | **"Vice chairman" is not a post.** The frontend's fixture named one; the fixture was wrong (finding 44: a fixture describes a world the system can be in), and becomes a branch officer. | The reviewer | **DECIDED for the fixture. OPEN, a product question with the five-post decision:** do societies need a vice chairman as a distinct post, and should it sign? Adding a post is a product decision nobody has made. |
+
 **Still open, unchanged by these:** the transfer levy's incidence (Compliance, §6); the VAT registration and remittance question that D-07's "VAT on Argon's own fee" carries (Legal, §6); where a society's money is held (Legal + Product, §6).
 
