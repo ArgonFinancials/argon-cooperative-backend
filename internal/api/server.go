@@ -19,6 +19,10 @@ type Deps struct {
 	DB   *pgxpool.Pool
 	Log  *slog.Logger // optional; slog.Default() when nil
 	Auth auth.Service // the step-up (POST /auth/pin-proofs); optional until it is built
+	// AllowedOrigins: the browser origins that may call this API (exact
+	// matches; empty = none). NOT YET HONOURED: cors.go is written after the
+	// review of test/tier1/tier1_api_cors_test.go.
+	AllowedOrigins []string
 }
 
 type server struct {
