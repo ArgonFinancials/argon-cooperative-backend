@@ -194,11 +194,11 @@ does not sum to zero.
 | Charge posting rules | Engineering + Tier 1 accountant | **Must join the B-29 review.** Which accounts charges post to, and when they are recognised, is not settled. |
 | Partner charge vs Argon margin recorded separately | Commercial | **Must be separate.** See below. |
 | VFD balance vs Argon ledger: which is the record of account | Legal + Product | **CLOSED 2026-10-13 (§11).** Argon's ledger is the record of account of what the society decided; VFD's balance is the bank's record of what it holds; neither is adjusted to match the other; a difference is an item to explain. Settled by evidence from the running wallet platform, not by the B-04 summary, **which described a spike nobody ran** (finding 32). Carries an obligation: scheduled reconciliation against VFD (§11). |
-| Does a reversal refund the Argon charge? | **Commercial** | **D-02: answered, assumed-pending.** The charge is refunded with the principal. Assumed until Commercial confirms; **blocks shipping.** See below. |
-| **Argon's own fee on a transfer** | **Legal** | **REFRAMED 2026-10-13.** The wallet platform books the ₦10 / ₦50 transfer fee as Argon's income (its charges page calls it Argon's profit); VFD's own charge to Argon is captured nowhere. So the question is not whether Argon may pass a bank's fee through, or add a margin to it: **Argon charges its own fee in its own right**, and the CBN cap applies to that differently. Until answered, the margin component is refused until set (§9). **With it (2026-10-13): VAT.** VAT is charged on Argon's own fee (decided: the bank's VAT is inside whatever the bank charges Argon, the partner component), so Argon is supplying a VATable service in its own right. That is the same fact that reframes the fee question, and it may carry a VAT registration and remittance obligation for Argon. Legal is asked both together; it is not treated as arithmetic. |
+| Does a reversal refund the Argon charge? | **Commercial** | **D-02: ANSWERED, confirmed by Commercial (2026-10-22).** The charge is refunded with the principal. **No longer blocks shipping.** See below and §12. |
+| **Argon's own fee on a transfer** | **Legal** | **REFRAMED 2026-10-13.** The wallet platform books the ₦10 / ₦50 transfer fee as Argon's income (its charges page calls it Argon's profit); VFD's own charge to Argon is captured nowhere. So the question is not whether Argon may pass a bank's fee through, or add a margin to it: **Argon charges its own fee in its own right**, and the CBN cap applies to that differently. **D-07 (2026-10-22): the CBN bands ARE Argon's charge in full** (§12): the margin component carries the band; it is not a bank fee passed through with a margin on top. **With it (2026-10-13): VAT.** VAT is charged on Argon's own fee (decided: the bank's VAT is inside whatever the bank charges Argon, the partner component), so Argon is supplying a VATable service in its own right. That is the same fact that reframes the fee question, and it may carry a VAT registration and remittance obligation for Argon. Legal is asked both together; it is not treated as arithmetic. |
 | **The transfer levy's incidence** | **Compliance** | **OPEN (2026-10-11), its own item, not a footnote to the edition check.** If the levy is legally on electronic RECEIPTS, it falls on the recipient, and charging it to our sender would be a compliance error we built in deliberately. That is a different question from "are these the right figures". Until answered, the levy component refuses rather than assuming it applies (§9). |
 | Loan interest calculation method | The loan rate's owner | **ANSWERED 2026-10-13 from the running loan platform: flat on principal** (argon-loans-backend `approval_terms.go:39-41`: total = principal × (1 + rate)), the method current customers have. For loan writes. **Flag to its owner:** that platform derives the term from the rate (months = ceil(rate ÷ 10), `approval_terms.go:45-53`), which is probably not intentional. |
-| **VFD's actual charge to Argon (the partner component)** | **Whoever holds the VFD relationship** | **OPEN (2026-10-13).** Unknown: no response, webhook or invoice field in the running platform carries it. The partner component stays refused until set (§9). |
+| **VFD's actual charge to Argon (the partner component)** | **Whoever holds the VFD relationship** | **ANSWERED by D-07 (2026-10-22): the partner component is ZERO, deliberately** (§9, §12). VFD's cost to Argon is Argon's business expense, not the member's. Still unknown what VFD bills; if it is ever reported, the component is where it goes, and the member's charge does not change. |
 | **Where a society's money is held** | **Legal + Product** | **OPEN (2026-10-13), raised the same day.** Pooled in Argon's VFD account with each society's share existing only as a row in our database (the wallet platform's structure, unreconciled), or segregated per society. Expected: segregation, because a Directorate auditing a society will ask where the money is. **Build nothing that assumes either answer.** |
 | Opening balance contra account | Tier 1 accountant | `opening_balance` posts at zero charge as its own movement kind. What it debits is §7's assumption, not a decision. |
 
@@ -231,10 +231,10 @@ the charge with the reversal, to absorb it against the society, or to retain
 it. Each is defensible, and the accounting follows the choice rather than
 driving it.
 
-**D-02 answers it, assumed-pending: the charge is refunded with the reversal.**
-A member is not out of pocket for a treasurer's error. The owner is Commercial,
-and until Commercial confirms, this is an assumption that **blocks shipping**
-— not a settled rule. `lib/ledgerFixture.ts` and `internal/ledger/port.go`
+**D-02 answers it: the charge is refunded with the reversal.** Confirmed by
+Commercial, its owner, on 2026-10-22: a settled rule, no longer an assumption,
+and it no longer blocks shipping. A member is not out of pocket for a
+treasurer's error. `lib/ledgerFixture.ts` and `internal/ledger/port.go`
 both model the refund case. The entries differ materially between the three
 options, so if Commercial chooses otherwise, §7c and both of those change.
 
@@ -332,10 +332,8 @@ A **new** entry. 7a is untouched.
 Carries `reverses: <id of 7a>`, a written reason, and its own actor and
 timestamp. Debits = credits. ✅
 
-**This is D-02: the charge is reversed with the principal** (assumed-pending,
-owner Commercial — §6). If Commercial decides Argon retains its charge on a
-reversal, the credit to bank becomes 2,491,250 and the charge lines drop out —
-a different set of entries. Shipping waits on that confirmation.
+**This is D-02: the charge is reversed with the principal** (confirmed by
+Commercial, its owner, 2026-10-22 — §6, §12).
 
 ---
 
@@ -392,18 +390,18 @@ act in the product.
 
 **Corrected 2026-10-13: the ₦10 / ₦50 transfer fee is ARGON'S, not the bank's.** The running wallet platform books it as Argon's income; VFD's actual charge to Argon is captured nowhere. So:
 - the figures listed below as the "partner fee" are **Argon's margin**;
-- the **partner component is unknown, not ₦10**. It stays refused until whoever holds the VFD relationship says what VFD charges;
+- the **partner component is unknown, not ₦10**. ~~It stays refused until whoever holds the VFD relationship says what VFD charges;~~ **D-07 (2026-10-22): it is ZERO, deliberately, with a source saying so, not refused** (§12);
 - Legal's question is reframed (§6): Argon charges its own fee in its own right.
 
 The shape below is unchanged; the labels on the illustrative figures are corrected in suite 0011's fixtures.
 
 **Revised 2026-10-11: four components, not two.** The figures come from three statutes, and VAT is a rate on the fee, so a single shared band structure cannot hold them. Each component is its own series, from its own named source, set explicitly or refused, on its own ledger line and account:
-- **partner_fee** (the bank's fee, from the CBN guide): bands on the transfer amount.
+- **partner_fee** (what VFD charges Argon): bands on the transfer amount. **D-07: ZERO, deliberately** (§12); kept because the structure is right and, if VFD ever reports its fee, there is somewhere to put it.
 - **partner_fee_vat** (VAT law): a RATE ON THE FEE. Written as a figure per band it would be right today and silently wrong the next time the fee changed, and nobody would notice, because it would still look like a VAT figure.
 - **statutory_levy** (the levy's statute): its own bands, so "₦50 from ₦10,000" is one band and never cuts the fee's bands. It is remitted, not earned, on its own payable account. **Refused until Compliance answers its incidence (§6).**
-- **argon_margin**: refused until Legal answers (§6).
+- **argon_margin**: **D-07: the CBN band, in full** (§12). Argon's own charge, from the named source.
 
-Applied transfer figures supplied 2026-10-11, held only as ILLUSTRATIVE test data and SOURCED-AND-UNVERIFIED, pending Compliance confirming the edition and bands:
+Applied transfer figures supplied 2026-10-11. **2026-10-22: their source is named, "CBN Guide to Charges, 2026 revision" (the edition in force), and their state is SOURCED-PENDING-CONFIRMATION** (was sourced-and-unverified); who confirms it is being named by the reviewer (§12):
 - under ₦5,000: ₦0;
 - ₦5,000 – ₦9,999: ₦10 fee + ₦0.75 VAT;
 - ₦10,000 – ₦50,000: ₦10 + ₦0.75 + ₦50 levy;
@@ -424,7 +422,7 @@ Applied transfer figures supplied 2026-10-11, held only as ILLUSTRATIVE test dat
 
 They appear only as illustrative test data, marked so, pending the compliance owner confirming the edition and the bands. The shape is right regardless of whether the numbers are.
 
-**Argon's margin can be expressed and is refused until set.** It is never assumed to be zero, nor any figure. That waits on Legal (§6).
+**Argon's margin can be expressed and is refused until set.** It is never assumed to be zero, nor any figure. **D-07 (2026-10-22) says what it is set to: the CBN band** (§12); a society with no series set is still refused.
 
 **The fee is ON TOP for withdrawals and transfers.** The member receives what they asked for, and amount plus fee must fit within withdrawable. Deducting it would make a member asking for ₦50,000 receive ₦49,950: the undisclosed-gap problem in a different place.
 
@@ -459,7 +457,7 @@ Checked per PERSON, not per member record. Where it is enforced:
 
 **A REQUEST NO QUORUM CAN APPROVE IS REFUSED WHEN RAISED** (decided 2026-10-19; 0016). Who may sign a request is the society's current signatories, by person, less its raiser and the member it pays. Fewer than the quorum, and it could only sit collecting signatures until it expired, the member learning a week later that their society's arithmetic made it impossible. This was a LIVE DEFECT before 0016: a society holds one open-ended appointment per post, the role matrix's signatories are the chairman, treasurer and secretary, so a society of three at a quorum of three could never approve an officer's own withdrawal, nor (from 0016) one an officer raises. The refusal states the arithmetic AND the remedy: how many may sign, how many are needed, and "appoint another signatory, or lower the withdrawal quorum". **THE LIMIT IS IN OUR INTERFACE, NOT IN A SOCIETY'S GOVERNANCE** (2026-10-19). The schema permits any post but the internal auditor to be a signatory: the chairman, treasurer, secretary, a branch officer and a loan officer, one open-ended holder per post, so up to FIVE signatories. The frontend's role matrix names only three of them (chairman, treasurer, secretary) as signatories. That mismatch is a FRONTEND DEFECT, and it produces a ceiling nobody decided: **for a society that follows the matrix as built, the maximum workable withdrawal quorum is 2.** With exactly three signatories at a quorum of 3, every withdrawal an officer asks for themselves, or raises for a member, is impossible to approve, because nobody signs a request they raise or that pays them, which leaves two. A society should read this before it sets a quorum of 3, and know that the limit comes from our interface.
 
-**OPEN, for the PM (2026-10-19), not built for either answer:** was the role matrix deliberately limited to three signing posts, or did it simply list the three obvious ones? Nobody wrote the ceiling down, so probably the latter. Until it is answered the operator warning is the mitigation.
+**ANSWERED 2026-10-22: FIVE SIGNING POSTS** (§12): the chairman, treasurer, secretary, branch officer and loan officer; everyone except the internal auditor, who is read-only by Directorate rule. This is what the database already permits; nothing changes in the schema. The three-post limit was the frontend's role matrix, written from a design artifact before the schema existed: a frontend defect, being fixed there. **Once the matrix is corrected the ceiling above no longer applies: a society may designate any of the five.** The operator warning STAYS: a society that designates only three still hits the arithmetic at a quorum of 3.
 
 **The operator is WARNED, not refused,** when setting a quorum the signatories cannot meet: a society may legitimately be appointing another signatory next week, and refusing would make Argon the arbiter of a bye-law. The warning is loud, in the preview, and names which requests become impossible.
 
@@ -507,3 +505,17 @@ That is how ₦1.39m of loan credits accumulated uncorrected, waiting on "VFD ba
 - **Take the knowledge, none of the defects:** `docs/VFD_INTEGRATION.md` is the spec.
 
 **Where a society's money is held is open** (§6). Nothing is built that assumes pooled or segregated funds.
+
+## 12. Decided 2026-10-22: six decisions settled, with their owners
+
+| # | Decision | Owner | State |
+|---|---|---|---|
+| **D-02** | **A reversal refunds the Argon charge** with the principal (§6, §7c). | **Commercial** | **ANSWERED: confirmed by Commercial.** Was assumed-pending; no longer blocks shipping. |
+| **D-07** | **The CBN bands are Argon's charge IN FULL,** not a bank fee passed through with a margin on top. The member pays the band; VFD's cost to Argon comes out of Argon's side as a business expense, as the loan platform already does (it books the ₦10 as Argon's income and captures VFD's fee nowhere). | Owner of record **not named in the decision**; §6 had Legal for Argon's own fee and the VFD relationship's holder for the partner component. To be recorded. | **DECIDED.** The reasons, for the record: nobody knows what VFD bills, so a partner component would be permanently unset and refuse every charge; and the CBN figure is a CEILING, so charging the band AND passing VFD's fee through would put the member above it. **All four components are kept:** the partner fee is **ZERO, deliberately**, its series' source saying so, NOT refused (the structure is right; if VFD reports its fee there is somewhere to put it); VAT stays on Argon's fee; the levy and the margin are unchanged. **FLAG, not acted on:** confirm with whoever runs the loan platform's books that booking the fee as Argon's income is deliberate there and not an oversight. |
+| **D-13** | **A dispute correction requires a SECOND OFFICER.** | **Governance** | **ANSWERED: confirmed by Governance.** Not yet built: when dispute corrections are, the second officer is a refusal test of its own (§10: name who acts, and who may not act alone). |
+| **D-16** | **Insurance stays OUT.** | Commercial and Legal (GROUP_D_DECISIONS §4) | **UNCHANGED, not blocking:** the underwriter is not finalised. |
+| — | **Charge rates: the source is named.** The figures are from **"CBN Guide to Charges, 2026 revision"**, the edition in force, stored as the named source beside them. | Who confirms it: **being named by the reviewer.** | **SOURCED-PENDING-CONFIRMATION** (was sourced-and-unverified). |
+| — | **FIVE SIGNING POSTS:** chairman, treasurer, secretary, branch officer, loan officer; everyone except the internal auditor (read-only by Directorate rule). | The reviewer (the PM question of §10, answered) | **DECIDED.** Already what the database permits; the three-post limit was the frontend's role matrix, a frontend defect being fixed in that session. Once corrected, §10's ceiling no longer applies; the operator warning stays (three designated at a quorum of 3 still hits the arithmetic). |
+
+**Still open, unchanged by these:** the transfer levy's incidence (Compliance, §6); the VAT registration and remittance question that D-07's "VAT on Argon's own fee" carries (Legal, §6); where a society's money is held (Legal + Product, §6).
+

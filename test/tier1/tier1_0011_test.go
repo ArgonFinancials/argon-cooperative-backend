@@ -80,8 +80,8 @@ const (
 	srcLevy   = "ILLUSTRATIVE: Electronic Money Transfer Levy, ₦50 from ₦10,000 — sourced-and-unverified; its incidence is with Compliance"
 	srcMargin = "TEST DATA ONLY: margin zero for the test; Legal has not decided"
 	// From 0013 (see vatOnArgonsFee).
-	srcArgonFee       = "ILLUSTRATIVE: Argon's own transfer fee (the wallet platform's unmerged charges branch) — sourced-and-unverified; Legal has not decided"
-	srcPartnerUnknown = "TEST DATA ONLY — ZERO IS NOT THE ANSWER: VFD's charge to Argon is unknown (whoever holds the VFD relationship); in reality this stays refused until set"
+	srcArgonFee    = "ILLUSTRATIVE: Argon's transfer charge, the CBN band in full (D-07, 2026-10-22), from CBN Guide to Charges, 2026 revision — sourced-pending-confirmation"
+	srcPartnerZero = "D-07 (2026-10-22): ZERO, DELIBERATELY. VFD's cost to Argon is Argon's business expense, not the member's; if VFD ever reports it, this component is where it goes"
 )
 
 // The illustrative transfer series (see the header).
@@ -165,7 +165,7 @@ type seriesSpec struct {
 func transferSeries() []seriesSpec {
 	if vatOnArgonsFee() {
 		return []seriesSpec{
-			{"partner_fee", srcPartnerUnknown, zeroBands},
+			{"partner_fee", srcPartnerZero, zeroBands},
 			{"vat_on_argon_fee", srcVAT, vatBands},
 			{"statutory_levy", srcLevy, levyBands},
 			{"argon_margin", srcArgonFee, feeBands},

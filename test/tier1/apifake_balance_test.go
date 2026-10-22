@@ -53,7 +53,6 @@ const quoteNote = "This quote is indicative: the charge is fixed when the payout
 
 func magOf(n int64) api.Magnitude { return api.Magnitude(strconv.FormatInt(n, 10)) }
 
-
 // balanceReader: may the caller read this member's figure? The member, or an
 // officer of the member's society. Returns the member's society.
 func (f *fakeAPI) balanceReader(ctx context.Context, caller, member string) (string, bool) {
