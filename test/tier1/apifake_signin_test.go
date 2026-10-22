@@ -14,6 +14,7 @@
 //	signout_noop         sign-out answers 204 and ends nothing
 //	sms_failure_500      a refused code send is a bare 500
 //	sms_failure_silent   a refused code send is reported as code_sent: the worst outcome
+//	sms_message_for_developers  the member is shown a developer's note about the SMS provider (until 2026-10-22, the real wording)
 //	verify_any_code      any code completes a new-device sign-in
 //	no_token_reaches     a request with no token reaches the handlers as nobody
 //	router_errors_plain  the generated router's own errors answer text/plain, not the JSON Problem
@@ -82,7 +83,10 @@ func (f *fakeAPI) PostSignIn(ctx context.Context, req api.PostSignInRequestObjec
 			c := "unsent"
 			return api.PostSignIn200JSONResponse{Outcome: api.CodeSent, Challenge: &c}, nil
 		}
-		why, msg := "sms_unavailable", "TEMPORARY: sign-in codes cannot be sent yet, so a new device is confirmed by an officer of your society."
+		why, msg := "sms_unavailable", "You are signing in on a new device. We cannot send you a code to confirm it, so an officer of your society needs to confirm this device with you in person."
+		if f.brk == "sms_message_for_developers" {
+			msg = "TEMPORARY: sign-in codes cannot be sent yet (no SMS provider), so a new device is confirmed in person by an officer of your society."
+		}
 		return api.PostSignIn200JSONResponse{Outcome: api.SeeOfficer, Reason: &why, Message: &msg}, nil
 	case errors.Is(err, auth.ErrRefused):
 		return api.PostSignIn401JSONResponse{Code: "refused", Message: "those details do not match an account"}, nil

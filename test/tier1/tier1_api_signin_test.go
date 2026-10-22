@@ -413,8 +413,23 @@ func TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy(t *testing.T) 
 	srv := authServer(t, refusingSMS(&logs), 0)
 	p := newSigner(t, newSociety(t), "Member", "", false)
 	o := outcome(t, signInAs(t, srv, p.number, signPIN, "", ""), "see_officer") // no device token: a new device
-	if o.Reason == nil || *o.Reason != "sms_unavailable" || o.Message == nil || !strings.Contains(strings.ToLower(*o.Message), "temporar") {
-		t.Fatalf("UNEXPLAINED — a new device without SMS was routed to an officer without saying the cause is temporary: %+v", o)
+	// The reason is for the client (machine-readable); the MESSAGE IS FOR THE
+	// MEMBER (decided 2026-10-22: any field a client can show, some client
+	// will). It says what happened and what to do: a new device, confirmed by
+	// an officer of their society. Nothing about SMS, a provider, or what is
+	// temporary: that is our procurement, not their next step. (Until
+	// 2026-10-22 this test required the opposite, the word "temporary".)
+	if o.Reason == nil || *o.Reason != "sms_unavailable" || o.Message == nil {
+		t.Fatalf("UNEXPLAINED — a new device without SMS was routed to an officer without a reason and a message: %+v", o)
+	}
+	m := strings.ToLower(*o.Message)
+	if !strings.Contains(m, "new device") || !strings.Contains(m, "officer") {
+		t.Fatalf("NO NEXT STEP — the member is not told it is a new device and that an officer confirms it: %q", *o.Message)
+	}
+	for _, dev := range []string{"sms", "provider", "temporar"} {
+		if strings.Contains(m, dev) {
+			t.Fatalf("WRITTEN FOR DEVELOPERS — the member's message mentions %q: %q", dev, *o.Message)
+		}
 	}
 	if n := sessionsOf(t, p.user); n != 0 {
 		t.Fatalf("SIGNED IN — %d session(s) on a new device no code could confirm", n)

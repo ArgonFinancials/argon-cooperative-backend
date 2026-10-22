@@ -21,7 +21,11 @@ import (
 var signInUnavailable = Problem{Code: "sign_in_unavailable",
 	Message: "Sign-in is not available on this server yet: it runs without an auth service (pending the argon_auth database connection). Nobody was signed in."}
 
-const smsUnavailableMessage = "TEMPORARY: sign-in codes cannot be sent yet (no SMS provider), so a new device is confirmed in person by an officer of your society."
+// The MEMBER reads this (decided 2026-10-22: any field a client can show, some
+// client will). What happened and what to do next; nothing about SMS providers
+// or what is temporary. The cause is for the client, in Reason
+// ("sms_unavailable"), and for us, in the adapter's Error-level log line.
+const smsUnavailableMessage = "You are signing in on a new device. We cannot send you a code to confirm it, so an officer of your society needs to confirm this device with you in person."
 
 func (s *server) PostSignIn(ctx context.Context, req PostSignInRequestObject) (PostSignInResponseObject, error) {
 	if s.auth == nil {

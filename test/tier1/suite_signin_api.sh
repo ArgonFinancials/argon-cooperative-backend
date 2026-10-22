@@ -26,6 +26,7 @@ declare -gA SVC_TARGET_OF=(
   [expiry_from_surface]='TestApiSignIn09_ApproversSessionIsEightHoursOnAnySurface'
   [sms_failure_500]='TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy'
   [sms_failure_silent]='TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy'
+  [sms_message_for_developers]='TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy'
   [sms_adapter_silent]='TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary'
   [sms_adapter_quiet]='TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary'
   [sms_adapter_sounds_final]='TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary'
