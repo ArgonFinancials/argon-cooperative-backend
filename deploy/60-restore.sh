@@ -108,48 +108,69 @@ if [[ $mode == drill ]]; then
   # restored copy, each counted separately: a pass names what it covered.
   # (TestMain does not apply the schema to ARGON_TEST_DB: the tests run
   # against what the restore brought back.)
-  covered=()
-  suites=(
-    "ledger (0002)|.|^(TestAuth|TestRole|TestApi|TestProof|TestStepUp|TestLineSociety|TestLoan|TestApproval|TestWriteOff|TestSignStep|TestMoney|TestPayout|TestVAT|TestOperator|TestBenefit|TestRaise|TestQuote|TestLargest)"
-    "auth (0003)|^TestAuth|"
-    "roles (0004)|^TestRole|"
-    "statement API|^TestApiStatement|"
-    "postAll API|^TestApiBatch|"
-    "step-up (0005)|^TestProof|"
-    "step-up service|^TestStepUpS|"
-    "step-up API|^TestApiStepUp|"
-    "sign-in API|^TestApiSignIn|"
-    "line society (0006)|^TestLineSociety|"
-    "books API|^TestApiBooks|"
-    "approvals (0007)|^TestApproval|"
-    "loans (0008)|^TestLoan|"
-    "loan reads API|^TestApiLoans|"
-    "write-offs (0009)|^TestWriteOff|"
-    "signing step-up (0010)|^TestSignStep|"
-    "approvals API|^TestApiApprovals|"
-    "money API|^TestApiMoney|"
-    "who am I (GET /me)|^TestApiMe[0-9]|"
-    "withdrawal requests API|^TestApiRequests|"
-    "contributions and withdrawals (0011)|^TestMoney|"
-    "the payout hold (0012)|^TestPayout|"
-    "VAT on Argon's own fee (0013)|^TestVAT|"
-    "the operator's functions (0014)|^TestOperator|"
-    "nobody benefits from what they authorise or attest (0015)|^TestBenefit|"
-    "a withdrawal request has an author (0016)|^TestRaise|"
-  )
-  for suite in "${suites[@]}"; do
-    IFS='|' read -r name re skip <<<"$suite"
-    info "$name suite against the restored copy"
-    run_tier1 "$target" "$re" "$skip" >&2 || die "the $name suite FAILED against the restored copy"
+  covered=() skipped=()
+  # The suites are their files (finding 52): every test/tier1/suite_*.sh
+  # whose prerequisite exists in this release runs, selected as mutate.sh's
+  # GREEN selects (SUITE_GREEN_RUN, else SUITE_RUN, else all; less SUITE_SKIP).
+  # This replaced a list of 26 written by hand. A suite still tests-first (its
+  # migration or handler not yet written) is SAID to be skipped, never absent.
+  # And a suite runs only where the RESTORED COPY's schema has every migration
+  # its base and prerequisite name: a backup taken before a migration ran does
+  # not enforce that migration's rules, and the drill says so rather than
+  # failing the suite for rules the copy never had (found 2026-10-22: a copy
+  # at 15 failed suite 0016; the hand list had the same flaw).
+  schema=$(pg_as argon_migrator "$target" -At -c "SELECT version FROM schema_migrations" </dev/null)
+  [[ $schema =~ ^[0-9]+$ ]] || die "could not read the restored copy's schema version (got '$schema')"
+  info "the restored copy is at schema $schema"
+  # The release's own code (an API handler, the auth service) needs the
+  # release's whole schema: a deploy migrates before that code runs, so code
+  # against an older schema is a world production is never in.
+  head=$(ls "$REPO_DIR"/migrations/*.up.sql | sed -nE 's#.*/0*([0-9]+)_[^/]*$#\1#p' | sort -n | tail -1)
+  [[ $head =~ ^[0-9]+$ ]] || die "could not read the release's latest migration (got '$head')"
+  for f in "$REPO_DIR"/test/tier1/suite_*.sh; do
+    name=$(basename "$f" .sh); name=${name#suite_}
+    sel=$(SUITE_RUN='' SUITE_SKIP='' SUITE_GREEN_RUN='' SUITE_GREEN_NEEDS='' SUITE_BASE=''
+          # shellcheck disable=SC1090
+          source "$f" >/dev/null 2>&1
+          printf '%s\x1f%s\x1f%s\x1f%s' "${SUITE_GREEN_RUN:-${SUITE_RUN:-.}}" "$SUITE_SKIP" "$SUITE_GREEN_NEEDS" "$SUITE_BASE")
+    # \x1f, never a tab: a tab is whitespace to `read`, so an empty field (most
+    # suites have no skip) collapsed and the next field moved into its place.
+    IFS=$'\x1f' read -r re skip needs base <<<"$sel"
+    [[ -n $re ]] || die "suite $name: no run pattern could be read from $f"
+    if [[ -n $needs && ! -f $REPO_DIR/$needs ]]; then
+      info "suite $name: NOT RUN against the restored copy: tests first, $needs not yet written"
+      skipped+=("$name: tests first, $needs not yet written")
+      continue
+    fi
+    # The newest migration the suite needs: in its base, or its prerequisite.
+    want=$(tr ',' '\n' <<<"$base,$needs" | sed -nE 's#^migrations/0*([0-9]+)_.*#\1#p' | sort -n | tail -1)
+    if [[ -n $needs && $needs != migrations/* ]] && ((schema < head)); then
+      info "suite $name: NOT RUN against the restored copy: it runs this release's code, which needs schema $head, and the copy is at schema $schema"
+      skipped+=("$name: runs this release's code, which needs schema $head")
+      continue
+    fi
+    if [[ -n $want ]] && ((want > schema)); then
+      info "suite $name: NOT RUN against the restored copy: it needs migration $want, and the copy is at schema $schema"
+      skipped+=("$name: needs migration $want")
+      continue
+    fi
+    info "suite $name against the restored copy"
+    run_tier1 "$target" "$re" "$skip" >&2 || die "suite $name FAILED against the restored copy"
     covered+=("$name $RUN_TIER1_PASSED")
   done
+  ((${#covered[@]} > 0)) || die "no suite ran against the restored copy: the suite files were not found under $REPO_DIR/test/tier1"
   record="$work/drill-record"
   printf 'drill_at=%s\nsource=%s\nresult=PASS\nrestore_seconds=%s\n' \
     "$(date -u +%FT%TZ)" "$key" "$restore_secs" > "$record"
   for c in "${covered[@]}"; do n=${c% *}; printf 'tests.%s=%s\n' "${n//[ ()]/}" "${c##* }"; done >> "$record"
   store_put "$record" "drills/$(date -u +%Y/%m/%d)/drill-$(date -u +%Y%m%dT%H%M%SZ).ok"
-  ok "RESTORE DRILL PASSED — $key restores, matches its manifest, and passes the probe and every acceptance suite:"
+  ok "RESTORE DRILL PASSED — $key (schema $schema) restores, matches its manifest, and passes the probe and the ${#covered[@]} acceptance suites that apply to it:"
   for c in "${covered[@]}"; do ok "    ${c% *}: ${c##* } tests"; done
+  # Never "every suite" when some did not run: each is named, with why.
+  if ((${#skipped[@]} > 0)); then
+    info "NOT RUN against this copy (${#skipped[@]}), each with its reason:"
+    for s in "${skipped[@]}"; do info "    $s"; done
+  fi
   info "NOT covered by this drill: mutation strength of those tests (test/tier1/mutate.sh, local only);"
   info "the live database (never touched); point-in-time recovery (nightly dumps only: RPO up to 24 h)."
 else
