@@ -93,7 +93,8 @@ func signIn(t *testing.T, user string) string {
 	tok := randHex()
 	var dev string
 	fixture(t, db.QueryRow(bg(), `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id`, user, auth.TokenDigest(randHex())).Scan(&dev), "device")
-	fixture(t, one(`INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, dev, auth.TokenDigest(tok)), "session")
+	q, args := sessionInsert("user_id, device_id, token_digest", "", user, dev, auth.TokenDigest(tok))
+	fixture(t, one(q, args...), "session")
 	return tok
 }
 

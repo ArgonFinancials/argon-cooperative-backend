@@ -146,7 +146,8 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	}
 	if known {
 		t := token()
-		f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, token_digest) VALUES ($1, $2)`, user, sha(t))
+		q, args := sessionInsert("user_id, token_digest", "", user, sha(t))
+		f.d.DB.Exec(ctx, q, args...)
 		return auth.Result{SessionToken: t}, nil
 	}
 
@@ -203,7 +204,8 @@ func (f *fakeService) VerifyCode(ctx context.Context, challenge, code string) (a
 	dt, st := token(), token()
 	var dev string
 	f.d.DB.QueryRow(ctx, `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id`, user, sha(dt)).Scan(&dev)
-	f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, dev, sha(st))
+	q, args := sessionInsert("user_id, device_id, token_digest", "", user, dev, sha(st))
+	f.d.DB.Exec(ctx, q, args...)
 	if f.brk != "no_notify" {
 		var at time.Time
 		f.d.DB.QueryRow(ctx, `SELECT now()`).Scan(&at)
