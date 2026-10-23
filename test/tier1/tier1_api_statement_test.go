@@ -24,13 +24,18 @@ package tier1
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/argon/backend/internal/api"
 	"github.com/argon/backend/internal/auth"
@@ -577,5 +582,100 @@ func TestApiStatement19_ChargedInPeriodKeepsEveryComponentApart(t *testing.T) {
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	if p := s.ChargedInPeriod; p.Partner != "0" || p.Margin != "1000" || p.Vat != "75" || p.Levy != "5000" {
 		t.Fatalf("WRONG FIGURES — charged in period: %+v; want partner 0, Argon 1000, VAT 75, levy 5000 (one ₦60.75 charge kept, one refunded)", p)
+	}
+}
+
+// EVERY charge role the schema allows is shown AND counted in the gross
+// (2026-10-23). The spec-vs-schema test (TestApiSpec01) catches a role the
+// spec does not declare; it cannot catch a role the handler does not READ,
+// which is finding 55 exactly: the roles existed, the handler summed two, and
+// the gross was wrong by the ones it skipped. So the roles come from the
+// schema itself, never a list written here: a fifth role arriving fails this
+// test until the handler reads it. The GROSS is checked first and on its own:
+// a handler that shows a new role as a line but leaves it out of the gross
+// passes any is-it-present check and is still wrong by that amount.
+func TestApiStatement20_EveryChargeRoleIsShownAndCountedInTheGross(t *testing.T) {
+	wd := newWorld(t)
+	s := wd.c.s
+	var roles []string
+	for _, r := range dbCheck(t, "ledger_lines", "ledger_lines_charge_role_check") {
+		if r != "principal" {
+			roles = append(roles, r)
+		}
+	}
+	// Each role's account: the account role the schema accepts it on, found by
+	// trial (each try in its own savepoint, the whole trial rolled back), so
+	// no role-to-account map is written here either.
+	var candidates []string
+	for _, a := range dbCheck(t, "accounts", "account_role_known") {
+		if !strings.HasPrefix(a, "member_") {
+			candidates = append(candidates, a)
+		}
+	}
+	accountOf := map[string]string{}
+	for i, a := range candidates {
+		var id string
+		fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, $3, 'liability', $3) RETURNING id`,
+			s.id, fmt.Sprintf("97%02d", i), a).Scan(&id), "candidate account "+a)
+		for _, r := range roles {
+			if accountOf[r] != "" {
+				continue
+			}
+			errTrial := errors.New("trial")
+			err := tx(func(x pgx.Tx) error {
+				e, err := s.insertEntry(x, entry{kind: "transfer_out"})
+				if err != nil {
+					return err
+				}
+				if _, err := x.Exec(bg(), `INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role) VALUES ($1, $2, -1, $3)`, e, id, r); err != nil {
+					return err
+				}
+				return errTrial
+			})
+			if errors.Is(err, errTrial) {
+				accountOf[r] = id
+			}
+		}
+	}
+	// Amounts are powers of two times 100: any shortfall in the gross names
+	// exactly which roles were left out.
+	amount := map[string]int64{}
+	var charged int64
+	ls := []line{{acct: wd.c.bank, kobo: -2000000}}
+	for i, r := range roles {
+		if accountOf[r] == "" {
+			t.Fatalf("FIXTURE: no account the schema accepts charge role %q on", r)
+		}
+		amount[r] = 100 << i
+		charged += amount[r]
+		ls = append(ls, line{acct: accountOf[r], kobo: -amount[r], role: r})
+	}
+	ls = append(ls, line{acct: wd.c.savings, kobo: 2000000 + charged, member: wd.member})
+	e, err := s.postEntry(entry{kind: "withdrawal_out", payoutRef: "NIP-" + digest()[:16]}, ls...)
+	fixture(t, err, "a withdrawal carrying every charge role")
+	row := rowOf(t, decode(t, wd.statement(t, wd.memberUser, "")), e)
+
+	if row.GrossKobo != "2000000" {
+		g, _ := strconv.ParseInt(row.GrossKobo, 10, 64)
+		var skipped []string
+		for _, r := range roles {
+			if (g-2000000)&amount[r] != 0 {
+				skipped = append(skipped, r)
+			}
+		}
+		t.Fatalf("WRONG GROSS — %s, want 2000000 (what the member asked for): off by %d, exactly the charge role(s) %v not counted (finding 55, one role on)",
+			row.GrossKobo, g-2000000, skipped)
+	}
+	got := map[string]string{}
+	for _, c := range charges(t, row) {
+		got[c.Role] = c.Amount
+	}
+	for _, r := range roles {
+		if got[r] != strconv.FormatInt(-amount[r], 10) {
+			t.Fatalf("ACCEPTED — charge role %q is not shown as its own line of %d (got %v; the schema's roles are %v)", r, -amount[r], got, roles)
+		}
+	}
+	if len(got) != len(roles) {
+		t.Fatalf("WRONG SHAPE — %d charge lines for %d roles: %v", len(got), len(roles), got)
 	}
 }

@@ -188,7 +188,14 @@ for f in "$HERE/$SUITE_MUTDIR"/*.sql; do
   label=$(basename "$f" .sql)
   [[ $label == $ONLY ]] || continue
   [[ -n ${TARGET_OF[$label]:-} ]] || { printf '\n\033[31m%s has no expectation\033[0m\n' "$label"; fail=1; continue; }
-  run "$BASE,$f" "$label" "$SUITE_RUN"
+  # A suite whose SQL mutants are run against the REAL service (SUITE_MUTANTS_REAL=1:
+  # a schema the service has not caught up with) runs them as GREEN does: the
+  # fake's variable unset, the production roles' connections and grants.
+  if [[ ${SUITE_MUTANTS_REAL:-0} == 1 ]]; then
+    run "$BASE,$f" "$label" "$SUITE_RUN" -u "$SVC_ENV" ARGON_TEST_GRANTS="$(native "$REPO_DIR/deploy/sql/grants.sql")"
+  else
+    run "$BASE,$f" "$label" "$SUITE_RUN"
+  fi
   report "$label" "${TARGET_OF[$label]}" "$f"
 done
 for label in "${!TARGET_OF[@]}"; do

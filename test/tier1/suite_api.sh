@@ -1,8 +1,10 @@
 # Suite api — GET /members/{memberId}/statement. Sourced by mutate.sh.
 #
-# No SQL baseline: the schema is real (0001–0003) plus the 0004 interface. The
-# mutants are the 23 named breaks of the reference handler in apifake_test.go,
-# selected by ARGON_TEST_API_FAKE. Run with --svc.
+# No SQL baseline: the schema is real. The service mutants are the named
+# breaks of the reference handler in apifake_test.go, selected by
+# ARGON_TEST_API_FAKE (run with --svc). One SQL mutant, mutants_api/, is a
+# schema the handler has not caught up with (a fifth charge role), run against
+# the REAL handler: SQL mutants never set the fake's variable.
 SUITE_INCLUDE='^TestApiStatement'
 SUITE_EXCLUDE='^$'
 SUITE_SKIP=''
@@ -10,10 +12,13 @@ SUITE_RUN='^TestApiStatement'
 SVC_RUN='^TestApiStatement'
 SVC_ENV='ARGON_TEST_API_FAKE'
 SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,migrations/0015_benefit_and_duties.up.sql,migrations/0016_withdrawal_requests.up.sql,migrations/0017_quotes_and_largest.up.sql'
-SUITE_MUTDIR='mutants_api_none'
+SUITE_MUTDIR='mutants_api'
+SUITE_MUTANTS_REAL=1   # the SQL mutant runs against the real handler, as GREEN does
 SUITE_GREEN_NEEDS='internal/api/statement.go'      # the real handler, written after review
 CONTROL_RE='^$'
-declare -gA TARGET_OF=()
+declare -gA TARGET_OF=(
+  [fifth_charge_role]='TestApiStatement20_EveryChargeRoleIsShownAndCountedInTheGross'
+)
 declare -gA SVC_TARGET_OF=(
   [member_sees_attribution]='TestApiStatement1_MemberReadsOwnStatementWithoutAttribution'
   [member_refused]='TestApiStatement1_MemberReadsOwnStatementWithoutAttribution'
@@ -41,4 +46,5 @@ declare -gA SVC_TARGET_OF=(
   [period_drops_vat_levy]='TestApiStatement19_ChargedInPeriodKeepsEveryComponentApart'
   [charges_two_roles_only]='TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart'
   [charges_reversed_order]='TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart|TestApiStatement6_RefundIsNotASecondCharge'
+  [gross_skips_levy]='TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart|TestApiStatement20_EveryChargeRoleIsShownAndCountedInTheGross'
 )

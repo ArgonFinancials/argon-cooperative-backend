@@ -20,6 +20,7 @@
 //	charges_two_roles_only   only the partner's and Argon's lines are read: VAT and the levy vanish (the real handler until 2026-10-22)
 //	period_drops_vat_levy    the period's VAT and levy totals read zero
 //	charges_reversed_order   every component present and right, sent levy first (the order a client renders)
+//	gross_skips_levy         every charge line shown, the levy left out of the gross (finding 55's gross, lines intact)
 //	refund_as_charge         charge amounts unsigned: a refund reads as another charge
 //	value_date_filled        a NULL value date is sent as the posting date
 //	balance_contract_sign    balances sent §0-signed (in credit = negative)
@@ -297,9 +298,13 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			levy += lv + abs(lv)
 		}
 
+		gross := abs(sav + pc + am + vt + lv)
+		if f.brk == "gross_skips_levy" { // every line shown, the levy left out of the gross
+			gross = abs(sav + pc + am + vt)
+		}
 		r := api.StatementRow{
 			EntryId: uuidOf(id), PostedAt: postedAt, Kind: api.MovementKind(kind), Reference: ref,
-			GrossKobo:          api.Magnitude(strconv.FormatInt(abs(sav+pc+am+vt+lv), 10)),
+			GrossKobo:          api.Magnitude(strconv.FormatInt(gross, 10)),
 			SavingsLineKobo:    api.Kobo(strconv.FormatInt(sav, 10)),
 			SavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(run, 10)),
 			Reason:             reason,
