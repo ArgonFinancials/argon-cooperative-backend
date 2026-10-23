@@ -47,6 +47,8 @@ components:
         - payroll_remittance
         - project_funding
         - opening_balance
+        - loan_write_off
+        - loan_recovery
 
     MoneyState:
       type: string
@@ -74,8 +76,10 @@ components:
         The partner charge and the Argon margin are recorded SEPARATELY. Summed
         into one total the pass-through-versus-margin distinction is
         unrecoverable from history, and transaction charges are the only revenue
-        line in the product. D-03, D-07.
-      enum: [principal, partner_charge, argon_margin]
+        line in the product. D-03, D-07. VAT on Argon's fee and the transfer
+        levy are their own lines too (0011, 0013). The same list as the
+        schema's ledger_lines.charge_role (TestApiSpec01).
+      enum: [principal, partner_charge, argon_margin, vat, statutory_levy]
 
     PostedRecord:
       type: object
@@ -275,14 +279,17 @@ components:
       type: object
       required: [role, amountKobo]
       description: |
-        One charge line, as posted. Partner charge and Argon margin are SEPARATE
-        lines, never summed (D-03). §0-signed: a charge taken is a credit
-        (negative); a charge refunded on a reversal is a debit (positive), so a
-        refund can never be read as a second charge.
+        One charge line, as posted. Every component is a SEPARATE line, never
+        summed (D-03): the partner's charge, Argon's own fee, VAT on Argon's
+        fee, and the transfer levy (0011, 0013). A component that is zero has no
+        line (the ledger never writes a ₦0 line; the partner's is zero by D-07).
+        §0-signed: a charge taken is a credit (negative); a charge refunded on a
+        reversal is a debit (positive), so a refund can never be read as a
+        second charge.
       properties:
         role:
           type: string
-          enum: [partner_charge, argon_margin]
+          enum: [partner_charge, argon_margin, vat, statutory_levy]
         amountKobo: { $ref: '#/components/schemas/Kobo' }
 
     PostedBy:
@@ -345,28 +352,22 @@ components:
           nullable: true
           description: Why a reversal or adjustment was made. Shown to the member; it is their money.
         postedBy:
-          type: object
           nullable: true
           description: NULL in the member projection; present in the officer projection. Frozen at posting (§4).
-          required: [userId, post, postLabel]
-          properties:
-            userId: { type: string, format: uuid }
-            post:
-              type: string
-              nullable: true
-              enum: [chairman, treasurer, secretary, internal_auditor, branch_officer, loan_officer]
-            postLabel: { type: string }
+          allOf: [{ $ref: '#/components/schemas/PostedBy' }]
 
     ChargedInPeriod:
       type: object
-      required: [partnerChargeKobo, argonMarginKobo]
+      required: [partnerChargeKobo, argonMarginKobo, vatKobo, statutoryLevyKobo]
       description: |
         What the member was charged in the period, NET OF REFUNDS, from the
-        member's side (positive = charged). A charge refunded by a reversal
-        nets to zero; it is never counted twice.
+        member's side (positive = charged), each component apart (D-03). A
+        charge refunded by a reversal nets to zero; it is never counted twice.
       properties:
         partnerChargeKobo: { $ref: '#/components/schemas/SavingsBalance' }
         argonMarginKobo: { $ref: '#/components/schemas/SavingsBalance' }
+        vatKobo: { $ref: '#/components/schemas/SavingsBalance' }
+        statutoryLevyKobo: { $ref: '#/components/schemas/SavingsBalance' }
 
     MemberStatement:
       type: object
@@ -416,7 +417,8 @@ components:
       type: string
       description: What an account IS, independent of its society-specific code (0004).
       enum: [member_savings, member_wallet, member_loan, bank, charges_partner,
-             charges_margin, migration_control, general]
+             charges_margin, migration_control, general, loan_loss, loan_recovery_income,
+             charges_vat, statutory_levy_payable]
 
     Account:
       type: object

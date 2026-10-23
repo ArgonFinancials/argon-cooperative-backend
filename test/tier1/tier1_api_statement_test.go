@@ -120,13 +120,15 @@ type stRow struct {
 }
 
 type stmt struct {
-	MemberId                  string  `json:"memberId"`
-	Projection                string  `json:"projection"`
-	OpeningSavingsBalanceKobo string  `json:"openingSavingsBalanceKobo"`
-	ClosingSavingsBalanceKobo string  `json:"closingSavingsBalanceKobo"`
+	MemberId                  string `json:"memberId"`
+	Projection                string `json:"projection"`
+	OpeningSavingsBalanceKobo string `json:"openingSavingsBalanceKobo"`
+	ClosingSavingsBalanceKobo string `json:"closingSavingsBalanceKobo"`
 	ChargedInPeriod           struct {
 		Partner string `json:"partnerChargeKobo"`
 		Margin  string `json:"argonMarginKobo"`
+		Vat     string `json:"vatKobo"`
+		Levy    string `json:"statutoryLevyKobo"`
 	} `json:"chargedInPeriod"`
 	Rows []stRow `json:"rows"`
 }
@@ -158,19 +160,21 @@ func charges(t *testing.T, row stRow) []charge {
 		}
 		out = append(out, x)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Role > out[j].Role }) // partner_charge, argon_margin
+	order := map[string]int{"partner_charge": 0, "argon_margin": 1, "vat": 2, "statutory_levy": 3}
+	sort.Slice(out, func(i, j int) bool { return order[out[i].Role] < order[out[j].Role] })
 	return out
 }
 
 // ---- the fixture: one society, the §7 story for one member --------------------
 
 type world struct {
-	srv                                     *httptest.Server
-	c                                       *chart
-	memberUser, member                      string
-	other, otherUser                        string
-	officer, auditor, former, elsewhere     string // users
-	eOpening, eContrib, eReversal, eWallet, eToOther string
+	srv                                                         *httptest.Server
+	c                                                           *chart
+	memberUser, member                                          string
+	other, otherUser                                            string
+	officer, auditor, former, elsewhere                         string // users
+	eOpening, eContrib, eWithdraw, eReversal, eWallet, eToOther string
+	vat, levy                                                   string // accounts
 }
 
 func newWorld(t *testing.T) *world {
@@ -195,9 +199,18 @@ func newWorld(t *testing.T) *world {
 	fixture(t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Officer elsewhere') RETURNING id`).Scan(&wd.elsewhere), "user")
 	em = elsewhere.member(wd.elsewhere)
 	fixture(t, elsewhere.appoint(em, "chairman", true, "2020-01-01", ""), "officer of another society")
-	// The contribution below carries §7a's charges: the society charges them
-	// (0011: an entry carries the schedule's charge, not one it was given).
-	wd.c.chargesLike7a(t)
+	// §7 under D-07 (LEDGER_CONTRACT.md, rewritten 2026-10-22): a contribution
+	// carries NO charge by default (§9: this society has no contribution
+	// series), and a withdrawal carries the CBN band as Argon's charge in full,
+	// VAT on it, and the levy, each on its own line and account; the partner's
+	// is zero by decision, so it has no line.
+	for _, a := range []struct {
+		dst        *string
+		code, role string
+	}{{&wd.vat, "2102", "charges_vat"}, {&wd.levy, "2103", "statutory_levy_payable"}} {
+		fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, $3, 'liability', $3) RETURNING id`,
+			s.id, a.code, a.role).Scan(a.dst), "account "+a.role)
+	}
 
 	post := func(e entry, ls ...line) string {
 		id, err := s.postEntry(e, ls...)
@@ -208,15 +221,22 @@ func newWorld(t *testing.T) *world {
 	// §7b: opening balance, the society's records carry NO as-at date.
 	wd.eOpening = post(entry{kind: "opening_balance", batch: s.openingBatch(), unknownDate: true},
 		line{acct: c.migration, kobo: 48000000}, line{acct: c.savings, kobo: -48000000, member: wd.member})
-	// §7a: ₦25,000 contribution, ₦87.50 charge split partner/margin.
+	// §7a′: a ₦25,000 contribution, uncharged (the default).
 	wd.eContrib = post(entry{kind: "contribution_in"},
-		line{acct: c.bank, kobo: 2500000}, line{acct: c.savings, kobo: -2491250, member: wd.member},
-		line{acct: c.partner, kobo: -5000, role: "partner_charge"}, line{acct: c.margin, kobo: -3750, role: "argon_margin"})
-	// §7c: its reversal, refunding the charge (D-02).
-	wd.eReversal = post(entry{kind: "contribution_in", reverses: wd.eContrib, reason: "Posted twice in error by the treasurer"},
-		line{acct: c.savings, kobo: 2491250, member: wd.member},
-		line{acct: c.partner, kobo: 5000, role: "partner_charge"}, line{acct: c.margin, kobo: 3750, role: "argon_margin"},
-		line{acct: c.bank, kobo: -2500000})
+		line{acct: c.bank, kobo: 2500000}, line{acct: c.savings, kobo: -2500000, member: wd.member})
+	// §7a: a ₦20,000 withdrawal, the charge on top: Argon's ₦10 (the CBN band,
+	// D-07), ₦0.75 VAT on it, the ₦50 levy. ₦20,060.75 leaves the savings.
+	// (Recorded without a hold, as 0012 records and flags one: the statement
+	// shows what the ledger holds.)
+	wd.eWithdraw = post(entry{kind: "withdrawal_out", payoutRef: "NIP-" + digest()[:16]},
+		line{acct: c.savings, kobo: 2006075, member: wd.member}, line{acct: c.bank, kobo: -2000000},
+		line{acct: c.margin, kobo: -1000, role: "argon_margin"}, line{acct: wd.vat, kobo: -75, role: "vat"},
+		line{acct: wd.levy, kobo: -5000, role: "statutory_levy"})
+	// §7c: its reversal (the transfer came back), every charge refunded (D-02).
+	wd.eReversal = post(entry{kind: "withdrawal_out", reverses: wd.eWithdraw, reason: "The bank returned the transfer: a wrong account number"},
+		line{acct: c.bank, kobo: 2000000}, line{acct: c.margin, kobo: 1000, role: "argon_margin"},
+		line{acct: wd.vat, kobo: 75, role: "vat"}, line{acct: wd.levy, kobo: 5000, role: "statutory_levy"},
+		line{acct: c.savings, kobo: -2006075, member: wd.member})
 	// Wallet → savings: no bank line at all.
 	wd.eWallet = post(entry{kind: "transfer_out"},
 		line{acct: c.wallet, kobo: 100000, member: wd.member}, line{acct: c.savings, kobo: -100000, member: wd.member})
@@ -312,15 +332,23 @@ func TestApiStatement4_AuditorReadsTheOfficerProjection(t *testing.T) {
 // FIGURES
 // =============================================================================
 
-func TestApiStatement5_ChargesAreTheirOwnLinesPartnerAndMarginApart(t *testing.T) {
+// §7a: every component its own line (D-03), the partner's absent (zero by
+// D-07: the ledger writes no ₦0 line). And the gross is what the member asked
+// for, only because EVERY charge is counted: read two components and VAT and
+// the levy vanish from the statement while still leaving the savings.
+func TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart(t *testing.T) {
 	wd := newWorld(t)
-	r := rowOf(t, decode(t, wd.statement(t, wd.memberUser, "")), wd.eContrib)
+	r := rowOf(t, decode(t, wd.statement(t, wd.memberUser, "")), wd.eWithdraw)
 	got := charges(t, r)
-	if len(got) != 2 || got[0] != (charge{"partner_charge", "-5000"}) || got[1] != (charge{"argon_margin", "-3750"}) {
-		t.Fatalf("ACCEPTED — the ₦87.50 is not shown as partner ₦50 and margin ₦37.50 on separate lines: %+v", got)
+	want := []charge{{"argon_margin", "-1000"}, {"vat", "-75"}, {"statutory_levy", "-5000"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ACCEPTED — the ₦60.75 is not shown as Argon ₦10, VAT ₦0.75 and the levy ₦50 on separate lines, and no partner line: %+v", got)
 	}
-	if r.GrossKobo != "2500000" || r.SavingsLineKobo != "-2491250" || r.Direction != "in" {
-		t.Fatalf("WRONG FIGURES — gross %s, savings line %s, direction %s; want 2500000, -2491250, in", r.GrossKobo, r.SavingsLineKobo, r.Direction)
+	if r.GrossKobo != "2000000" || r.SavingsLineKobo != "2006075" || r.Direction != "out" {
+		t.Fatalf("WRONG FIGURES — gross %s, savings line %s, direction %s; want 2000000, 2006075, out", r.GrossKobo, r.SavingsLineKobo, r.Direction)
+	}
+	if r := rowOf(t, decode(t, wd.statement(t, wd.memberUser, "")), wd.eContrib); len(charges(t, r)) != 0 || r.GrossKobo != "2500000" {
+		t.Fatalf("CHARGED — the contribution (uncharged by default, §9) shows %+v, gross %s", charges(t, r), r.GrossKobo)
 	}
 }
 
@@ -330,12 +358,11 @@ func TestApiStatement6_RefundIsNotASecondCharge(t *testing.T) {
 	wd := newWorld(t)
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	got := charges(t, rowOf(t, s, wd.eReversal))
-	if len(got) != 2 || got[0].Amount != "5000" || got[1].Amount != "3750" {
+	if len(got) != 3 || got[0].Amount != "1000" || got[1].Amount != "75" || got[2].Amount != "5000" {
 		t.Fatalf("ACCEPTED — the reversal's refunded charges are not positive (refund) lines: %+v", got)
 	}
-	if s.ChargedInPeriod.Partner != "0" || s.ChargedInPeriod.Margin != "0" {
-		t.Fatalf("ACCEPTED — a charge and its refund were counted as charged: partner %s, margin %s (want 0, 0)",
-			s.ChargedInPeriod.Partner, s.ChargedInPeriod.Margin)
+	if p := s.ChargedInPeriod; p.Partner != "0" || p.Margin != "0" || p.Vat != "0" || p.Levy != "0" {
+		t.Fatalf("ACCEPTED — a charge and its refund were counted as charged: %+v (want every component 0)", p)
 	}
 }
 
@@ -363,14 +390,14 @@ func TestApiStatement7_UnknownValueDateIsSentAsNull(t *testing.T) {
 func TestApiStatement8_BalancesAreFromTheMembersSide(t *testing.T) {
 	wd := newWorld(t)
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
-	want := map[string]string{wd.eOpening: "48000000", wd.eContrib: "50491250", wd.eReversal: "48000000", wd.eWallet: "48100000", wd.eToOther: "48050000"}
+	want := map[string]string{wd.eOpening: "48000000", wd.eContrib: "50500000", wd.eWithdraw: "48493925", wd.eReversal: "50500000", wd.eWallet: "50600000", wd.eToOther: "50550000"}
 	for id, bal := range want {
 		if got := rowOf(t, s, id).SavingsBalanceKobo; got != bal {
 			t.Fatalf("WRONG FIGURES — balance after %s is %s, want %s (positive = the society owes the member)", id, got, bal)
 		}
 	}
-	if s.OpeningSavingsBalanceKobo != "0" || s.ClosingSavingsBalanceKobo != "48050000" {
-		t.Fatalf("WRONG FIGURES — opening %s, closing %s; want 0, 48050000", s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)
+	if s.OpeningSavingsBalanceKobo != "0" || s.ClosingSavingsBalanceKobo != "50550000" {
+		t.Fatalf("WRONG FIGURES — opening %s, closing %s; want 0, 50550000", s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)
 	}
 }
 
@@ -394,18 +421,17 @@ func TestApiStatement9_DirectionComesFromTheSavingsLine(t *testing.T) {
 // be told apart.)
 func TestApiStatement10_RowsInValueDateOrder(t *testing.T) {
 	wd := newWorld(t)
-	// Charged as its society charges (§7a's split; 0011 requires the
-	// schedule's charge). This test is about order, not amounts.
+	// Uncharged, as the society charges contributions (none). This test is
+	// about order, not amounts.
 	eBack, err := wd.c.s.postEntry(entry{kind: "contribution_in", valueDate: "2026-01-10"},
-		line{acct: wd.c.bank, kobo: 10000}, line{acct: wd.c.savings, kobo: -9965, member: wd.member},
-		line{acct: wd.c.partner, kobo: -20, role: "partner_charge"}, line{acct: wd.c.margin, kobo: -15, role: "argon_margin"})
+		line{acct: wd.c.bank, kobo: 10000}, line{acct: wd.c.savings, kobo: -10000, member: wd.member})
 	fixture(t, err, "a contribution dated January, posted last")
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	got := []string{}
 	for _, r := range s.Rows {
 		got = append(got, r.EntryId)
 	}
-	want := []string{wd.eOpening, eBack, wd.eContrib, wd.eReversal, wd.eWallet, wd.eToOther}
+	want := []string{wd.eOpening, eBack, wd.eContrib, wd.eWithdraw, wd.eReversal, wd.eWallet, wd.eToOther}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("WRONG ORDER — rows are not in value-date order (undated first, then by value date, posting time, id):\n  got  %v\n  want %v", got, want)
 	}
@@ -448,8 +474,8 @@ func TestApiStatement12_EmptyListsAreArraysNotNull(t *testing.T) {
 func TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance(t *testing.T) {
 	wd := newWorld(t)
 	s := decode(t, wd.statement(t, wd.memberUser, "?from=2026-03-01&to=2026-03-31"))
-	if len(s.Rows) != 4 || s.OpeningSavingsBalanceKobo != "48000000" || s.ClosingSavingsBalanceKobo != "48050000" {
-		t.Fatalf("WRONG FIGURES — March 2026 by value date: %d rows, opening %s, closing %s; want 4 rows (contribution, reversal, wallet, transfer), opening 48000000 (the undated opening balance), closing 48050000",
+	if len(s.Rows) != 5 || s.OpeningSavingsBalanceKobo != "48000000" || s.ClosingSavingsBalanceKobo != "50550000" {
+		t.Fatalf("WRONG FIGURES — March 2026 by value date: %d rows, opening %s, closing %s; want 5 rows (contribution, withdrawal, reversal, wallet, transfer), opening 48000000 (the undated opening balance), closing 50550000",
 			len(s.Rows), s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)
 	}
 	s = decode(t, wd.statement(t, wd.memberUser, "?to=2026-02-28"))
@@ -458,8 +484,8 @@ func TestApiStatement13_PeriodBoundsRowsAndCarriesTheBalance(t *testing.T) {
 			len(s.Rows), s.ClosingSavingsBalanceKobo)
 	}
 	s = decode(t, wd.statement(t, wd.memberUser, "?from=2999-01-01"))
-	if len(s.Rows) != 0 || s.OpeningSavingsBalanceKobo != "48050000" || s.ClosingSavingsBalanceKobo != "48050000" {
-		t.Fatalf("WRONG FIGURES — a period after every entry: %d rows, opening %s, closing %s; want 0, 48050000, 48050000",
+	if len(s.Rows) != 0 || s.OpeningSavingsBalanceKobo != "50550000" || s.ClosingSavingsBalanceKobo != "50550000" {
+		t.Fatalf("WRONG FIGURES — a period after every entry: %d rows, opening %s, closing %s; want 0, 50550000, 50550000",
 			len(s.Rows), s.OpeningSavingsBalanceKobo, s.ClosingSavingsBalanceKobo)
 	}
 }
@@ -482,8 +508,8 @@ func TestApiStatement14_AnotherMembersLineNeverLeaks(t *testing.T) {
 		t.Fatalf("ACCEPTED — the statement exposes the other member's line or id")
 	}
 	row := rowOf(t, s, wd.eToOther)
-	if row.SavingsLineKobo != "50000" || row.SavingsBalanceKobo != "48050000" {
-		t.Fatalf("ACCEPTED — the other member's line is mixed into this member's figures: savings line %s, balance %s; want 50000, 48050000",
+	if row.SavingsLineKobo != "50000" || row.SavingsBalanceKobo != "50550000" {
+		t.Fatalf("ACCEPTED — the other member's line is mixed into this member's figures: savings line %s, balance %s; want 50000, 50550000",
 			row.SavingsLineKobo, row.SavingsBalanceKobo)
 	}
 }
@@ -533,22 +559,22 @@ func TestApiStatement18_NoValidSessionGetsUnauthorized(t *testing.T) {
 	}
 }
 
-// The period's charge totals, partner and margin
-// apart, when they are not zero. Test 6 is the only other check on these
-// totals, and there the charge and its refund cancel to 0 and 0, so swapping
-// partner and margin moves 3750 − 3750 and nothing shows. The real handler
-// with exactly that swap passed all 18 tests. One more contribution, never
-// refunded, makes the totals 5000 and 3750: distinct, so a swap is visible.
-func TestApiStatement19_ChargedInPeriodKeepsPartnerAndMarginApart(t *testing.T) {
+// The period's charge totals, every component apart. Test 6 is the only other
+// check on these totals, and there each charge and its refund cancel to 0, so a
+// handler that swapped two components, or dropped VAT and the levy, would pass
+// it (the old world's swap passed all 18 tests). One more withdrawal, never
+// refunded, makes the totals partner 0, Argon 1000, VAT 75, levy 5000: every
+// figure distinct, deliberately, so any swap or omission shows.
+func TestApiStatement19_ChargedInPeriodKeepsEveryComponentApart(t *testing.T) {
 	wd := newWorld(t)
 	c := wd.c
-	_, err := c.s.postEntry(entry{kind: "contribution_in"},
-		line{acct: c.bank, kobo: 2500000}, line{acct: c.savings, kobo: -2491250, member: wd.member},
-		line{acct: c.partner, kobo: -5000, role: "partner_charge"}, line{acct: c.margin, kobo: -3750, role: "argon_margin"})
-	fixture(t, err, "an unrefunded contribution")
+	_, err := c.s.postEntry(entry{kind: "withdrawal_out", payoutRef: "NIP-" + digest()[:16]},
+		line{acct: c.savings, kobo: 2006075, member: wd.member}, line{acct: c.bank, kobo: -2000000},
+		line{acct: c.margin, kobo: -1000, role: "argon_margin"}, line{acct: wd.vat, kobo: -75, role: "vat"},
+		line{acct: wd.levy, kobo: -5000, role: "statutory_levy"})
+	fixture(t, err, "an unrefunded withdrawal")
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
-	if s.ChargedInPeriod.Partner != "5000" || s.ChargedInPeriod.Margin != "3750" {
-		t.Fatalf("WRONG FIGURES — charged in period: partner %s, margin %s; want 5000, 3750 (one ₦87.50 charge kept, one refunded)",
-			s.ChargedInPeriod.Partner, s.ChargedInPeriod.Margin)
+	if p := s.ChargedInPeriod; p.Partner != "0" || p.Margin != "1000" || p.Vat != "75" || p.Levy != "5000" {
+		t.Fatalf("WRONG FIGURES — charged in period: %+v; want partner 0, Argon 1000, VAT 75, levy 5000 (one ₦60.75 charge kept, one refunded)", p)
 	}
 }

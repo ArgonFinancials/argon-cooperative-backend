@@ -560,6 +560,7 @@ func onStepUp(t *testing.T, table, kind, actor, cols string, args ...any) error 
 
 type entry struct {
 	kind, valueDate, postedAt, reverses, adjusts, reason, society, actor, batch string
+	payoutRef                                                                  string // a payout names the transfer that paid it (0011); empty adds nothing
 	unknownDate                                                                bool
 }
 
@@ -597,6 +598,9 @@ func (s *soc) insertEntry(x pgx.Tx, e entry) (string, error) {
 		if cr := clientRefOf(kind, ""); cr != nil {
 			cols, vals, args = cols+", client_reference", vals+fmt.Sprintf(", $%d", len(args)+1), append(args, cr)
 		}
+	}
+	if e.payoutRef != "" {
+		cols, vals, args = cols+", payout_reference", vals+fmt.Sprintf(", $%d", len(args)+1), append(args, e.payoutRef)
 	}
 	err = x.QueryRow(bg(), `INSERT INTO ledger_entries (`+cols+`) VALUES (`+vals+`) RETURNING id`, args...).Scan(&id)
 	return id, err

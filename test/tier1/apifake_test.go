@@ -16,7 +16,9 @@
 //	two_queries              the officer's statement is a separate query that drops reversals
 //	auditor_refused          (over-strict) the read-only auditor may not read statements
 //	member_refused           (over-strict) a member may not read their own statement
-//	charges_summed           partner and margin returned as one combined line
+//	charges_summed           every charge component returned as one combined line
+//	charges_two_roles_only   only the partner's and Argon's lines are read: VAT and the levy vanish (the real handler until 2026-10-22)
+//	period_drops_vat_levy    the period's VAT and levy totals read zero
 //	refund_as_charge         charge amounts unsigned: a refund reads as another charge
 //	value_date_filled        a NULL value date is sent as the posting date
 //	balance_contract_sign    balances sent §0-signed (in credit = negative)
@@ -227,6 +229,8 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 		         WHERE l.entry_id = e.id AND a.role = 'member_savings' AND `+savingsFilter+`),
 		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'partner_charge'),
 		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'argon_margin'),
+		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'vat'),
+		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'statutory_levy'),
 		       EXISTS (SELECT 1 FROM ledger_lines l JOIN accounts a ON a.id = l.account_id WHERE l.entry_id = e.id AND a.role = 'bank' AND l.amount_kobo < 0)
 		  FROM ledger_entries e LEFT JOIN ledger_batches b ON b.id = e.batch_id
 		 WHERE e.id IN (SELECT l.entry_id FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
@@ -241,6 +245,7 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 		out             []api.StatementRow
 		opening, run    int64
 		partner, margin int64
+		vat, levy       int64
 	)
 	if f.brk != "nil_slices" {
 		out = []api.StatementRow{}
@@ -252,10 +257,10 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			postedAt                               time.Time
 			valueDate, ref, rev, adj, reason, post *string
 			actor, label                           string
-			sav, pc, am                            int64
+			sav, pc, am, vt, lv                    int64
 			bankOut                                bool
 		)
-		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason, &actor, &post, &label, &sav, &pc, &am, &bankOut); err != nil {
+		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason, &actor, &post, &label, &sav, &pc, &am, &vt, &lv, &bankOut); err != nil {
 			return nil, err
 		}
 		day := "" // the value date; undated is before every date
@@ -275,17 +280,24 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 				continue
 			}
 		}
+		if f.brk == "charges_two_roles_only" { // the defect until 2026-10-22: VAT and the levy unread
+			vt, lv = 0, 0
+		}
 		run -= sav
 		partner -= pc
 		margin -= am
+		vat -= vt
+		levy -= lv
 		if f.brk == "refund_as_charge" {
 			partner += pc + abs(pc) // count every charge line as charged, refunds included
 			margin += am + abs(am)
+			vat += vt + abs(vt)
+			levy += lv + abs(lv)
 		}
 
 		r := api.StatementRow{
 			EntryId: uuidOf(id), PostedAt: postedAt, Kind: api.MovementKind(kind), Reference: ref,
-			GrossKobo:          api.Magnitude(strconv.FormatInt(abs(sav+pc+am), 10)),
+			GrossKobo:          api.Magnitude(strconv.FormatInt(abs(sav+pc+am+vt+lv), 10)),
 			SavingsLineKobo:    api.Kobo(strconv.FormatInt(sav, 10)),
 			SavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(run, 10)),
 			Reason:             reason,
@@ -326,14 +338,17 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			}
 			return api.Kobo(strconv.FormatInt(v, 10))
 		}
-		if f.brk == "charges_summed" && (pc != 0 || am != 0) {
-			r.Charges = append(r.Charges, api.ChargeLine{Role: "partner_charge", AmountKobo: amt(pc + am)})
+		if f.brk == "charges_summed" && (pc != 0 || am != 0 || vt != 0 || lv != 0) {
+			r.Charges = append(r.Charges, api.ChargeLine{Role: "argon_margin", AmountKobo: amt(pc + am + vt + lv)})
 		} else {
-			if pc != 0 {
-				r.Charges = append(r.Charges, api.ChargeLine{Role: "partner_charge", AmountKobo: amt(pc)})
-			}
-			if am != 0 {
-				r.Charges = append(r.Charges, api.ChargeLine{Role: "argon_margin", AmountKobo: amt(am)})
+			// Every component its own line, a zero component no line (D-03).
+			for _, c := range []struct {
+				role api.ChargeLineRole
+				v    int64
+			}{{"partner_charge", pc}, {"argon_margin", am}, {"vat", vt}, {"statutory_levy", lv}} {
+				if c.v != 0 {
+					r.Charges = append(r.Charges, api.ChargeLine{Role: c.role, AmountKobo: amt(c.v)})
+				}
 			}
 		}
 		attributed := projection == "officer"
@@ -344,13 +359,9 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			attributed = false
 		}
 		if attributed {
-			pb := struct {
-				Post      *api.StatementRowPostedByPost `json:"post"`
-				PostLabel string                        `json:"postLabel"`
-				UserId    openapi_types.UUID            `json:"userId"`
-			}{PostLabel: label, UserId: uuidOf(actor)}
+			pb := api.PostedBy{PostLabel: label, UserId: uuidOf(actor)}
 			if post != nil {
-				p := api.StatementRowPostedByPost(*post)
+				p := api.PostedByPost(*post)
 				pb.Post = &p
 			}
 			r.PostedBy = &pb
@@ -365,8 +376,13 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 		ChargedInPeriod: api.ChargedInPeriod{
 			PartnerChargeKobo: api.SavingsBalance(strconv.FormatInt(partner, 10)),
 			ArgonMarginKobo:   api.SavingsBalance(strconv.FormatInt(margin, 10)),
+			VatKobo:           api.SavingsBalance(strconv.FormatInt(vat, 10)),
+			StatutoryLevyKobo: api.SavingsBalance(strconv.FormatInt(levy, 10)),
 		},
 		Rows: out,
+	}
+	if f.brk == "period_drops_vat_levy" {
+		st.ChargedInPeriod.VatKobo, st.ChargedInPeriod.StatutoryLevyKobo = "0", "0"
 	}
 	if f.brk == "period_totals_swapped" {
 		st.ChargedInPeriod.PartnerChargeKobo, st.ChargedInPeriod.ArgonMarginKobo = st.ChargedInPeriod.ArgonMarginKobo, st.ChargedInPeriod.PartnerChargeKobo

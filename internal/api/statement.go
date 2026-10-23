@@ -138,13 +138,9 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			row.Charges = append(row.Charges, ChargeLine{Role: ChargeLineRoleArgonMargin, AmountKobo: Kobo(strconv.FormatInt(margin, 10))})
 		}
 		if projection == MemberStatementProjectionOfficer {
-			pb := struct {
-				Post      *StatementRowPostedByPost `json:"post"`
-				PostLabel string                    `json:"postLabel"`
-				UserId    openapi_types.UUID        `json:"userId"`
-			}{PostLabel: label, UserId: uuidOf(actor)}
+			pb := PostedBy{PostLabel: label, UserId: uuidOf(actor)}
 			if post != nil {
-				p := StatementRowPostedByPost(*post)
+				p := PostedByPost(*post)
 				pb.Post = &p
 			}
 			row.PostedBy = &pb
