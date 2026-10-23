@@ -40,4 +40,5 @@ declare -gA SVC_TARGET_OF=(
   [period_totals_swapped]='TestApiStatement19_ChargedInPeriodKeepsEveryComponentApart'
   [period_drops_vat_levy]='TestApiStatement19_ChargedInPeriodKeepsEveryComponentApart'
   [charges_two_roles_only]='TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart'
+  [charges_reversed_order]='TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart|TestApiStatement6_RefundIsNotASecondCharge'
 )

@@ -341,7 +341,13 @@ components:
           $ref: '#/components/schemas/Kobo'
         charges:
           type: array
-          description: Every charge line of the entry, partner and margin separately. Empty when the movement is free.
+          description: |
+            Every charge line of the entry, each component separately, IN THIS
+            ORDER: partner_charge, argon_margin, vat, statutory_levy (what the
+            bank took, what Argon took, the tax on Argon's charge, the levy).
+            Only the non-zero components appear; the order of those that do is
+            fixed, and a client may render the list as sent. Empty when the
+            movement is free.
           items: { $ref: '#/components/schemas/ChargeLine' }
         savingsBalanceKobo:
           $ref: '#/components/schemas/SavingsBalance'

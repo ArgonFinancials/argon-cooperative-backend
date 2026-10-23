@@ -29,7 +29,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -160,8 +159,10 @@ func charges(t *testing.T, row stRow) []charge {
 		}
 		out = append(out, x)
 	}
-	order := map[string]int{"partner_charge": 0, "argon_margin": 1, "vat": 2, "statutory_levy": 3}
-	sort.Slice(out, func(i, j int) bool { return order[out[i].Role] < order[out[j].Role] })
+	// AS SENT, never sorted (the reviewer, 2026-10-23): the order is part of
+	// the contract (partner_charge, argon_margin, vat, statutory_levy, the
+	// non-zero ones), because a client renders the list in the order it
+	// arrives. A sort here once hid any order the server chose.
 	return out
 }
 
@@ -342,7 +343,7 @@ func TestApiStatement5_ChargesAreTheirOwnLinesEveryComponentApart(t *testing.T) 
 	got := charges(t, r)
 	want := []charge{{"argon_margin", "-1000"}, {"vat", "-75"}, {"statutory_levy", "-5000"}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("ACCEPTED — the ₦60.75 is not shown as Argon ₦10, VAT ₦0.75 and the levy ₦50 on separate lines, and no partner line: %+v", got)
+		t.Fatalf("ACCEPTED — the ₦60.75 is not shown as Argon ₦10, VAT ₦0.75 and the levy ₦50 on separate lines, IN THAT ORDER as sent, and no partner line: %+v", got)
 	}
 	if r.GrossKobo != "2000000" || r.SavingsLineKobo != "2006075" || r.Direction != "out" {
 		t.Fatalf("WRONG FIGURES — gross %s, savings line %s, direction %s; want 2000000, 2006075, out", r.GrossKobo, r.SavingsLineKobo, r.Direction)
@@ -358,8 +359,8 @@ func TestApiStatement6_RefundIsNotASecondCharge(t *testing.T) {
 	wd := newWorld(t)
 	s := decode(t, wd.statement(t, wd.memberUser, ""))
 	got := charges(t, rowOf(t, s, wd.eReversal))
-	if len(got) != 3 || got[0].Amount != "1000" || got[1].Amount != "75" || got[2].Amount != "5000" {
-		t.Fatalf("ACCEPTED — the reversal's refunded charges are not positive (refund) lines: %+v", got)
+	if want := []charge{{"argon_margin", "1000"}, {"vat", "75"}, {"statutory_levy", "5000"}}; len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ACCEPTED — the reversal's refunded charges are not positive (refund) lines, Argon, VAT, levy in that order as sent: %+v", got)
 	}
 	if p := s.ChargedInPeriod; p.Partner != "0" || p.Margin != "0" || p.Vat != "0" || p.Levy != "0" {
 		t.Fatalf("ACCEPTED — a charge and its refund were counted as charged: %+v (want every component 0)", p)

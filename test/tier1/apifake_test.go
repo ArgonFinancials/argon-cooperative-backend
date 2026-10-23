@@ -19,6 +19,7 @@
 //	charges_summed           every charge component returned as one combined line
 //	charges_two_roles_only   only the partner's and Argon's lines are read: VAT and the levy vanish (the real handler until 2026-10-22)
 //	period_drops_vat_levy    the period's VAT and levy totals read zero
+//	charges_reversed_order   every component present and right, sent levy first (the order a client renders)
 //	refund_as_charge         charge amounts unsigned: a refund reads as another charge
 //	value_date_filled        a NULL value date is sent as the posting date
 //	balance_contract_sign    balances sent §0-signed (in credit = negative)
@@ -44,6 +45,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -349,6 +351,9 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 				if c.v != 0 {
 					r.Charges = append(r.Charges, api.ChargeLine{Role: c.role, AmountKobo: amt(c.v)})
 				}
+			}
+			if f.brk == "charges_reversed_order" {
+				slices.Reverse(r.Charges)
 			}
 		}
 		attributed := projection == "officer"

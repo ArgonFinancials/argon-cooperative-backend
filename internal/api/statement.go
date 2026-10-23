@@ -45,7 +45,8 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 	}
 
 	// The member's own lines only: savings lines naming THIS member. Charges
-	// are every charge line of the entry, partner and margin apart (D-03).
+	// are every charge line of the entry, each component apart (D-03): the
+	// partner's, Argon's, VAT on Argon's, the levy (0011, 0013).
 	rows, err := s.db.Query(ctx, `
 		SELECT e.id::text, e.posted_at, e.value_date::text, e.kind::text, b.reference,
 		       e.reverses_id::text, e.adjusts_id::text, e.reason,
@@ -53,7 +54,9 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
 		         WHERE l.entry_id = e.id AND a.role = 'member_savings' AND l.member_id = $1),
 		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'partner_charge'),
-		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'argon_margin')
+		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'argon_margin'),
+		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'vat'),
+		       (SELECT coalesce(sum(l.amount_kobo), 0) FROM ledger_lines l WHERE l.entry_id = e.id AND l.charge_role = 'statutory_levy')
 		  FROM ledger_entries e LEFT JOIN ledger_batches b ON b.id = e.batch_id
 		 WHERE e.id IN (SELECT l.entry_id FROM ledger_lines l JOIN accounts a ON a.id = l.account_id
 		                 WHERE l.member_id = $1 AND a.role = 'member_savings')
@@ -67,6 +70,7 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		out                = []StatementRow{} // [] not null, when empty
 		opening, balance   int64              // member's side: positive = owed to the member
 		chargedP, chargedM int64
+		chargedV, chargedL int64
 	)
 	from, to := req.Params.From, req.Params.To
 	for rows.Next() {
@@ -75,10 +79,10 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			postedAt                         time.Time
 			valueDate, ref, rev, adj, reason *string
 			post                             *string
-			sav, partner, margin             int64
+			sav, partner, margin, vat, levy  int64
 		)
 		if err := rows.Scan(&id, &postedAt, &valueDate, &kind, &ref, &rev, &adj, &reason,
-			&actor, &post, &label, &sav, &partner, &margin); err != nil {
+			&actor, &post, &label, &sav, &partner, &margin, &vat, &levy); err != nil {
 			return nil, err
 		}
 		// The VALUE DATE, as the society's books use (decided 2026-10-05): a
@@ -100,6 +104,15 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		balance -= sav
 		chargedP -= partner // a charge is a credit; a refund a debit, which nets it back
 		chargedM -= margin
+		chargedV -= vat
+		chargedL -= levy
+
+		// THE GROSS MUST INCLUDE EVERY CHARGE COMPONENT. It is the savings
+		// line less the charges: what the member asked for. Leave a component
+		// out and the gross is wrong by exactly that amount with nothing in
+		// the sum looking odd (finding 55: "Moved ₦20,050.75"). A new charge
+		// role belongs here, in the query, and in the lines below.
+		gross := abs(sav + partner + margin + vat + levy)
 
 		row := StatementRow{
 			EntryId:            uuidOf(id),
@@ -107,7 +120,7 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			Kind:               MovementKind(kind),
 			Reference:          ref,
 			Direction:          In,
-			GrossKobo:          Magnitude(strconv.FormatInt(abs(sav+partner+margin), 10)),
+			GrossKobo:          Magnitude(strconv.FormatInt(gross, 10)),
 			SavingsLineKobo:    Kobo(strconv.FormatInt(sav, 10)),
 			SavingsBalanceKobo: SavingsBalance(strconv.FormatInt(balance, 10)),
 			Charges:            []ChargeLine{},
@@ -131,11 +144,15 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			u := uuidOf(*adj)
 			row.AdjustsEntryId = &u
 		}
-		if partner != 0 {
-			row.Charges = append(row.Charges, ChargeLine{Role: ChargeLineRolePartnerCharge, AmountKobo: Kobo(strconv.FormatInt(partner, 10))})
-		}
-		if margin != 0 {
-			row.Charges = append(row.Charges, ChargeLine{Role: ChargeLineRoleArgonMargin, AmountKobo: Kobo(strconv.FormatInt(margin, 10))})
+		// One fixed order, the spec's: partner, Argon, VAT, levy; a zero
+		// component has no line (the ledger writes no ₦0 line).
+		for _, c := range []struct {
+			role ChargeLineRole
+			v    int64
+		}{{ChargeLineRolePartnerCharge, partner}, {ChargeLineRoleArgonMargin, margin}, {ChargeLineRoleVat, vat}, {ChargeLineRoleStatutoryLevy, levy}} {
+			if c.v != 0 {
+				row.Charges = append(row.Charges, ChargeLine{Role: c.role, AmountKobo: Kobo(strconv.FormatInt(c.v, 10))})
+			}
 		}
 		if projection == MemberStatementProjectionOfficer {
 			pb := PostedBy{PostLabel: label, UserId: uuidOf(actor)}
@@ -159,6 +176,8 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		ChargedInPeriod: ChargedInPeriod{
 			PartnerChargeKobo: SavingsBalance(strconv.FormatInt(chargedP, 10)),
 			ArgonMarginKobo:   SavingsBalance(strconv.FormatInt(chargedM, 10)),
+			VatKobo:           SavingsBalance(strconv.FormatInt(chargedV, 10)),
+			StatutoryLevyKobo: SavingsBalance(strconv.FormatInt(chargedL, 10)),
 		},
 		Rows: out,
 	}), nil
