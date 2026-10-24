@@ -16,6 +16,9 @@
 //	cors_headers_missing  the preflight does not allow the Authorization header
 //	cors_no_vary          a real call's answer does not vary by Origin
 //	cors_skips_auth       a call from the allowed origin needs no session
+//	credentials_missing   no Access-Control-Allow-Credentials: the browser drops the session cookie
+//	credentials_any_origin  Access-Control-Allow-Credentials on every answer, unlisted origins included
+//	csrf_header_not_allowed the preflight does not allow X-CSRF-Token
 package tier1
 
 import (
@@ -55,6 +58,11 @@ func fakeCORS(origins []string, brk string, next http.Handler) http.Handler {
 			if brk != "cors_no_vary" {
 				w.Header().Add("Vary", "Origin")
 			}
+			// Credentials (the session cookie, 2026-10-23): only to an exact
+			// allowed origin, never with a wildcard.
+			if (ok && brk != "credentials_missing") || brk == "credentials_any_origin" {
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
 		}
 		preflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
 		if preflight && brk != "cors_after_auth" {
@@ -62,13 +70,19 @@ func fakeCORS(origins []string, brk string, next http.Handler) http.Handler {
 				if brk == "cors_wildcard" {
 					w.Header().Set("Access-Control-Allow-Origin", "*")
 				}
+				if brk == "credentials_any_origin" {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 			allow()
-			hdrs := "Authorization, Content-Type, Idempotency-Key"
-			if brk == "cors_headers_missing" {
-				hdrs = "Content-Type, Idempotency-Key"
+			hdrs := "Authorization, Content-Type, Idempotency-Key, X-CSRF-Token"
+			switch brk {
+			case "cors_headers_missing":
+				hdrs = "Content-Type, Idempotency-Key, X-CSRF-Token"
+			case "csrf_header_not_allowed":
+				hdrs = "Authorization, Content-Type, Idempotency-Key"
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
 			w.Header().Set("Access-Control-Allow-Headers", hdrs)

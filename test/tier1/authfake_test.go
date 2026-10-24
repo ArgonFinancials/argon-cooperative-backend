@@ -136,18 +136,24 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	}
 
 	known := false
+	var device any // the session runs on the device that signed it in, as the real service records (2026-10-23)
 	if req.DeviceToken != "" && f.brk != "always_code" {
 		if f.brk == "trust_client_token" {
 			known = true
 		} else {
-			f.d.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth_devices WHERE user_id = $1 AND token_digest = $2 AND revoked_at IS NULL)`,
-				user, sha(req.DeviceToken)).Scan(&known)
+			var id string
+			if f.d.DB.QueryRow(ctx, `SELECT id::text FROM auth_devices WHERE user_id = $1 AND token_digest = $2 AND revoked_at IS NULL`,
+				user, sha(req.DeviceToken)).Scan(&id) == nil {
+				known, device = true, id
+			}
 		}
 	}
 	if known {
 		t := token()
-		q, args := sessionInsert("user_id, token_digest", "", user, sha(t))
-		f.d.DB.Exec(ctx, q, args...)
+		q, args := sessionInsertCSRF(sha(csrfOf(t)), "user_id, device_id, token_digest", "", user, device, sha(t))
+		if _, err := f.d.DB.Exec(ctx, q, args...); err != nil {
+			return auth.Result{}, err
+		}
 		return auth.Result{SessionToken: t}, nil
 	}
 
@@ -204,7 +210,7 @@ func (f *fakeService) VerifyCode(ctx context.Context, challenge, code string) (a
 	dt, st := token(), token()
 	var dev string
 	f.d.DB.QueryRow(ctx, `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id`, user, sha(dt)).Scan(&dev)
-	q, args := sessionInsert("user_id, device_id, token_digest", "", user, dev, sha(st))
+	q, args := sessionInsertCSRF(sha(csrfOf(st)), "user_id, device_id, token_digest", "", user, dev, sha(st))
 	f.d.DB.Exec(ctx, q, args...)
 	if f.brk != "no_notify" {
 		var at time.Time

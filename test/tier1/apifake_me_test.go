@@ -37,6 +37,13 @@ func (f *fakeAPI) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetM
 	if err := f.db.QueryRow(ctx, `SELECT full_name FROM users WHERE id = $1`, caller).Scan(&m.FullName); err != nil {
 		return nil, err
 	}
+	// A cookie session gets its CSRF token again (the reload); a Bearer
+	// session has no use for one and is given none.
+	if viaCookie, _ := ctx.Value(ctxCookie{}).(bool); viaCookie && f.brk != "me_omits_token" {
+		tok, _ := ctx.Value(ctxToken{}).(string)
+		c := csrfOf(tok)
+		m.CsrfToken = &c
+	}
 	whose := `m.user_id = $1`
 	if f.brk == "me_any_member" {
 		whose = `m.society_id IN (SELECT society_id FROM members WHERE user_id = $1)`

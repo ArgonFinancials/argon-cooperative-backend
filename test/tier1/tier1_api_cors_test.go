@@ -67,13 +67,16 @@ func preflight(t *testing.T, srv *httptest.Server, origin, path, method string) 
 	return corsDo(t, req)
 }
 
-// fromOrigin: a real call, as a browser on `origin` makes it.
+// fromOrigin: a real call, as a browser on `origin` makes it: the session in
+// its cookie, never a Bearer header (2026-10-23: a request with an Origin and
+// a Bearer header is refused; until then this sent Bearer, which is exactly
+// the page-holds-a-token call the cookie removes).
 func fromOrigin(t *testing.T, srv *httptest.Server, origin, path, token string) corsResp {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 	req.Header.Set("Origin", origin)
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.AddCookie(&http.Cookie{Name: "__Host-argon_session", Value: token})
 	}
 	return corsDo(t, req)
 }

@@ -33,9 +33,15 @@ func schemaHasCsrf() bool {
 // fresh CSRF digest where the schema has one (0018 refuses a session without
 // it), as the auth service does. returning may be empty.
 func sessionInsert(cols, returning string, args ...any) (string, []any) {
+	return sessionInsertCSRF(digest(), cols, returning, args...)
+}
+
+// sessionInsertCSRF: the same, with the session's own CSRF digest (a
+// sign-in that hands the token out must store the digest of THAT token).
+func sessionInsertCSRF(csrfDigest, cols, returning string, args ...any) (string, []any) {
 	if schemaHasCsrf() {
 		cols += ", csrf_digest"
-		args = append(args, digest())
+		args = append(args, csrfDigest)
 	}
 	ph := make([]string, len(args))
 	for i := range args {

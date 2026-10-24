@@ -116,7 +116,12 @@ components:
         pin: { type: string }
         deviceToken:
           type: string
-          description: The token this server issued to this device on an earlier sign-in; absent on a new device.
+          description: |
+            NON-BROWSER CLIENTS ONLY: the token this server issued to this
+            device on an earlier sign-in; absent on a new device. A browser
+            sends none (its device rides in the __Secure-argon_device cookie):
+            a request with an Origin that carries one is refused, 400
+            device_token_from_browser, before the PIN is checked.
         surface:
           type: string
           enum: [member, officer]
@@ -136,8 +141,23 @@ components:
         outcome:
           type: string
           enum: [signed_in, code_sent, see_officer]
-        sessionToken: { type: string, description: "signed_in only." }
-        deviceToken: { type: string, description: "Issued when a new device becomes trusted." }
+        sessionToken:
+          type: string
+          description: |
+            signed_in, NON-BROWSER callers only (no Origin). A browser's
+            session is the __Host-argon_session cookie and is never in a body.
+        deviceToken:
+          type: string
+          description: |
+            Issued when a new device becomes trusted; NON-BROWSER callers only.
+            A browser's device is the __Secure-argon_device cookie.
+        csrfToken:
+          type: string
+          description: |
+            signed_in, BROWSER callers only (an Origin was sent): sent back as
+            X-CSRF-Token on every state-changing request of this session. Hold
+            it in memory only, never in storage, a cookie or a URL; after a
+            reload, GET /me returns it again.
         expiresAt:
           type: string
           format: date-time
@@ -1106,6 +1126,12 @@ components:
       properties:
         userId: { type: string, format: uuid }
         fullName: { type: string }
+        csrfToken:
+          type: string
+          description: |
+            A COOKIE session's CSRF token, the same one sign-in gave: how a
+            browser page recovers it after a reload. Absent for a Bearer
+            session, which has no use for one.
         memberships:
           type: array
           description: One per member record the caller holds, ordered by society code. Empty, never null, for a user with none.
@@ -1145,7 +1171,26 @@ components:
     session:
       type: http
       scheme: bearer
-      description: A session token from sign-in. The server stores only its digest.
+      description: |
+        A session token from sign-in, for clients that are NOT browsers. The
+        server stores only its digest. A request carrying an Origin AND a
+        Bearer header is refused, 401 bearer_from_browser: enforcement that a
+        page never holds a credential in script, NOT a security boundary (a
+        client that is not a browser sends whatever Origin it likes).
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-argon_session
+      description: |
+        A BROWSER's session (LEDGER_CONTRACT.md §12): HttpOnly, Secure,
+        SameSite=Strict, Path=/, no Domain; set by sign-in and code-verify for
+        a caller that sent an Origin. Every state-changing request must carry
+        X-CSRF-Token, the session's own (403 csrf_failed otherwise, before
+        any handler runs; the session untouched, nothing counted against a
+        lockout). A request with this cookie AND a Bearer header is refused,
+        400 ambiguous_credentials. A 401 to a request that carried it clears
+        it. The device cookie (__Secure-argon_device, Path=/auth/) is not a
+        session: alone, it is 401.
 
 paths:
   /healthz:
@@ -1340,7 +1385,11 @@ paths:
       security: [{ session: [] }]
       responses:
         '204':
-          description: The session has ended; its token reaches nothing.
+          description: |
+            The session has ended; its token reaches nothing. For a cookie
+            session the same response clears __Host-argon_session; the device
+            cookie is untouched and the device stays known (a session ended by
+            its own holder never revokes its device).
         '401':
           description: No valid session.
           content:

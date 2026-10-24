@@ -84,8 +84,11 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 	}
 	h := api.HandlerWithOptions(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), opts)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return f.sessionLayer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
+		if !ok {
+			user, ok = f.deviceCaller(r) // device_cookie_authenticates only
+		}
 		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") || (f.brk == "me_public" && r.URL.Path == "/me" && r.Header.Get("Authorization") == "") {
 			ok = true // no_token_reaches: a request with no token reaches the handlers as nobody
 		}
@@ -127,7 +130,7 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		}
 		w.WriteHeader(rec.status)
 		w.Write(body)
-	})
+	}))
 }
 
 type recorder struct {
