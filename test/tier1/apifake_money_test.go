@@ -468,7 +468,26 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 			if f.brk == "money_withdrawable_as_409" {
 				return api.AuthorisePayout409JSONResponse{Code: "exceeds_withdrawable", Message: msg}, nil
 			}
-			return api.AuthorisePayout422JSONResponse{Code: "exceeds_withdrawable", Message: msg}, nil
+			// What changed since the request was raised (the balance rewrite,
+			// piece 4): the arithmetic and the cause, never only "refused".
+			member := ""
+			if r.member != nil {
+				member = *r.member
+			}
+			why, wentThrough, werr := f.holdRefusal(ctx, r.id, r.society, member, r.amount)
+			if werr != nil {
+				return nil, werr
+			}
+			if wentThrough { // hold_uses_quote: as if held at the quoted charge
+				return api.AuthorisePayout201JSONResponse{}, nil
+			}
+			if why.Causes == nil && f.brk != "money_refusal_unexplained" && f.brk != "hold_refusal_bare" {
+				why.Message = msg
+			}
+			if f.brk == "money_refusal_unexplained" {
+				why.Message = "refused"
+			}
+			return api.AuthorisePayout422JSONResponse(why), nil
 		case notConfigured[c] && f.brk != "money_not_configured_as_500":
 			return api.AuthorisePayout422JSONResponse{Code: "not_configured", Message: msg}, nil
 		}

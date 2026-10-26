@@ -126,6 +126,10 @@ func (f *fakeAPI) apprView(ctx context.Context, r apprRow, projection string) (a
 	// balance fake). Before 0012 there are no holds, and so no charge.
 	if r.kind == "withdrawal_out" {
 		v.AuthorisedCharges = f.authorisedChargesOf(ctx, r.id, r.amount, r.society)
+		// The charge quoted at the raise, kept (0017), and a sentence only
+		// when the two differ (the balance rewrite, piece 3).
+		v.QuotedCharges = f.quotedChargesOf(ctx, r.id, r.amount, r.society)
+		v.ChargeChanged = f.chargeChangedOf(ctx, r.id, r.society, v.QuotedCharges, v.AuthorisedCharges)
 	}
 	f.db.QueryRow(ctx, `SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1`, r.id).Scan(&v.SignedCount)
 	if projection == "officer" && f.brk != "appr_officer_unnamed" || projection == "member" && f.brk == "appr_member_sees_names" {

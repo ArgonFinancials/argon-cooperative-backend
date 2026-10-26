@@ -34,7 +34,6 @@ package tier1
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,11 +46,18 @@ type bDeduction struct {
 	LoanId, BorrowerName     *string
 }
 
+type bRequested struct {
+	RequestId, AmountKobo, TotalKobo, RaisedAt, Note string
+	QuotedCharges                                    mCharges
+}
+
 type bWithdrawable struct {
 	MemberId, SavingsBalanceKobo, AsOf string
 	WithdrawableKobo                   *string
+	LargestRequestableKobo             *string
 	Unavailable                        *struct{ Code, Message string }
 	Deductions                         []bDeduction
+	Requested                          []bRequested
 }
 
 type bQuote struct {
@@ -172,7 +178,9 @@ func (w *mapi) reverse(loan, original string, kobo int64, reason string) error {
 	})
 }
 
-// D2: the society has set no floor. Savings shown; the figure NULL, with why.
+// D2: the society has set no floor. Savings shown; the figure NULL, with why;
+// and (2026-10-26, piece 1) no largest requestable figure beside it: a member
+// with no floor set is never handed a confident "largest" next to a blank.
 func TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest(t *testing.T) {
 	w := newMoneyAPI(t)
 	fixture(t, one(`UPDATE societies SET account_floor_kobo = NULL WHERE id = $1`, w.c.s.id), "a society that has set no floor")
@@ -183,6 +191,9 @@ func TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest(t *testing.T) {
 	}
 	if p.WithdrawableKobo != nil || p.Unavailable == nil || p.Unavailable.Code != "floor_unset" || !strings.Contains(p.Unavailable.Message, "minimum balance") {
 		t.Fatalf("WRONG — %s; want withdrawableKobo null and floor_unset, saying the society has not set its minimum balance", r.body)
+	}
+	if p.LargestRequestableKobo != nil {
+		t.Fatalf("CONFIDENT BESIDE A BLANK — no floor, yet largestRequestableKobo is %s; want null with the figure", *p.LargestRequestableKobo)
 	}
 	// The quote still prices the fee; whether it fits is unknown, and the quote
 	// says WHY beside the fee, or the fee reads as the live part of the screen
@@ -226,27 +237,39 @@ func TestApiBalance06_NeverBelowZeroAndTheSavingsBesideIt(t *testing.T) {
 	}
 }
 
-// D4: THE FIGURE SHOWN IS THE FIGURE ENFORCED. The whole ₦9,000 does not fit
-// (its charge comes out of it); ₦9,000 less that charge does, and is accepted
-// when raised; one kobo more is refused by the database.
+// D4: THE FIGURE SHOWN IS THE FIGURE ENFORCED, and THE SERVER SAYS IT
+// (2026-10-26, piece 1): largestRequestableKobo comes from the database's
+// largest_withdrawal (0017), never worked out here. Accepted at exactly that
+// amount, refused one kobo above. Two cases: the ordinary one, and the band
+// boundary, where "withdrawable less the charge on withdrawable" is wrong.
 func TestApiBalance07_TheFigureShownIsTheFigureEnforced(t *testing.T) {
 	w := newMoneyAPI(t)
-	all := w.quoteVia(t, w.borrower, w.bMem, borrowerWithdrawable)
-	if all.WithinWithdrawable == nil || *all.WithinWithdrawable {
-		t.Fatalf("WRONG — the whole withdrawable figure, its charge on top, quoted as fitting: %+v", all)
+	largestOf := func(want int64, what string) {
+		t.Helper()
+		p := w.position(t, w.borrower, w.bMem)
+		if p.LargestRequestableKobo == nil || *p.LargestRequestableKobo != k(want) {
+			t.Fatalf("WRONG LARGEST — %s: %s; want %s", what, orNone(p.LargestRequestableKobo), k(want))
+		}
+		// The quote agrees with the figure: fits at the largest, not one kobo above.
+		if q := w.quoteVia(t, w.borrower, w.bMem, want); q.WithinWithdrawable == nil || !*q.WithinWithdrawable {
+			t.Fatalf("QUOTE DISAGREES — %s: the largest requestable %s quoted as not fitting: %+v", what, k(want), q)
+		}
+		if q := w.quoteVia(t, w.borrower, w.bMem, want+1); q.WithinWithdrawable == nil || *q.WithinWithdrawable {
+			t.Fatalf("QUOTE DISAGREES — %s: one kobo above the largest quoted as fitting (its charge forgotten?): %+v", what, q)
+		}
+		if r := w.raiseVia(t, w.borrower, w.bMem, k(want), stepUp(t, w.borrower, "withdrawal_request"), "", nil); r.status != http.StatusCreated {
+			t.Fatalf("NOT ENFORCED AS SHOWN — %s: the largest requestable %s was refused when raised: %d %s", what, k(want), r.status, r.body)
+		}
+		r := w.raiseVia(t, w.borrower, w.bMem, k(want+1), stepUp(t, w.borrower, "withdrawal_request"), "", nil)
+		wantProblem(t, r, http.StatusUnprocessableEntity, "exceeds_withdrawable", what+": one kobo more than the largest requestable")
 	}
-	charge, err := strconv.ParseInt(all.Charges.TotalKobo, 10, 64)
-	fixture(t, err, "the quote's charge, a kobo string")
-	most := borrowerWithdrawable - charge
-	q := w.quoteVia(t, w.borrower, w.bMem, most)
-	if q.Charges.TotalKobo != all.Charges.TotalKobo || q.WithinWithdrawable == nil || !*q.WithinWithdrawable || q.TotalOutKobo != k(borrowerWithdrawable) {
-		t.Fatalf("WRONG — the largest amount that fits, %s: %+v; want within, %s out", k(most), q, k(borrowerWithdrawable))
-	}
-	if r := w.raiseVia(t, w.borrower, w.bMem, k(most), stepUp(t, w.borrower, "withdrawal_request"), "", nil); r.status != http.StatusCreated {
-		t.Fatalf("NOT ENFORCED AS SHOWN — the amount quoted as fitting was refused: %d %s", r.status, r.body)
-	}
-	r := w.raiseVia(t, w.borrower, w.bMem, k(most+1), stepUp(t, w.borrower, "withdrawal_request"), "", nil)
-	wantProblem(t, r, http.StatusUnprocessableEntity, "exceeds_withdrawable", "one kobo more than the quote says fits")
+	// 1. ₦9,000 withdrawable, the ₦10.75 band: ₦8,989.25.
+	largestOf(borrowerWithdrawable-1075, "₦9,000 withdrawable")
+	// 2. ₦10,050 withdrawable. From ₦10,000 the levy applies (₦60.75 in all),
+	// so nothing from ₦10,000 fits; ₦9,999.99 costs ₦10.75 and fits. The old
+	// arithmetic (₦10,050 less ₦60.75 = ₦9,989.25) is short by ₦10.74.
+	w.saved(t, w.bMem, 105000)
+	largestOf(999999, "₦10,050 withdrawable, at the levy's threshold")
 }
 
 // D5 (decided 2026-10-21): READING IS TIED TO THE DUTY. The member; the
@@ -295,19 +318,20 @@ func TestApiBalance09_AQuoteSaysItIsIndicative(t *testing.T) {
 	}
 }
 
-// The series changes between the quote and the hold: the HOLD's charge
-// applies, and the member is shown it on their request.
-func TestApiBalance10_TheHoldsChargeAppliesAndTheMemberIsShownIt(t *testing.T) {
+// The series changes between the raise and the hold (2026-10-26, piece 3):
+// the request KEEPS the charge it was quoted (0017) beside the charge the hold
+// applies, and says why they differ, naming the date the charges changed.
+func TestApiBalance10_TheQuotedChargeBesideTheChargeApplied(t *testing.T) {
 	w := newMoneyAPI(t)
-	before := w.quoteVia(t, w.borrower, w.bMem, payKobo)
 	v := w.raisedVia(t, payKobo)
 	for _, s := range []string{w.s2, w.secretary} {
 		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
 			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
 		}
 	}
-	if c := memberRequestCharges(t, w, v.RequestId); c != nil {
-		t.Fatalf("PREMATURE — a charge shown before the payout is authorised: %s", *c)
+	c := memberRequestOf(t, w, v.RequestId)
+	if c.QuotedCharges == nil || c.QuotedCharges.TotalKobo != "1075" || c.AuthorisedCharges != nil || c.ChargeChanged != nil {
+		t.Fatalf("WRONG BEFORE THE HOLD — quoted %v, authorised %v, changed %v; want 1075 quoted, nothing authorised, no sentence", c.QuotedCharges, c.AuthorisedCharges, c.ChargeChanged)
 	}
 	// From today, the society's fee is ₦25 flat (its VAT 7.5%: ₦1.88): ₦26.88.
 	_, err := chargeSeries(w.c.s.id, "withdrawal_out", feeComponent(), time.Now().Format("2006-01-02"), "TEST DATA ONLY: a fee changed today", band{from: 0, flat: 2500})
@@ -315,25 +339,31 @@ func TestApiBalance10_TheHoldsChargeAppliesAndTheMemberIsShownIt(t *testing.T) {
 	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
 		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
 	}
-	got := memberRequestCharges(t, w, v.RequestId)
-	if before.Charges.TotalKobo != "1075" || got == nil || *got != "2688" {
-		t.Fatalf("WRONG CHARGE — quoted %s, the member's request shows %v; want the hold's 2688 (the series in force when authorised)", before.Charges.TotalKobo, got)
+	c = memberRequestOf(t, w, v.RequestId)
+	if c.QuotedCharges == nil || c.QuotedCharges.TotalKobo != "1075" {
+		t.Fatalf("RECOMPUTED — the quoted charge now reads %v; want the 1075 kept from the raise", c.QuotedCharges)
+	}
+	if c.AuthorisedCharges == nil || c.AuthorisedCharges.TotalKobo != "2688" {
+		t.Fatalf("WRONG CHARGE — authorised %v; want the hold's 2688 (the series in force when authorised)", c.AuthorisedCharges)
+	}
+	if c.ChargeChanged == nil || !strings.Contains(*c.ChargeChanged, "₦10.75") || !strings.Contains(*c.ChargeChanged, "₦26.88") || !strings.Contains(*c.ChargeChanged, time.Now().Format("2 January 2006")) {
+		t.Fatalf("UNSAID — quoted ₦10.75, charged ₦26.88, and chargeChanged reads %v; want both amounts and the date the charges changed", c.ChargeChanged)
 	}
 	if now := w.quoteVia(t, w.borrower, w.bMem, payKobo); now.Charges.TotalKobo != "2688" {
 		t.Fatalf("STALE — a quote today reads %s; want today's series, 2688", now.Charges.TotalKobo)
 	}
 }
 
-// memberRequestCharges: the authorised charge's total on the member's own
-// request, as the member's list shows it; nil when none is shown.
-func memberRequestCharges(t *testing.T, w *mapi, req string) *string {
+type bMemberRequest struct {
+	RequestId                        string
+	QuotedCharges, AuthorisedCharges *mCharges
+	ChargeChanged                    *string
+}
+
+// memberRequestOf: the request as the member's own list shows it.
+func memberRequestOf(t *testing.T, w *mapi, req string) bMemberRequest {
 	t.Helper()
-	var l struct {
-		Items []struct {
-			RequestId         string
-			AuthorisedCharges *mCharges
-		}
-	}
+	var l struct{ Items []bMemberRequest }
 	r := w.call(t, http.MethodGet, w.borrower, "/members/"+w.bMem+"/withdrawal-requests", nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("FIXTURE: the member's list: %d %s", r.status, r.body)
@@ -341,14 +371,11 @@ func memberRequestCharges(t *testing.T, w *mapi, req string) *string {
 	fixture(t, json.Unmarshal(r.body, &l), "the member's list")
 	for _, it := range l.Items {
 		if it.RequestId == req {
-			if it.AuthorisedCharges == nil {
-				return nil
-			}
-			return &it.AuthorisedCharges.TotalKobo
+			return it
 		}
 	}
 	t.Fatalf("FIXTURE: request %s not in the member's list: %s", req, r.body)
-	return nil
+	return bMemberRequest{}
 }
 
 // =============================================================================
@@ -360,5 +387,138 @@ func TestApiBalance11_MoneyIsAStringOnTheWire(t *testing.T) {
 	r := w.withdrawable(t, w.borrower, w.bMem)
 	if b := string(r.body); !strings.Contains(b, `"savingsBalanceKobo":"`+k(loanSavings)+`"`) || !strings.Contains(b, `"withdrawableKobo":"`+k(borrowerWithdrawable)+`"`) {
 		t.Fatalf("ACCEPTED — money is not a string: %s", r.body)
+	}
+}
+
+// =============================================================================
+// REQUESTED, NOT YET AUTHORISED (2026-10-26, piece 2)
+// =============================================================================
+
+// A request is a question; the hold is where money is committed. Listed with
+// its quoted charge and NOT deducted; once authorised it leaves the list and
+// becomes the authorised_payout deduction; never both at once.
+func TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised(t *testing.T) {
+	w := newMoneyAPI(t)
+	v := w.raisedVia(t, payKobo)
+	p := w.position(t, w.borrower, w.bMem)
+	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) {
+		t.Fatalf("TAKEN — an open request reduced the figure to %s; want %s, nothing taken until it is approved", orNone(p.WithdrawableKobo), k(borrowerWithdrawable))
+	}
+	if len(p.Requested) != 1 || p.Requested[0].RequestId != v.RequestId || p.Requested[0].AmountKobo != k(payKobo) ||
+		p.Requested[0].QuotedCharges.TotalKobo != "1075" || p.Requested[0].TotalKobo != k(payKobo+1075) || !strings.Contains(p.Requested[0].Note, "Not taken from what you can withdraw") {
+		t.Fatalf("UNSEEN — requested %+v; want the ₦6,000 request, quoted 1075, 601075 in all, with the sentence", p.Requested)
+	}
+	if p.LargestRequestableKobo == nil || *p.LargestRequestableKobo != k(borrowerWithdrawable-1075) {
+		t.Fatalf("TAKEN — the largest requestable moved to %s with an open request; want %s", orNone(p.LargestRequestableKobo), k(borrowerWithdrawable-1075))
+	}
+	for _, s := range []string{w.s2, w.secretary} {
+		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
+			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
+		}
+	}
+	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
+	}
+	p = w.position(t, w.borrower, w.bMem)
+	if len(p.Requested) != 0 {
+		t.Fatalf("TWICE — after its hold the request is still listed as requested: %+v", p.Requested)
+	}
+	if a := deductionsOf(p, "authorised_payout"); len(a) != 1 || a[0].AmountKobo != k(payKobo+1075) {
+		t.Fatalf("UNSEEN — the authorised payout: %+v; want %s", a, k(payKobo+1075))
+	}
+	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable-payKobo-1075) {
+		t.Fatalf("WRONG FIGURE — %s; want %s, the hold taken once", orNone(p.WithdrawableKobo), k(borrowerWithdrawable-payKobo-1075))
+	}
+}
+
+// The ordinary case: nothing changed between the raise and the hold, so
+// nothing is said. A note that appears when nothing changed teaches members to
+// ignore it (piece 3).
+func TestApiBalance13_NoChangeNoSentence(t *testing.T) {
+	w := newMoneyAPI(t)
+	v := w.raisedVia(t, payKobo)
+	for _, s := range []string{w.s2, w.secretary} {
+		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
+			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
+		}
+	}
+	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
+	}
+	c := memberRequestOf(t, w, v.RequestId)
+	if c.QuotedCharges == nil || c.AuthorisedCharges == nil || c.QuotedCharges.TotalKobo != "1075" || c.AuthorisedCharges.TotalKobo != "1075" {
+		t.Fatalf("WRONG — quoted %v, authorised %v; want 1075 both", c.QuotedCharges, c.AuthorisedCharges)
+	}
+	if c.ChargeChanged != nil {
+		t.Fatalf("CRYING WOLF — nothing changed, yet chargeChanged reads %q", *c.ChargeChanged)
+	}
+}
+
+// =============================================================================
+// A REFUSED HOLD SAYS WHAT CHANGED (2026-10-26, piece 4)
+// =============================================================================
+
+type bHoldRefusal struct {
+	Code, Message                                                             string
+	AmountKobo, QuotedChargeKobo, ChargeNowKobo, NeededKobo, WithdrawableKobo *string
+	Causes                                                                    []string
+}
+
+func holdRefusalOf(t *testing.T, r resp) bHoldRefusal {
+	t.Helper()
+	if r.status != http.StatusUnprocessableEntity {
+		t.Fatalf("ACCEPTED — the hold: %d %s; want 422 exceeds_withdrawable", r.status, r.body)
+	}
+	var h bHoldRefusal
+	fixture(t, json.Unmarshal(r.body, &h), "the refusal")
+	return h
+}
+
+func orNone(p *string) string {
+	if p == nil {
+		return "<none>"
+	}
+	return *p
+}
+
+// The charges change between the raise and the hold: ₦6,000 quoted at ₦10.75
+// fitted ₦6,020; at ₦26.88 it does not. The hold's charge applies (D3): the
+// refusal says the charge changed, and only that.
+func TestApiBalance14_AHoldRefusedBecauseTheChargesChangedSaysSo(t *testing.T) {
+	w := newMoneyAPI(t)
+	w.saved(t, w.g1Mem, 602000+floorKobo) // ₦6,020 withdrawable
+	req := w.approved(t, w.g1Mem, payKobo)
+	_, err := chargeSeries(w.c.s.id, "withdrawal_out", feeComponent(), time.Now().Format("2006-01-02"), "TEST DATA ONLY: a fee changed today", band{from: 0, flat: 2500})
+	fixture(t, err, "today's new fee series")
+	h := holdRefusalOf(t, w.authorise(t, w.s2, req, stepUp(t, w.s2, "withdrawal_authorisation")))
+	if h.Code != "exceeds_withdrawable" || orNone(h.AmountKobo) != k(payKobo) || orNone(h.QuotedChargeKobo) != "1075" || orNone(h.ChargeNowKobo) != "2688" ||
+		orNone(h.NeededKobo) != k(payKobo+2688) || orNone(h.WithdrawableKobo) != "602000" {
+		t.Fatalf("WRONG ARITHMETIC — %+v; want amount %s, quoted 1075, now 2688, needed %s, withdrawable 602000", h, k(payKobo), k(payKobo+2688))
+	}
+	if len(h.Causes) != 1 || h.Causes[0] != "charge_changed" {
+		t.Fatalf("WRONG CAUSE — %v; want exactly [charge_changed]: the charges moved, the member's money did not", h.Causes)
+	}
+	if !strings.Contains(h.Message, "₦10.75") || !strings.Contains(h.Message, "₦26.88") {
+		t.Fatalf("UNSAID — %q; want both charges named", h.Message)
+	}
+}
+
+// Two requests that each fit alone (piece 2's designed consequence): both are
+// raised, the first hold succeeds, the second is refused because the first
+// took the money, and nothing about the charge changed.
+func TestApiBalance15_TheSecondOfTwoHoldsIsRefusedBecauseTheFirstTookTheMoney(t *testing.T) {
+	w := newMoneyAPI(t)
+	first := w.approved(t, w.bMem, payKobo)
+	second := w.approved(t, w.bMem, payKobo)
+	if r := w.authorise(t, w.s2, first, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the first hold: %d %s", r.status, r.body)
+	}
+	h := holdRefusalOf(t, w.authorise(t, w.s2, second, stepUp(t, w.s2, "withdrawal_authorisation")))
+	if len(h.Causes) != 1 || h.Causes[0] != "withdrawable_fell" {
+		t.Fatalf("WRONG CAUSE — %v; want exactly [withdrawable_fell]: the first payout took the money", h.Causes)
+	}
+	if orNone(h.WithdrawableKobo) != k(borrowerWithdrawable-payKobo-1075) || orNone(h.NeededKobo) != k(payKobo+1075) ||
+		orNone(h.QuotedChargeKobo) != "1075" || orNone(h.ChargeNowKobo) != "1075" {
+		t.Fatalf("WRONG ARITHMETIC — %+v; want withdrawable %s, needed %s, quoted and now both 1075", h, k(borrowerWithdrawable-payKobo-1075), k(payKobo+1075))
 	}
 }

@@ -766,7 +766,7 @@ components:
       type: object
       required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
                  projection, status, signedCount, signatures, rejection, escalated, nextStep, raisedBy, resubmitsId,
-                 authorisedCharges]
+                 authorisedCharges, quotedCharges, chargeChanged]
       properties:
         requestId: { type: string, format: uuid }
         societyId: { type: string, format: uuid }
@@ -831,6 +831,21 @@ components:
             applies. A quote before it (GET /members/{id}/withdrawal-quote) is
             indicative only.
           allOf: [{ $ref: '#/components/schemas/Charges' }]
+        quotedCharges:
+          nullable: true
+          description: |
+            The charge the request was QUOTED when raised, kept (0017), never
+            recomputed. NULL for a request that carries no quote (not a
+            withdrawal, or raised before 0017).
+          allOf: [{ $ref: '#/components/schemas/Charges' }]
+        chargeChanged:
+          type: string
+          nullable: true
+          description: |
+            A sentence to show as written, present ONLY when both quotedCharges
+            and authorisedCharges exist and differ: both amounts, and the date
+            the society's charges changed. NULL when they match, so that when
+            it appears it is read.
 
     ApprovalList:
       type: object
@@ -925,7 +940,7 @@ components:
 
     Withdrawable:
       type: object
-      required: [memberId, asOf, savingsBalanceKobo, withdrawableKobo, unavailable, deductions]
+      required: [memberId, asOf, savingsBalanceKobo, withdrawableKobo, unavailable, deductions, largestRequestableKobo, requested]
       description: |
         A member's savings and what they may withdraw now. The withdrawable
         figure is the savings less every deduction, never below zero, and A
@@ -951,6 +966,44 @@ components:
           type: array
           description: Everything deducted, with why. Empty, never null.
           items: { $ref: '#/components/schemas/Deduction' }
+        largestRequestableKobo:
+          nullable: true
+          description: |
+            THE LARGEST AMOUNT THE MEMBER CAN ASK FOR NOW, its charge fitting
+            inside withdrawableKobo: the database's largest_withdrawal (0017),
+            which prices every amount with the rule a raise is checked by, so
+            it is EXACT at a band boundary (never withdrawable less the charge
+            on withdrawable). Accepted when raised; one kobo more is refused.
+            NULL exactly when withdrawableKobo is NULL (unavailable says why);
+            0 when nothing fits, never negative.
+          allOf: [{ $ref: '#/components/schemas/Magnitude' }]
+        requested:
+          type: array
+          description: |
+            Withdrawals the member has REQUESTED and no officer has authorised
+            yet. NOT DEDUCTED: a request is a question; the hold is where money
+            is committed (LEDGER_CONTRACT.md §12). A request leaves this list
+            when it is authorised (it becomes the authorised_payout deduction),
+            refused, expired or withdrawn, so no amount is ever both here and
+            deducted. Empty, never null.
+          items: { $ref: '#/components/schemas/RequestedWithdrawal' }
+
+    RequestedWithdrawal:
+      type: object
+      required: [requestId, amountKobo, quotedCharges, totalKobo, raisedAt, note]
+      properties:
+        requestId: { type: string, format: uuid }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        quotedCharges:
+          description: The charge the request was quoted when raised, as kept (0017); never recomputed.
+          allOf: [{ $ref: '#/components/schemas/Charges' }]
+        totalKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The amount and its quoted charge.
+        raisedAt: { type: string, format: date-time }
+        note:
+          type: string
+          description: 'To show as written: "Requested, waiting for approval. Not taken from what you can withdraw until it is approved."'
 
     WithdrawalQuote:
       type: object
@@ -1167,6 +1220,39 @@ components:
         post: { $ref: '#/components/schemas/OfficerPost' }
         signatory: { type: boolean }
         heldFrom: { type: string, format: date }
+
+    HoldRefusal:
+      type: object
+      required: [code, message]
+      description: |
+        A refused hold. For exceeds_withdrawable it carries the arithmetic and
+        the cause, so neither the officer nor a client reads it out of the
+        sentence: a request that fitted when raised fails at the hold because
+        the society's charges changed (charge_changed), because what the member
+        can withdraw fell (withdrawable_fell: another payout authorised, a
+        guarantee, the floor), or both. The quote never binds: the hold applies
+        today's charge.
+      properties:
+        code: { type: string }
+        message: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        quotedChargeKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The charge kept from the raise (0017).
+        chargeNowKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The charge the hold would apply, from today's series.
+        neededKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: The amount and the charge now.
+        withdrawableKobo:
+          $ref: '#/components/schemas/Magnitude'
+          description: What the member can withdraw now.
+        causes:
+          type: array
+          items:
+            type: string
+            enum: [charge_changed, withdrawable_fell]
 
     Problem:
       type: object
@@ -1984,10 +2070,13 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: "exceeds_withdrawable (the message carries the figures); not_configured (a charge component or the account floor is not set: the message says which)."
+          description: |
+            exceeds_withdrawable: the request no longer fits, with WHAT CHANGED
+            (HoldRefusal's breakdown and causes); not_configured: a charge
+            component or the account floor is not set (the message says which).
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Problem' }
+              schema: { $ref: '#/components/schemas/HoldRefusal' }
 
   /holds/{holdId}/releases:
     post:

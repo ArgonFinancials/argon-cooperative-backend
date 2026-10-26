@@ -190,7 +190,23 @@ func (f *fakeAPI) GetMemberWithdrawable(ctx context.Context, req api.GetMemberWi
 	if err != nil {
 		return nil, err
 	}
-	out := api.Withdrawable{MemberId: req.MemberId, AsOf: time.Now(), SavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(p.savings, 10)), Deductions: p.deductions}
+	requested, requestedSum, err := f.requestedOf(ctx, member)
+	if err != nil {
+		return nil, err
+	}
+	if f.brk == "requested_deducted" { // an open request taken as if it were money committed
+		p.total += requestedSum
+	}
+	out := api.Withdrawable{MemberId: req.MemberId, AsOf: time.Now(), SavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(p.savings, 10)),
+		Deductions: p.deductions, Requested: requested}
+	largest, err := f.largestOf(ctx, society, f.withdrawableOf(p), p)
+	if err != nil {
+		return nil, err
+	}
+	if largest != nil {
+		l := magOf(*largest)
+		out.LargestRequestableKobo = &l
+	}
 	if w := f.withdrawableOf(p); w != nil {
 		m := magOf(*w)
 		out.WithdrawableKobo = &m
