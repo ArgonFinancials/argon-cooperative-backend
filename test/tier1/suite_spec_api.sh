@@ -16,4 +16,13 @@ declare -gA TARGET_OF=()
 declare -gA SVC_TARGET_OF=(
   # The comparison made to fail: the spec read as if it had lost a value.
   [spec_list_drift]='TestApiSpec01_TheSpecsListsAreTheSchemas'
+  # The built marker read wrong (2026-10-26). Step 1: a flag missing. Step 2:
+  # a flag flipped with its 501 left (the spec contradicts itself). Step 3, the
+  # real server, where flag and 501 agree with each other but not the code: an
+  # operation written up as unbuilt while its handler exists (the quiet
+  # direction), and one written up as built whose handler was never written.
+  [built_flag_missing]='TestApiSpec02_EveryOperationSaysWhetherItIsBuiltAndIsRight'
+  [built_flag_flipped]='TestApiSpec02_EveryOperationSaysWhetherItIsBuiltAndIsRight'
+  [not_built_answer_kept]='TestApiSpec02_EveryOperationSaysWhetherItIsBuiltAndIsRight'
+  [built_without_handler]='TestApiSpec02_EveryOperationSaysWhetherItIsBuiltAndIsRight'
 )

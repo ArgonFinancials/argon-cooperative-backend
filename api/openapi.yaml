@@ -12,6 +12,14 @@ info:
     layer" at the one layer nobody inspects. Every money field is
     `type: string, pattern: ^-?[0-9]+$`, in kobo.
 
+    BUILT OR NOT: every operation carries `x-argon-built`, true or false, never
+    left out (2026-10-26). An operation marked false is specified and NOT
+    built: it declares a 501 and the server answers 501 `not_built`. Building
+    one changes THREE things in ONE commit: its flag to true, its 501 out of
+    this file, its not-built handler deleted. TestApiSpec02 holds all three to
+    the running server, in both directions; a screen may not call an operation
+    marked false.
+
     Every enum below names the decision it came from. The semantics were settled
     in the design package; this file is where they are read, not where they are
     decided.
@@ -1196,6 +1204,7 @@ paths:
   /healthz:
     get:
       summary: Liveness and database reachability
+      x-argon-built: true
       responses:
         '200': { description: ok }
         '503': { description: database unreachable }
@@ -1203,6 +1212,7 @@ paths:
   /societies/{societyId}/ledger/batches:
     post:
       operationId: postLedgerBatch
+      x-argon-built: true
       summary: postAll — commit a whole import in ONE transaction (LEDGER_CONTRACT §1)
       description: |
         ONE TRANSACTIONAL CALL. Either every row is written or none is; there is
@@ -1298,6 +1308,7 @@ paths:
   /auth/sign-in:
     post:
       operationId: postSignIn
+      x-argon-built: true
       summary: Sign in with the one credential box and a PIN (public)
       description: |
         The credential is a member number or a phone number. ONE answer for an
@@ -1345,6 +1356,7 @@ paths:
   /auth/codes/verify:
     post:
       operationId: postVerifyCode
+      x-argon-built: true
       summary: Complete a new-device sign-in with the code sent to the registered phone (public)
       requestBody:
         required: true
@@ -1381,6 +1393,7 @@ paths:
   /auth/sign-out:
     post:
       operationId: postSignOut
+      x-argon-built: true
       summary: End this session
       security: [{ session: [] }]
       responses:
@@ -1404,6 +1417,7 @@ paths:
   /auth/pin-proofs:
     post:
       operationId: postPinProof
+      x-argon-built: true
       summary: The PIN step-up — a proof that authorises ONE act of ONE kind (0005)
       description: |
         The signed-in person re-enters their PIN. A right PIN mints one proof
@@ -1461,6 +1475,7 @@ paths:
   /members/{memberId}/statement:
     get:
       operationId: getMemberStatement
+      x-argon-built: true
       summary: A member's savings statement — one record, two projections
       description: |
         Served to the MEMBER (the person the record belongs to) and to an
@@ -1503,6 +1518,7 @@ paths:
   /societies/{societyId}/accounts:
     get:
       operationId: getChartOfAccounts
+      x-argon-built: true
       summary: The society's chart of accounts
       security: [{ session: [] }]
       parameters:
@@ -1527,6 +1543,7 @@ paths:
   /societies/{societyId}/trial-balance:
     get:
       operationId: getTrialBalance
+      x-argon-built: true
       summary: Every account's debits, credits and balance as at a date
       description: |
         asOf is REQUIRED and is a value date: the server never assumes "today".
@@ -1565,6 +1582,7 @@ paths:
   /societies/{societyId}/accounts/{accountCode}/ledger:
     get:
       operationId: getGeneralLedger
+      x-argon-built: true
       summary: One account's entries with a running balance
       security: [{ session: [] }]
       parameters:
@@ -1592,6 +1610,7 @@ paths:
   /societies/{societyId}/journal:
     get:
       operationId: getJournal
+      x-argon-built: true
       summary: Entries with every line, filtered by reference, member, actor and value date
       description: |
         Filters combine (AND). reference is how an import is audited after the
@@ -1630,6 +1649,7 @@ paths:
   /loans/{loanId}:
     get:
       operationId: getLoan
+      x-argon-built: true
       summary: One loan's position as at a value date
       security: [{ session: [] }]
       parameters:
@@ -1655,6 +1675,7 @@ paths:
   /members/{memberId}/loans:
     get:
       operationId: getMemberLoans
+      x-argon-built: true
       summary: A member's loans as at a value date (the member, or an officer of their society)
       security: [{ session: [] }]
       parameters:
@@ -1680,6 +1701,7 @@ paths:
   /societies/{societyId}/loans:
     get:
       operationId: getSocietyLoans
+      x-argon-built: true
       summary: The society's loan book as at a value date (officers only)
       description: |
         condition=disagreement is the officers' list of loans whose schedule
@@ -1713,6 +1735,7 @@ paths:
   /approvals/{requestId}:
     get:
       operationId: getApproval
+      x-argon-built: true
       summary: One approval request, in the caller's projection
       security: [{ session: [] }]
       parameters:
@@ -1737,6 +1760,7 @@ paths:
   /approvals/{requestId}/signatures:
     post:
       operationId: signApproval
+      x-argon-built: true
       summary: Sign a request, resting on the signer's own PIN step-up
       security: [{ session: [] }]
       parameters:
@@ -1781,6 +1805,7 @@ paths:
   /approvals/{requestId}/rejections:
     post:
       operationId: rejectApproval
+      x-argon-built: true
       summary: Reject a request with one of the four reasons, resting on the rejecter's own PIN step-up
       security: [{ session: [] }]
       parameters:
@@ -1838,6 +1863,7 @@ paths:
   /societies/{societyId}/contributions:
     post:
       operationId: recordContribution
+      x-argon-built: true
       summary: Record a contribution that arrived, on the recorder's own PIN step-up
       description: |
         The server builds the double entry by role (the bank in, the member's
@@ -1909,6 +1935,7 @@ paths:
   /approvals/{requestId}/holds:
     post:
       operationId: authorisePayout
+      x-argon-built: true
       summary: Authorise an approved withdrawal to execute (the hold), on the authoriser's own PIN step-up
       description: |
         Every judgement before the money moves (0012): the request is an
@@ -1965,6 +1992,7 @@ paths:
   /holds/{holdId}/releases:
     post:
       operationId: releaseHold
+      x-argon-built: true
       summary: Release a hold whose transfer definitively failed, saying why
       security: [{ session: [] }]
       parameters:
@@ -2014,6 +2042,7 @@ paths:
   /societies/{societyId}/payouts:
     post:
       operationId: recordPayout
+      x-argon-built: true
       summary: Record a payout that happened, on the recorder's own PIN step-up
       description: |
         THE LEDGER RECORDS WHAT HAPPENED (LEDGER_CONTRACT §11). Refused only
@@ -2072,6 +2101,7 @@ paths:
   /me:
     get:
       operationId: getMe
+      x-argon-built: true
       summary: Who the caller is - their own member records and current posts
       security: [{ session: [] }]
       responses:
@@ -2090,6 +2120,7 @@ paths:
   /societies/{societyId}/withdrawal-requests:
     post:
       operationId: raiseWithdrawalRequest
+      x-argon-built: true
       summary: Raise a withdrawal request, on the raiser's own PIN step-up
       description: |
         Raised by the member it pays, or by an officer who records money (the
@@ -2159,6 +2190,7 @@ paths:
   /members/{memberId}/withdrawal-requests:
     get:
       operationId: getMemberWithdrawalRequests
+      x-argon-built: true
       summary: A member's own withdrawal requests, newest first, in the member projection
       description: |
         Progress and outcome, never who signed or rejected (the member
@@ -2189,6 +2221,7 @@ paths:
   /members/{memberId}/withdrawable:
     get:
       operationId: getMemberWithdrawable
+      x-argon-built: false
       summary: A member's savings, what they may withdraw now, and what was deducted and why
       description: |
         READING IS TIED TO THE DUTY (decided 2026-10-21): the member; the
@@ -2220,10 +2253,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '501':
+          description: |
+            not_built: this operation is specified and NOT BUILT yet
+            (x-argon-built: false). Message: "This is not available yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /members/{memberId}/withdrawal-quote:
     get:
       operationId: getWithdrawalQuote
+      x-argon-built: false
       summary: What a withdrawal of an amount would cost today (indicative)
       description: |
         The society's series in force today, applied to the amount; whether
@@ -2260,10 +2301,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '501':
+          description: |
+            not_built: this operation is specified and NOT BUILT yet
+            (x-argon-built: false). Message: "This is not available yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /societies/{societyId}/approval-requests:
     get:
       operationId: getSocietyApprovalRequests
+      x-argon-built: true
       summary: The society's approval requests, newest first, in the officer projection
       description: |
         For the society's officers, the auditor included: who raised, who signed,
