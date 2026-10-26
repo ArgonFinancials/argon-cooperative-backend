@@ -42,7 +42,7 @@ func corsServer(t *testing.T, origins ...string) *httptest.Server {
 		app, authp := rolePools(t, 0)
 		svc, err := auth.New(auth.Deps{DB: authp, SMS: &fakeSMS{}, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon})
 		fixture(t, err, "the auth service")
-		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, AllowedOrigins: origins})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, AllowedOrigins: origins, CSRFKey: testCSRFKey})
 		fixture(t, err, "the API")
 	}
 	srv := httptest.NewServer(h)

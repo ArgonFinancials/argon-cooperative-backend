@@ -1,7 +1,7 @@
 # Suite session_api — the browser session (decided 2026-10-23, LEDGER_CONTRACT.md
 # §12; reviewed as pieces 5-7): the session and device cookies, the CSRF token,
 # the Bearer refusals, sign-out. Sourced by mutate.sh. No SQL baseline: the
-# schema is real, with 0018's column (its interface until 0018 exists). The
+# schema is real (nothing is stored for the CSRF token: it is derived). The
 # mutants are the named breaks in apifake_session_test.go and apifake_cors_test.go.
 # Run with --svc.
 SUITE_INCLUDE='^TestApiSession'
@@ -10,7 +10,7 @@ SUITE_SKIP=''
 SUITE_RUN='^TestApiSession'
 SVC_RUN='^TestApiSession'
 SVC_ENV='ARGON_TEST_API_FAKE'
-SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,migrations/0015_benefit_and_duties.up.sql,migrations/0016_withdrawal_requests.up.sql,migrations/0017_quotes_and_largest.up.sql,test/tier1/0018_interface.sql'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,migrations/0015_benefit_and_duties.up.sql,migrations/0016_withdrawal_requests.up.sql,migrations/0017_quotes_and_largest.up.sql'
 SUITE_MUTDIR='mutants_api_none'
 SUITE_GREEN_NEEDS='internal/api/session.go'      # the real cookie session, written after review
 CONTROL_RE='^$'
@@ -28,7 +28,6 @@ declare -gA SVC_TARGET_OF=(
   [credentials_any_origin]='TestApiSession19_AnUnlistedOriginGetsNoCredentials'
   [credentials_missing]='TestApiSession18_AnAllowedOriginMayCarryCredentials'
   [csrf_after_handler]='TestApiSession02_ACookiePostWithoutTheTokenIsRefusedBeforeItsEffect'
-  [csrf_any_session]='TestApiSession04_AnotherSessionsTokenIsRefused'
   [csrf_failure_counts_as_sign_in_failure]='TestApiSession05_CsrfFailuresNeitherEndTheSessionNorCountTowardTheLockout'
   [csrf_failure_ends_session]='TestApiSession05_CsrfFailuresNeitherEndTheSessionNorCountTowardTheLockout'
   [csrf_header_not_allowed]='TestApiSession18_AnAllowedOriginMayCarryCredentials'
@@ -52,4 +51,10 @@ declare -gA SVC_TARGET_OF=(
   [signout_session_only]='TestApiSession25_SignOutEndsTheSessionAndClearsItsCookie'
   [signout_without_csrf]='TestApiSession08_SignOutWithoutTheTokenIsRefused'
   [token_in_browser_body]='TestApiSession09_ABrowserSignInSetsTheSessionCookieNeverABodyToken'
+  [csrf_first_key_kept]='TestApiSession30_ARotatedKeyRefusesTheOldTokenAndThePageRecoversThroughMe'
+  [csrf_is_session_digest]='TestApiSession28_TheCsrfTokenIsNeitherTheSessionTokenNorItsDigest'
+  [csrf_key_default]='TestApiSession32_TheConfigurationRequiresTheCsrfKey'
+  [csrf_key_generated]='TestApiSession31_WithNoCsrfKeyTheServerRefusesToStart'
+  [csrf_per_user]='TestApiSession04_AnotherSessionsTokenIsRefused'
+  [csrf_unkeyed]='TestApiSession29_TheCsrfTokenDependsOnTheServersKey'
 )

@@ -18,6 +18,8 @@ type Config struct {
 	// The browser origins that may call the API (ARGON_ALLOWED_ORIGINS,
 	// comma-separated, exact). Empty: no browser origin (closed by default).
 	AllowedOrigins string
+	// CSRFKey: ARGON_CSRF_KEY, hex, at least 32 bytes; required (2026-10-24).
+	CSRFKey []byte
 }
 
 func Load() (Config, error) {

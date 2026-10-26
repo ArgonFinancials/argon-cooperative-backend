@@ -58,7 +58,7 @@ func apiServer(t *testing.T) *httptest.Server {
 		if serr != nil {
 			t.Fatalf("FIXTURE: cannot construct the auth service: %v", serr)
 		}
-		h, err = api.NewServer(api.Deps{DB: app, Auth: svc})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, CSRFKey: testCSRFKey})
 		if err != nil {
 			t.Fatalf("FIXTURE: cannot construct the API: %v", err)
 		}
@@ -93,8 +93,7 @@ func signIn(t *testing.T, user string) string {
 	tok := randHex()
 	var dev string
 	fixture(t, db.QueryRow(bg(), `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id`, user, auth.TokenDigest(randHex())).Scan(&dev), "device")
-	q, args := sessionInsert("user_id, device_id, token_digest", "", user, dev, auth.TokenDigest(tok))
-	fixture(t, one(q, args...), "session")
+	fixture(t, one(`INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, dev, auth.TokenDigest(tok)), "session")
 	return tok
 }
 

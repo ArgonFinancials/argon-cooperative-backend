@@ -64,7 +64,7 @@ func authServer(t *testing.T, sms auth.SMS, ahead time.Duration) *httptest.Serve
 		deps.DB = authp
 		svc, err := auth.New(deps)
 		fixture(t, err, "the auth service")
-		h, err = api.NewServer(api.Deps{DB: app, Auth: svc})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, CSRFKey: testCSRFKey})
 		fixture(t, err, "the API")
 	}
 	srv := httptest.NewServer(h)

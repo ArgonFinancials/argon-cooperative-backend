@@ -68,6 +68,10 @@ type fakeAPI struct {
 	brk    string
 	noAuth bool      // started without an auth service, as the deployed binary is for now
 	deps   auth.Deps // the reference auth service's dependencies (sign-in); defaults in authDeps
+	// csrfKey: the server's CSRF key (apifake_session_test.go); the test key
+	// unless the test sets its own. A fake built by newFakeServer with none
+	// refuses to start, as the real server must.
+	csrfKey []byte
 }
 
 // The paths that need no session, as in the real server.
@@ -78,6 +82,12 @@ func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 }
 
 func newFakeAPIWith(f *fakeAPI) http.Handler {
+	if f.csrfKey == nil {
+		f.csrfKey = testCSRFKey
+	}
+	if firstKey == nil {
+		firstKey = f.csrfKey
+	}
 	opts := api.ChiServerOptions{ErrorHandlerFunc: api.RequestError} // the router's own errors in the one format
 	if f.brk == "router_errors_plain" {
 		opts = api.ChiServerOptions{} // the generated default: text/plain

@@ -41,7 +41,7 @@ func (f *fakeAPI) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetM
 	// session has no use for one and is given none.
 	if viaCookie, _ := ctx.Value(ctxCookie{}).(bool); viaCookie && f.brk != "me_omits_token" {
 		tok, _ := ctx.Value(ctxToken{}).(string)
-		c := csrfOf(tok)
+		c := f.csrfFor(ctx, tok)
 		m.CsrfToken = &c
 	}
 	whose := `m.user_id = $1`

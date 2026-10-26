@@ -14,15 +14,23 @@
 //   - sign-out ends the session and clears its cookie, the device untouched;
 //   - any 401 to a request that carried a session cookie clears it.
 //
-// THE CSRF TOKEN is derived, not random: HMAC(key, "argon-csrf:" + the session
-// token), so the server can give it again (GET /me, after a reload) while
-// storing only its digest. Only the server holds the key; it is never the
-// session token itself.
+// THE CSRF TOKEN is derived, and NOTHING STORES IT (decided 2026-10-24):
+// HMAC(the server's key, "argon-csrf:" + the session token). The server gives
+// it again from the cookie (GET /me, after a reload) and checks a presented one
+// by recomputing it with its CURRENT key. Rotating the key invalidates every
+// live page's token; each page recovers by reloading and re-reading /me, no
+// sign-in. Only the server holds the key, configured, never generated: a key
+// made at each start would log every page out on every restart.
 //
 // Breaks (ARGON_TEST_API_FAKE=<break>):
 //
 //	csrf_unchecked              a cookie session's POST needs no token
-//	csrf_any_session            a token is accepted if ANY live session has it
+//	csrf_per_user               the token is the person's, not the session's: another session of theirs shares it
+//	csrf_is_session_digest      the token is the session token's own digest: no key, the first factor restated
+//	csrf_unkeyed                the token is keyed by a constant, not the server's configured key
+//	csrf_first_key_kept         the key a server first started with is kept: a rotation changes nothing
+//	csrf_key_generated          a server started with no key makes one up instead of refusing to start
+//	csrf_key_default            the configuration supplies a default key when ARGON_CSRF_KEY is unset
 //	csrf_after_handler          the token is checked after the request has had its effect
 //	csrf_failure_ends_session   a failed check ends the session (a cross-site page signs the member out)
 //	csrf_failure_counts_as_sign_in_failure  a failed check counts toward the lockout
@@ -63,14 +71,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/argon/backend/internal/api"
 	"github.com/argon/backend/internal/auth"
+	"github.com/argon/backend/internal/config"
 )
 
 const (
@@ -79,14 +90,69 @@ const (
 	deviceMaxAge  = 400 * 24 * 3600 // the browsers' cap; renewed on every sign-in that uses it
 )
 
-// testCSRFKey: the fake's server-held key (the same test value as the code key).
-var testCSRFKey = []byte("test-code-key-not-a-secret")
+// testCSRFKey: the key test servers are configured with, unless a test sets
+// its own (rotation).
+var testCSRFKey = []byte("test-csrf-key-not-a-secret-0123456789")
 
-// csrfOf: the CSRF token of the session whose token is tok.
-func csrfOf(tok string) string {
-	m := hmac.New(sha256.New, testCSRFKey)
-	m.Write([]byte("argon-csrf:" + tok))
+// firstKey: csrf_first_key_kept's memory of the first key any fake started with.
+var firstKey []byte
+
+func hmacHex(key []byte, msg string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(msg))
 	return hex.EncodeToString(m.Sum(nil))
+}
+
+// csrfFor: the CSRF token of the session whose token is tok, under this
+// server's key, recomputed every time; never stored.
+func (f *fakeAPI) csrfFor(ctx context.Context, tok string) string {
+	key := f.csrfKey
+	switch f.brk {
+	case "csrf_is_session_digest":
+		return sha(tok)
+	case "csrf_unkeyed":
+		key = []byte("argon")
+	case "csrf_first_key_kept":
+		key = firstKey
+	case "csrf_per_user":
+		var user string
+		f.db.QueryRow(ctx, `SELECT user_id::text FROM auth_sessions WHERE token_digest = $1`, sha(tok)).Scan(&user)
+		return hmacHex(key, "argon-csrf-user:"+user)
+	}
+	return hmacHex(key, "argon-csrf:"+tok)
+}
+
+// loadConfig: the server's configuration as cmd/api loads it: the real
+// loader, or (in a fake run) a reference loader with the same rule on
+// ARGON_CSRF_KEY, breakable.
+func loadConfig() (config.Config, error) {
+	brk, fake := os.LookupEnv("ARGON_TEST_API_FAKE")
+	if !fake {
+		return config.Load()
+	}
+	c := config.Config{DatabaseURL: os.Getenv("DATABASE_URL")}
+	key := os.Getenv("ARGON_CSRF_KEY")
+	if key == "" && brk == "csrf_key_default" {
+		key = strings.Repeat("00", 32) // a default anyone can read here
+	}
+	b, err := hex.DecodeString(key)
+	if err != nil || len(b) < 32 {
+		return c, errors.New("ARGON_CSRF_KEY must be at least 32 bytes as hex (openssl rand -hex 32)")
+	}
+	c.CSRFKey = b
+	return c, nil
+}
+
+// newFakeServer: the fake as cmd/api starts it, with its CSRF key; no key is
+// a refusal to start, never a generated default.
+func newFakeServer(f *fakeAPI) (http.Handler, error) {
+	if len(f.csrfKey) == 0 {
+		if f.brk != "csrf_key_generated" {
+			return nil, errors.New("no CSRF key: the server refuses to start")
+		}
+		f.csrfKey = []byte(token())
+	}
+	return newFakeAPIWith(f), nil
 }
 
 type ctxCookie struct{} // the request's session came from the cookie
@@ -217,13 +283,7 @@ func (f *fakeAPI) csrfMatches(ctx context.Context, sessionTok, presented string)
 	if presented == "" || f.brk == "csrf_never_matches" {
 		return false
 	}
-	var ok bool
-	if f.brk == "csrf_any_session" {
-		f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth_sessions WHERE csrf_digest = $1 AND ended_at IS NULL)`, sha(presented)).Scan(&ok)
-		return ok
-	}
-	f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth_sessions WHERE token_digest = $1 AND csrf_digest = $2)`, sha(sessionTok), sha(presented)).Scan(&ok)
-	return ok
+	return hmac.Equal([]byte(presented), []byte(f.csrfFor(ctx, sessionTok)))
 }
 
 func (f *fakeAPI) csrfFailed(ctx context.Context, sessionTok string) {
@@ -299,7 +359,7 @@ func (f *fakeAPI) signInLayer(w http.ResponseWriter, r *http.Request, next http.
 			if f.brk != "device_token_in_browser_body" {
 				delete(res, "deviceToken")
 			}
-			res["csrfToken"] = csrfOf(tok)
+			res["csrfToken"] = f.csrfFor(r.Context(), tok)
 			out, _ = json.Marshal(res)
 		}
 	}

@@ -22,6 +22,9 @@ type Deps struct {
 	// AllowedOrigins: the browser origins that may call this API (exact
 	// matches; empty = none, closed by default). cors.go.
 	AllowedOrigins []string
+	// CSRFKey: the server-held key a cookie session's CSRF token is derived
+	// under (LEDGER_CONTRACT.md §12, 2026-10-24); required.
+	CSRFKey []byte
 }
 
 type server struct {

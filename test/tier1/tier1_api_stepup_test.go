@@ -300,7 +300,7 @@ func TestApiStepUp15_UnconfiguredServerSaysSoAndMintsNothing(t *testing.T) {
 	} else {
 		var err error
 		app, _ := rolePools(t, 0)
-		h, err = api.NewServer(api.Deps{DB: app}) // no Auth: as cmd/api is today
+		h, err = api.NewServer(api.Deps{DB: app, CSRFKey: testCSRFKey}) // no Auth: as cmd/api is today
 		fixture(t, err, "the API without an auth service")
 	}
 	srv := httptest.NewServer(h)

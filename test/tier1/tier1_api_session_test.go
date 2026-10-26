@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/argon/backend/internal/api"
@@ -27,23 +28,38 @@ import (
 const appOrigin = "http://localhost:3000"
 
 // sessionServer: the API with the app's origin allowed and the sign-in
-// service, real or the reference fake.
+// service, real or the reference fake, on the test CSRF key.
 func sessionServer(t *testing.T) (*httptest.Server, *fakeSMS) {
 	t.Helper()
-	sms := &fakeSMS{}
+	return sessionServerKey(t, testCSRFKey)
+}
+
+// startServer builds the server as cmd/api does, with the given CSRF key,
+// and returns its refusal to start if it gives one.
+func startServer(t *testing.T, sms *fakeSMS, key []byte) (http.Handler, error) {
+	t.Helper()
 	deps := auth.Deps{SMS: sms, Notify: &fakeNotifier{}, CodeKey: []byte("test-code-key-not-a-secret"), Argon: testArgon}
-	var h http.Handler
 	if brk, ok := os.LookupEnv("ARGON_TEST_API_FAKE"); ok {
 		deps.DB = db
-		h = fakeCORS([]string{appOrigin}, brk, newFakeAPIWith(&fakeAPI{db: db, brk: brk, deps: deps}))
-	} else {
-		app, authp := rolePools(t, 0)
-		deps.DB = authp
-		svc, err := auth.New(deps)
-		fixture(t, err, "the auth service")
-		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, AllowedOrigins: []string{appOrigin}})
-		fixture(t, err, "the API")
+		h, err := newFakeServer(&fakeAPI{db: db, brk: brk, deps: deps, csrfKey: key})
+		if err != nil {
+			return nil, err
+		}
+		return fakeCORS([]string{appOrigin}, brk, h), nil
 	}
+	app, authp := rolePools(t, 0)
+	deps.DB = authp
+	svc, err := auth.New(deps)
+	fixture(t, err, "the auth service")
+	return api.NewServer(api.Deps{DB: app, Auth: svc, AllowedOrigins: []string{appOrigin}, CSRFKey: key})
+}
+
+// sessionServerKey: two servers on two keys share one database: a rotation.
+func sessionServerKey(t *testing.T, key []byte) (*httptest.Server, *fakeSMS) {
+	t.Helper()
+	sms := &fakeSMS{}
+	h, err := startServer(t, sms, key)
+	fixture(t, err, "the API")
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv, sms
@@ -597,5 +613,88 @@ func TestApiSession27_ADeviceRevokedFromAnotherSessionGoesToTheNewDevicePath(t *
 		body: map[string]string{"credential": b.signer.number, "pin": signPIN}})
 	if out, _ := a.field(t, "outcome"); out == "signed_in" {
 		t.Fatalf("STILL KNOWN — the phone whose session was ended from elsewhere signed straight in with its device cookie")
+	}
+}
+
+// =============================================================================
+// THE TOKEN IS DERIVED AND NOTHING STORES IT (2026-10-24)
+// =============================================================================
+
+// Never the session token, nor its plain digest: either would be the first
+// factor restated, and the second would be computable by anyone holding the
+// cookie, with no key at all.
+func TestApiSession28_TheCsrfTokenIsNeitherTheSessionTokenNorItsDigest(t *testing.T) {
+	_, _, b := newBrowserMember(t, "")
+	if b.csrf == b.session {
+		t.Fatalf("RESTATED — the CSRF token is the session token itself")
+	}
+	if b.csrf == auth.TokenDigest(b.session) {
+		t.Fatalf("UNKEYED — the CSRF token is the session token's plain digest: anyone with the cookie can compute it")
+	}
+}
+
+// The token depends on a key only the server holds: the same session, under
+// two servers' keys, has two different tokens.
+func TestApiSession29_TheCsrfTokenDependsOnTheServersKey(t *testing.T) {
+	srvA, _, b := newBrowserMember(t, "")
+	srvB, _ := sessionServerKey(t, []byte("a-different-csrf-key-not-a-secret-987654"))
+	ta, _ := meWith(t, srvA, call{origin: true, session: b.session}).field(t, "csrfToken")
+	tb, _ := meWith(t, srvB, call{origin: true, session: b.session}).field(t, "csrfToken")
+	if ta == "" || tb == "" {
+		t.Fatalf("NO TOKEN — /me under key A gives %q, under key B %q", ta, tb)
+	}
+	if ta == tb {
+		t.Fatalf("UNKEYED — the same session has the same CSRF token under two different server keys (%q): the token does not depend on the server's key", ta)
+	}
+}
+
+// ROTATION, as the contract says (2026-10-24): a token minted under the old
+// key is refused; the same session recovers by re-reading /me under the new
+// one, with no sign-in. What someone will rely on during an incident.
+func TestApiSession30_ARotatedKeyRefusesTheOldTokenAndThePageRecoversThroughMe(t *testing.T) {
+	_, _, b := newBrowserMember(t, "")
+	rotated, _ := sessionServerKey(t, []byte("the-rotated-csrf-key-not-a-secret-24680"))
+	wantRefused(t, send(t, rotated, stepUpCall(b)), http.StatusForbidden, "csrf_failed", "a token minted under the old key, after the rotation")
+	fresh, _ := meWith(t, rotated, call{origin: true, session: b.session}).field(t, "csrfToken")
+	if fresh == "" || fresh == b.csrf {
+		t.Fatalf("NOT RECOVERABLE — after the rotation /me gives %q (the old token was %q)", fresh, b.csrf)
+	}
+	c := stepUpCall(b)
+	c.csrf = fresh
+	if a := send(t, rotated, c); a.status != http.StatusCreated {
+		t.Fatalf("NOT RECOVERED — the same session with the token /me gave after the rotation: %d %s; want 201, no sign-in", a.status, a.body)
+	}
+}
+
+// No key is a refusal to start, never a generated default: a key made at each
+// start would silently log every page out on every restart.
+func TestApiSession31_WithNoCsrfKeyTheServerRefusesToStart(t *testing.T) {
+	for _, key := range [][]byte{nil, {}} {
+		if _, err := startServer(t, &fakeSMS{}, key); err == nil {
+			t.Fatalf("STARTED — the server started with no CSRF key (%v); it must refuse", key)
+		}
+	}
+}
+
+// The configuration: ARGON_CSRF_KEY is required, hex, at least 32 bytes, with
+// no default.
+func TestApiSession32_TheConfigurationRequiresTheCsrfKey(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
+	t.Setenv("AUTH_DATABASE_URL", "")
+	t.Setenv("AUTH_CODE_KEY", "")
+	for _, c := range []struct{ what, value string }{
+		{"unset", ""},
+		{"not hex", "this-is-not-hex-at-all-and-is-long-enough-0123456789abcdef"},
+		{"16 bytes", "00112233445566778899aabbccddeeff"},
+	} {
+		t.Setenv("ARGON_CSRF_KEY", c.value)
+		if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "ARGON_CSRF_KEY") {
+			t.Fatalf("STARTED — ARGON_CSRF_KEY %s: the configuration loaded (%v); it must refuse, naming ARGON_CSRF_KEY", c.what, err)
+		}
+	}
+	t.Setenv("ARGON_CSRF_KEY", strings.Repeat("ab", 32))
+	cfg, err := loadConfig()
+	if err != nil || len(cfg.CSRFKey) != 32 {
+		t.Fatalf("REFUSED — a 32-byte ARGON_CSRF_KEY: %v (key %d bytes)", err, len(cfg.CSRFKey))
 	}
 }

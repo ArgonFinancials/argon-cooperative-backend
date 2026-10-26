@@ -119,8 +119,7 @@ func (f *fakeAPI) PostVerifyCode(ctx context.Context, req api.PostVerifyCodeRequ
 		var user string
 		if f.db.QueryRow(ctx, `SELECT user_id::text FROM auth_codes WHERE id::text = $1`, strings.SplitN(req.Body.Challenge, ":", 2)[0]).Scan(&user) == nil {
 			tok := token()
-			q, args := sessionInsertCSRF(sha(csrfOf(tok)), "user_id, token_digest", "", user, sha(tok))
-			f.db.Exec(ctx, q, args...)
+			f.db.Exec(ctx, `INSERT INTO auth_sessions (user_id, token_digest) VALUES ($1, $2)`, user, sha(tok))
 			r, err = auth.Result{SessionToken: tok}, nil
 		}
 	}

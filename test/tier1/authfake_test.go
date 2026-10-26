@@ -150,8 +150,7 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	}
 	if known {
 		t := token()
-		q, args := sessionInsertCSRF(sha(csrfOf(t)), "user_id, device_id, token_digest", "", user, device, sha(t))
-		if _, err := f.d.DB.Exec(ctx, q, args...); err != nil {
+		if _, err := f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, device, sha(t)); err != nil {
 			return auth.Result{}, err
 		}
 		return auth.Result{SessionToken: t}, nil
@@ -210,8 +209,7 @@ func (f *fakeService) VerifyCode(ctx context.Context, challenge, code string) (a
 	dt, st := token(), token()
 	var dev string
 	f.d.DB.QueryRow(ctx, `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id`, user, sha(dt)).Scan(&dev)
-	q, args := sessionInsertCSRF(sha(csrfOf(st)), "user_id, device_id, token_digest", "", user, dev, sha(st))
-	f.d.DB.Exec(ctx, q, args...)
+	f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, dev, sha(st))
 	if f.brk != "no_notify" {
 		var at time.Time
 		f.d.DB.QueryRow(ctx, `SELECT now()`).Scan(&at)

@@ -166,8 +166,7 @@ type sess struct{ id, digest string }
 func (a *authT) session(user string, d dev) sess {
 	a.t.Helper()
 	s := sess{digest: digest()}
-	q, args := sessionInsert("user_id, device_id, token_digest", "id", user, d.id, s.digest)
-	a.scan("session", q, []any{&s.id}, args...)
+	a.scan("session", `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3) RETURNING id`, []any{&s.id}, user, d.id, s.digest)
 	return s
 }
 
@@ -263,8 +262,7 @@ func TestAuthA3_SessionTokenNeverStoredInPlaintext(t *testing.T) {
 	a := newAuth(t)
 	p := a.who("M")
 	d := a.device(p.user)
-	q, args := sessionInsert("user_id, device_id, token_digest", "", p.user, d.id, "sess_plain_token_value")
-	refused(t, a.exec(q, args...),
+	refused(t, a.exec(`INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, 'sess_plain_token_value')`, p.user, d.id),
 		"a session token stored in the clear", w("23514", "token_is_digest"))
 }
 
@@ -984,8 +982,7 @@ func TestAuthH4_RevokedDeviceCannotRevive(t *testing.T) {
 	fixture(t, a.exec(`UPDATE auth_devices SET revoked_at = auth_now() WHERE id = $1 AND revoked_at IS NULL`, stolen.id), "revoke (if not already)")
 	refused(t, a.exec(`UPDATE auth_devices SET revoked_at = NULL WHERE id = $1`, stolen.id),
 		"the revoked stolen device un-revoked", w("23514", "device_revocation_is_final"))
-	q, args := sessionInsert("user_id, device_id, token_digest", "", m.user, stolen.id, digest())
-	refused(t, a.exec(q, args...),
+	refused(t, a.exec(`INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, m.user, stolen.id, digest()),
 		"a new session on the revoked device", w("23514", "session_on_revoked_device"))
 }
 
@@ -1082,9 +1079,8 @@ func TestAuthH10_SessionExpiryIsTheServers(t *testing.T) {
 	a := newAuth(t)
 	m := a.who("Member")
 	d := a.device(m.user)
-	q, args := sessionInsert("user_id, device_id, token_digest, expires_at", "",
-		m.user, d.id, digest(), a.now.Add(365*24*time.Hour).Format(time.RFC3339))
-	refused(t, a.exec(q, args...),
+	refused(t, a.exec(`INSERT INTO auth_sessions (user_id, device_id, token_digest, expires_at) VALUES ($1, $2, $3, $4)`,
+		m.user, d.id, digest(), a.now.Add(365*24*time.Hour).Format(time.RFC3339)),
 		"a session whose caller chose its expiry", w("23514", "session_expiry_is_server"))
 }
 
