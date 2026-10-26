@@ -16,7 +16,7 @@ on_server || die "30-install-api.sh is for the server (ARGON_HOST=1)"
 [[ $REPO_DIR == /opt/argon/src ]] || die "run from the installed release (/opt/argon/src), not from $REPO_DIR: see 05-install-release.sh"
 require_env ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_CODE_KEY ARGON_CSRF_KEY ARGON_DB API_PORT
 [[ $ARGON_CODE_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CODE_KEY must be at least 32 bytes of lowercase hex (openssl rand -hex 32)"
-[[ $ARGON_CSRF_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CSRF_KEY must be at least 32 bytes of lowercase hex, generated on the instance straight into the deploy env file (openssl rand -hex 32; deploy/README.md, first install)"
+[[ $ARGON_CSRF_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CSRF_KEY must be at least 32 bytes of lowercase hex: add it on the instance with the line in deploy/README.md, 'A new key on an existing instance' (it writes a key only when none is there)"
 command -v go >/dev/null || die "go not found: run 15-install-tools.sh"
 
 export ARGON_RELEASE=$(cat "$REPO_DIR/RELEASE")

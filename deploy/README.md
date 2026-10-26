@@ -69,7 +69,8 @@ for v in POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACK
   sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
 done
 sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
-sudo sed -i "s|^ARGON_CSRF_KEY=.*|ARGON_CSRF_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
+F=/etc/argon/deploy.env   # the CSRF key: the same line as on an existing instance (below)
+sudo grep -qE '^ARGON_CSRF_KEY=[0-9a-f]{64,}$' "$F" || { sudo sed -i '/^ARGON_CSRF_KEY=/d' "$F"; echo "ARGON_CSRF_KEY=$(openssl rand -hex 32)" | sudo tee -a "$F" >/dev/null; }
 
 # 3. Ubuntu 26.04's sudo ignores -E, so ARGON_ENV goes on each sudo line.
 E=ARGON_ENV=/etc/argon/deploy.env
@@ -123,6 +124,20 @@ Part B (`AWS_REQUEST.md`) gives `BACKUP_STORE=s3://…`.
 **These host scripts are on their first runs.** Report each failure as it comes
 (the step, the command, the output), rather than fixing it in place, because
 what fails says more about the scripts than what passes.
+
+### A new key on an existing instance
+
+A release can need a variable the instance's `/etc/argon/deploy.env` never had: that file was copied from the example once, at first install, and is never copied again. `ARGON_CSRF_KEY` (2026-10-26, the browser session) is the first. Without it, `30-install-api.sh` refuses to install; the running API is untouched (the release checkout from `05` is already replaced by then, but nothing restarts the container).
+
+Run this ON THE INSTANCE before the deploy that first needs it. It writes a key only when no valid one is there, so running it twice changes nothing; a line that exists but is empty or malformed is replaced, not kept. The key goes from `openssl` into the file through `tee`, never on a command line.
+
+```bash
+F=/etc/argon/deploy.env
+sudo grep -qE '^ARGON_CSRF_KEY=[0-9a-f]{64,}$' "$F" || { sudo sed -i '/^ARGON_CSRF_KEY=/d' "$F"; echo "ARGON_CSRF_KEY=$(openssl rand -hex 32)" | sudo tee -a "$F" >/dev/null; }
+sudo grep -c '^ARGON_CSRF_KEY=' "$F"   # must print 1
+```
+
+Why not a plain append: run twice, it leaves two keys; the later one wins, and every open page's CSRF token is refused until it reloads, which would look like the cookie work was broken rather than the install. Why not the first-install `sed s|^…=.*|…|` alone: on a file without the line it changes nothing and says nothing.
 
 ### Findings from the first runs (2026-10-02/03)
 
