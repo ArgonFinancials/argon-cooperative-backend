@@ -6,15 +6,15 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/argon/backend/internal/auth"
 )
 
-// Deps is what the API needs. Identity comes only from a session token
-// (Authorization: Bearer), resolved against the database by session_valid.
+// Deps is what the API needs. Identity comes only from a session token, a
+// browser's in its session cookie and any other client's in Authorization:
+// Bearer, resolved against the database by session_valid (session.go).
 type Deps struct {
 	DB   *pgxpool.Pool
 	Log  *slog.Logger // optional; slog.Default() when nil
@@ -28,9 +28,10 @@ type Deps struct {
 }
 
 type server struct {
-	db   *pgxpool.Pool
-	log  *slog.Logger
-	auth auth.Service
+	db      *pgxpool.Pool
+	log     *slog.Logger
+	auth    auth.Service
+	csrfKey []byte
 }
 
 type (
@@ -45,49 +46,27 @@ func NewServer(d Deps) (http.Handler, error) {
 	if d.DB == nil {
 		return nil, errors.New("api: Deps.DB is required")
 	}
-	s := &server{db: d.DB, log: d.Log, auth: d.Auth}
+	// No key, no server: never a generated default, which would sign every
+	// page out on every restart (LEDGER_CONTRACT.md §12, 2026-10-24).
+	if len(d.CSRFKey) == 0 {
+		return nil, errors.New("api: Deps.CSRFKey is required")
+	}
+	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
 	// The router's own refusals (a missing header, a malformed parameter)
 	// answer in the same JSON Problem as everything else: one contract.
-	h := HandlerWithOptions(NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
+	h := HandlerWithOptions(NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{s.browserSignIn}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  RequestError,
 		ResponseErrorHandlerFunc: ResponseError,
 	}), ChiServerOptions{ErrorHandlerFunc: RequestError})
 	// CORS OUTSIDE authentication: a preflight carries no credentials (cors.go).
-	return CORS(d.AllowedOrigins, s.authenticate(h)), nil
+	return CORS(d.AllowedOrigins, s.gate(h)), nil
 }
 
 // Paths that need no session.
 var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true}
-
-// authenticate resolves the bearer token to a user before any handler runs.
-// No token, an invented one, or a session that is ended, expired or whose
-// holder lost the privilege it was granted under: 401.
-func (s *server) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if public[r.URL.Path] {
-			next.ServeHTTP(w, r)
-			return
-		}
-		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		var user string
-		if ok && tok != "" {
-			if err := s.db.QueryRow(r.Context(),
-				`SELECT user_id::text FROM auth_sessions WHERE token_digest = $1 AND session_valid($1)`,
-				auth.TokenDigest(tok)).Scan(&user); err != nil {
-				user = ""
-			}
-		}
-		if user == "" {
-			writeProblem(w, http.StatusUnauthorized, Problem{Code: "unauthenticated", Message: "sign in again"})
-			return
-		}
-		ctx := context.WithValue(context.WithValue(r.Context(), callerKey{}, user), tokenKey{}, tok)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
 
 func callerOf(ctx context.Context) string {
 	u, _ := ctx.Value(callerKey{}).(string)

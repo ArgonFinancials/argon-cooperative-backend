@@ -45,7 +45,7 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
-	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins)}
+	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins), CSRFKey: cfg.CSRFKey}
 	if len(deps.AllowedOrigins) == 0 {
 		log.Info("no browser origin may call this API (ARGON_ALLOWED_ORIGINS is empty: closed by default)")
 	} else {

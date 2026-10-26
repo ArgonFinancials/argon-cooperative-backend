@@ -24,6 +24,13 @@ func (s *server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponse
 	if err := s.db.QueryRow(ctx, `SELECT full_name FROM users WHERE id = $1`, caller).Scan(&m.FullName); err != nil {
 		return nil, err
 	}
+	// A cookie session gets its CSRF token again (the page's reload, session.go);
+	// a Bearer session has no use for one and is given none.
+	if viaCookie, _ := ctx.Value(viaCookieKey{}).(bool); viaCookie {
+		tok, _ := ctx.Value(tokenKey{}).(string)
+		c := s.csrfFor(tok)
+		m.CsrfToken = &c
+	}
 	rows, err := s.db.Query(ctx, `SELECT s.id::text, s.code, s.registered_name, m.id::text, m.member_number, m.status::text
 		FROM members m JOIN societies s ON s.id = m.society_id WHERE m.user_id = $1 ORDER BY s.code, m.id`, caller)
 	if err != nil {

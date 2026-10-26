@@ -23,12 +23,15 @@ import (
 //     is still ANSWERED (a client that is not a browser sends whatever Origin
 //     it likes, or none); it only carries nothing that lets a browser page on
 //     that origin read it. Never build on "an unlisted origin is blocked".
+//   - CREDENTIALS (the session cookie, 2026-10-23): Access-Control-Allow-
+//     Credentials only beside an exact allowed origin. A browser refuses
+//     credentials with a wildcard anyway; we never send one.
 //   - Vary: Origin on every answer, so a cache between (a CDN, a corporate
 //     proxy) never hands one origin's answer to another.
 
 var (
 	corsMethods = "GET, POST"
-	corsHeaders = "Authorization, Content-Type, Idempotency-Key" // what our calls carry; the money endpoints need Idempotency-Key
+	corsHeaders = "Authorization, Content-Type, Idempotency-Key, X-CSRF-Token" // what our calls carry; the money endpoints need Idempotency-Key; a cookie session's state changes need X-CSRF-Token
 )
 
 // CORS wraps next with browser access for exactly the given origins.
@@ -50,6 +53,7 @@ func CORS(origins []string, next http.Handler) http.Handler {
 			}
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true") // the session cookie; safe only because origins are exact
 			h.Set("Access-Control-Allow-Methods", corsMethods)
 			h.Set("Access-Control-Allow-Headers", corsHeaders)
 			h.Set("Access-Control-Max-Age", "600")
@@ -58,6 +62,7 @@ func CORS(origins []string, next http.Handler) http.Handler {
 		}
 		if ok {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		next.ServeHTTP(w, r)
 	})

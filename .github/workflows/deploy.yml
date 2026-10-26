@@ -89,6 +89,7 @@ jobs:
           ARGON_BACKUP_PASSWORD=$(pw)
           ARGON_AUTH_PASSWORD=$(pw)
           ARGON_CODE_KEY=$(openssl rand -hex 32)
+          ARGON_CSRF_KEY=$(openssl rand -hex 32)
           BACKUP_STORE=file://./.backups
           EOF
           echo "ARGON_ENV=$PWD/deploy/env/ci.env" >> "$GITHUB_ENV"

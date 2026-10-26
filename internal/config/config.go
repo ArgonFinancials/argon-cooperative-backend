@@ -48,6 +48,16 @@ func Load() (Config, error) {
 		}
 		c.AuthCodeKey = b
 	}
+	// The CSRF key: required ALWAYS, auth service or not (2026-10-24). Bearer
+	// sessions are served either way, and a cookie session must never be
+	// checked against a missing key. No default: a key made at each start would
+	// sign every page out on every restart. Rotating it refuses every live
+	// page's token; each page recovers by reloading and re-reading /me.
+	ck, err := hex.DecodeString(os.Getenv("ARGON_CSRF_KEY"))
+	if err != nil || len(ck) < 32 {
+		return c, fmt.Errorf("ARGON_CSRF_KEY must be set, at least 32 bytes as hex (openssl rand -hex 32)")
+	}
+	c.CSRFKey = ck
 	return c, nil
 }
 

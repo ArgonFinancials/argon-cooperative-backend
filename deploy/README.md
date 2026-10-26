@@ -69,6 +69,7 @@ for v in POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACK
   sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
 done
 sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
+sudo sed -i "s|^ARGON_CSRF_KEY=.*|ARGON_CSRF_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
 
 # 3. Ubuntu 26.04's sudo ignores -E, so ARGON_ENV goes on each sudo line.
 E=ARGON_ENV=/etc/argon/deploy.env
