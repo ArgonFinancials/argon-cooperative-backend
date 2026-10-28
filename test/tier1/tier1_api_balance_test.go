@@ -522,3 +522,33 @@ func TestApiBalance15_TheSecondOfTwoHoldsIsRefusedBecauseTheFirstTookTheMoney(t 
 		t.Fatalf("WRONG ARITHMETIC — %+v; want withdrawable %s, needed %s, quoted and now both 1075", h, k(borrowerWithdrawable-payKobo-1075), k(payKobo+1075))
 	}
 }
+
+// A hold authorised and then RELEASED (the transfer will not happen): the
+// money comes back and the request is open again, so it is listed again. A
+// member who could not see it would think the request had vanished; an
+// officer would see nothing to act on (piece 3, 2026-10-28).
+func TestApiBalance16_AReleasedHoldPutsTheRequestBackInTheList(t *testing.T) {
+	w := newMoneyAPI(t)
+	v := w.raisedVia(t, payKobo)
+	for _, s := range []string{w.s2, w.secretary} {
+		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
+			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
+		}
+	}
+	r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation"))
+	if r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
+	}
+	var h mHold
+	fixture(t, json.Unmarshal(r.body, &h), "the hold")
+	if rr := w.releaseVia(t, w.s2, h.HoldId, "The member's bank account details were wrong"); rr.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the release: %d %s", rr.status, rr.body)
+	}
+	p := w.position(t, w.borrower, w.bMem)
+	if len(p.Requested) != 1 || p.Requested[0].RequestId != v.RequestId {
+		t.Fatalf("VANISHED — after its hold was released the request is not listed: %+v; want it open again", p.Requested)
+	}
+	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) || len(deductionsOf(p, "authorised_payout")) != 0 {
+		t.Fatalf("NOT RETURNED — figure %s, deductions %+v; want %s, the released hold taking nothing", orNone(p.WithdrawableKobo), p.Deductions, k(borrowerWithdrawable))
+	}
+}

@@ -414,7 +414,11 @@ func (s *server) AuthorisePayout(ctx context.Context, req AuthorisePayoutRequest
 		case c == "hold_once_open":
 			return AuthorisePayout409JSONResponse{Code: "hold_open", Message: dbMessage(err)}, nil
 		case c == "withdrawal_within_withdrawable":
-			return AuthorisePayout422JSONResponse{Code: "exceeds_withdrawable", Message: dbMessage(err)}, nil
+			why, werr := s.holdRefusal(ctx, r.id, dbMessage(err))
+			if werr != nil {
+				return nil, werr
+			}
+			return AuthorisePayout422JSONResponse(why), nil
 		case notConfigured[c]:
 			return AuthorisePayout422JSONResponse{Code: "not_configured", Message: dbMessage(err)}, nil
 		}
@@ -425,6 +429,64 @@ func (s *server) AuthorisePayout(ctx context.Context, req AuthorisePayoutRequest
 		return nil, err
 	}
 	return AuthorisePayout201JSONResponse(h), nil
+}
+
+// holdRefusal: WHAT CHANGED, for a hold the database refused because it no
+// longer fits (balance handlers piece 4, 2026-10-28). The refusal is the
+// database's (the hold trigger, on member_position); this only explains it:
+// the amount, the charge it was quoted, the charge now, what is needed, what
+// can be withdrawn, and the causes, every figure and both causes worked out
+// in the query.
+//
+// READ AFTER THE REFUSED TRANSACTION HAS ROLLED BACK, ON PURPOSE. The figures
+// describe the moment of this read, not the instant of the refusal: if a
+// payment were recorded in between, they would show the newer position. That
+// gap is the honest one. Do NOT move this read inside the hold's transaction
+// to close it: that transaction is being rolled back, and figures read from
+// it describe a state that never existed. The refusal itself stands either
+// way: it was the database's.
+func (s *server) holdRefusal(ctx context.Context, request, dbWords string) (HoldRefusal, error) {
+	out := HoldRefusal{Code: "exceeds_withdrawable", Message: dbWords}
+	var amount, now, needed int64
+	var quoted, figure *int64
+	var changed, fell bool
+	var since *time.Time
+	err := s.db.QueryRow(ctx, `SELECT r.amount_kobo,
+		       CASE WHEN r.quoted_on IS NULL THEN NULL ELSE r.quoted_partner_fee_kobo + r.quoted_vat_kobo + r.quoted_statutory_levy_kobo + r.quoted_argon_margin_kobo END,
+		       q.t, p.withdrawable_kobo, r.amount_kobo + q.t,
+		       coalesce(r.quoted_on IS NOT NULL AND q.t <> r.quoted_partner_fee_kobo + r.quoted_vat_kobo + r.quoted_statutory_levy_kobo + r.quoted_argon_margin_kobo, false),
+		       coalesce(r.quoted_on IS NOT NULL AND p.withdrawable_kobo IS NOT NULL
+		                AND r.amount_kobo + r.quoted_partner_fee_kobo + r.quoted_vat_kobo + r.quoted_statutory_levy_kobo + r.quoted_argon_margin_kobo > p.withdrawable_kobo, false),
+		       (SELECT max(cs.effective_from) FROM charge_schedules cs
+		         WHERE cs.society_id = r.society_id AND cs.kind = 'withdrawal_out' AND cs.effective_from <= current_date)
+		  FROM approval_requests r,
+		       LATERAL (SELECT c.partner_fee_kobo + c.vat_kobo + c.statutory_levy_kobo + c.argon_margin_kobo AS t
+		                  FROM charge_quote(r.society_id, 'withdrawal_out', r.amount_kobo, current_date) c) q,
+		       LATERAL member_position(r.member_id) p
+		 WHERE r.id = $1`, request).Scan(&amount, &quoted, &now, &figure, &needed, &changed, &fell, &since)
+	if err != nil || quoted == nil || figure == nil {
+		return out, err // no quote kept (before 0017) or no figure: the database's own words
+	}
+	var causes []HoldRefusalCauses
+	var why []string
+	if changed {
+		causes = append(causes, ChargeChanged)
+		on := "today"
+		if since != nil {
+			on = "on " + since.Format("2 January 2006")
+		}
+		why = append(why, "The society's charges changed "+on+": the quoted "+naira(*quoted)+" is now "+naira(now)+".")
+	}
+	if fell {
+		causes = append(causes, WithdrawableFell)
+		why = append(why, "What the member can withdraw has fallen since the request was raised (another payout authorised, a guarantee, or the floor).")
+	}
+	a, q, n, nd, w := magnitudeOf(amount), magnitudeOf(*quoted), magnitudeOf(now), magnitudeOf(needed), magnitudeOf(*figure)
+	out.AmountKobo, out.QuotedChargeKobo, out.ChargeNowKobo, out.NeededKobo, out.WithdrawableKobo, out.Causes = &a, &q, &n, &nd, &w, &causes
+	// The sentence, then the database's own words: its figures stay in the
+	// refusal as they always have (TestApiMoney15), beside the breakdown.
+	out.Message = "This request no longer fits. " + strings.Join(why, " ") + " " + naira(needed) + " is needed and " + naira(*figure) + " can be withdrawn. (" + dbWords + ")"
+	return out, nil
 }
 
 func (s *server) ReleaseHold(ctx context.Context, req ReleaseHoldRequestObject) (ReleaseHoldResponseObject, error) {

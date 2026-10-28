@@ -70,17 +70,13 @@ func builtFlag(o specOp) (built, present, isBool bool) {
 		if strings.EqualFold(o.op.OperationID, "getMe") {
 			return false, false, false
 		}
-	case "built_flag_flipped":
-		if strings.EqualFold(o.op.OperationID, "getMemberWithdrawable") {
-			return true, true, true
+	case "built_flag_flipped": // read as unbuilt, its responses unchanged (no 501): the spec contradicts itself
+		if strings.EqualFold(o.op.OperationID, "getMe") {
+			return false, true, true
 		}
 	case "not_built_answer_kept":
 		if strings.EqualFold(o.op.OperationID, "getMe") {
 			return false, true, true
-		}
-	case "built_without_handler":
-		if strings.EqualFold(o.op.OperationID, "getMemberWithdrawable") {
-			return true, true, true
 		}
 	}
 	return built, present, isBool
@@ -94,10 +90,6 @@ func declares501(o specOp) bool {
 	case "not_built_answer_kept": // written up as unbuilt while its handler exists: the quiet direction
 		if strings.EqualFold(o.op.OperationID, "getMe") {
 			return true
-		}
-	case "built_without_handler": // flag and 501 changed, the handler never written
-		if strings.EqualFold(o.op.OperationID, "getMemberWithdrawable") {
-			return false
 		}
 	}
 	return o.op.Responses != nil && o.op.Responses.Value("501") != nil
@@ -126,6 +118,9 @@ func TestApiSpec02_EveryOperationSaysWhetherItIsBuiltAndIsRight(t *testing.T) {
 	// 3. The real server: the code itself.
 	h, err := api.NewServer(api.Deps{DB: db, CSRFKey: testCSRFKey})
 	fixture(t, err, "the real server")
+	if os.Getenv("ARGON_TEST_API_FAKE") == "built_without_handler" {
+		h = notBuiltStub(h) // the spec says built; the handler was never written
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	user := newSociety(t).user("Who calls every operation")
@@ -219,4 +214,20 @@ func sampleFor(s *openapi3.SchemaRef) string {
 		return "1"
 	}
 	return "K-" + digest()[:20] // any string: an idempotency key, a reference
+}
+
+// notBuiltStub (break built_without_handler): the real server with one
+// operation's handler replaced by a not-built answer, as if it had been marked
+// built and its 501 removed while the handler was never written. The spec
+// agrees with itself; only step 3, the server, can catch it.
+func notBuiltStub(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/members/") && strings.HasSuffix(r.URL.Path, "/withdrawable") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			w.Write([]byte(`{"code":"not_built","message":"This is not available yet."}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

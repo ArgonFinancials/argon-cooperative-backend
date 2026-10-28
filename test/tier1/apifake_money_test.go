@@ -483,6 +483,8 @@ func (f *fakeAPI) AuthorisePayout(ctx context.Context, req api.AuthorisePayoutRe
 			}
 			if why.Causes == nil && f.brk != "money_refusal_unexplained" && f.brk != "hold_refusal_bare" {
 				why.Message = msg
+			} else if why.Causes != nil {
+				why.Message += " (" + msg + ")" // the database's own words after the sentence, as the real server does
 			}
 			if f.brk == "money_refusal_unexplained" {
 				why.Message = "refused"

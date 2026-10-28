@@ -18,6 +18,7 @@
 //	requested_deducted               an open request is subtracted from the figure
 //	requested_hidden                 open requests are not listed
 //	requested_kept_after_authorised  a request stays listed after its hold: the money shows twice
+//	requested_lost_after_release     any hold, released or not, takes a request out of the list for good
 //	quote_recomputed                 quotedCharges worked out from today's series, not kept
 //	change_unsaid                    no chargeChanged when the charges differ
 //	change_note_always               chargeChanged even when they match
@@ -94,8 +95,11 @@ func (f *fakeAPI) requestedOf(ctx context.Context, member string) ([]api.Request
 	}
 	held := `AND NOT EXISTS (SELECT 1 FROM withdrawal_holds h WHERE h.request_id = r.id
 		AND NOT EXISTS (SELECT 1 FROM withdrawal_hold_releases rl WHERE rl.hold_id = h.id))`
-	if f.brk == "requested_kept_after_authorised" {
+	switch f.brk {
+	case "requested_kept_after_authorised":
 		held = ""
+	case "requested_lost_after_release": // "has a hold": the obvious condition, and wrong
+		held = `AND NOT EXISTS (SELECT 1 FROM withdrawal_holds h WHERE h.request_id = r.id)`
 	}
 	rows, err := f.db.Query(ctx, `SELECT r.id::text, r.amount_kobo, coalesce(r.quoted_partner_fee_kobo, 0), coalesce(r.quoted_vat_kobo, 0),
 		coalesce(r.quoted_statutory_levy_kobo, 0), coalesce(r.quoted_argon_margin_kobo, 0), r.raised_at

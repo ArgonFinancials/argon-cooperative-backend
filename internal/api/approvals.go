@@ -102,6 +102,11 @@ func (s *server) approvalView(ctx context.Context, r approvalRow, projection str
 		}
 		v.Signatures = &sigs
 	}
+	if r.kind == "withdrawal_out" {
+		if err := s.requestCharges(ctx, r.id, &v); err != nil {
+			return v, err
+		}
+	}
 	var rj ApprovalRejection
 	var reason, by, post string
 	err := s.db.QueryRow(ctx, `SELECT reason, note, rejected_at, user_id::text, post_at_rejection::text
@@ -126,6 +131,50 @@ func (s *server) approvalView(ctx context.Context, r approvalRow, projection str
 		v.Rejection = &rj // why, never by whom
 	}
 	return v, nil
+}
+
+// requestCharges: a withdrawal request's two charges, both projections. The
+// charge it was QUOTED when raised (0017's kept quote, never recomputed) and
+// the charge its live hold APPLIED (null until a payout is authorised; a
+// released hold applies nothing). When both exist and differ, a sentence names
+// both and the date the society's charges changed. The totals, their
+// comparison and that date are the database's; Go only words them (balance
+// handlers piece 3, 2026-10-28).
+func (s *server) requestCharges(ctx context.Context, id string, v *ApprovalView) error {
+	var hf, hv, hl, hm, ht, qf, qv, ql, qm, qt *int64
+	var changed bool
+	var since *time.Time
+	err := s.db.QueryRow(ctx, `SELECT h.f, h.v, h.l, h.m, h.t,
+		       r.quoted_partner_fee_kobo, r.quoted_vat_kobo, r.quoted_statutory_levy_kobo, r.quoted_argon_margin_kobo,
+		       CASE WHEN r.quoted_on IS NULL THEN NULL ELSE r.quoted_partner_fee_kobo + r.quoted_vat_kobo + r.quoted_statutory_levy_kobo + r.quoted_argon_margin_kobo END,
+		       coalesce(r.quoted_on IS NOT NULL AND h.t IS NOT NULL
+		                AND h.t <> r.quoted_partner_fee_kobo + r.quoted_vat_kobo + r.quoted_statutory_levy_kobo + r.quoted_argon_margin_kobo, false),
+		       (SELECT max(cs.effective_from) FROM charge_schedules cs
+		         WHERE cs.society_id = r.society_id AND cs.kind = 'withdrawal_out' AND cs.effective_from <= h.held_at::date)
+		  FROM approval_requests r
+		  LEFT JOIN LATERAL (SELECT hh.partner_fee_kobo AS f, hh.vat_kobo AS v, hh.statutory_levy_kobo AS l, hh.argon_margin_kobo AS m,
+		                            hh.partner_fee_kobo + hh.vat_kobo + hh.statutory_levy_kobo + hh.argon_margin_kobo AS t, hh.held_at
+		                       FROM withdrawal_holds hh
+		                      WHERE hh.request_id = r.id AND NOT EXISTS (SELECT 1 FROM withdrawal_hold_releases rl WHERE rl.hold_id = hh.id)
+		                      ORDER BY hh.held_at DESC LIMIT 1) h ON true
+		 WHERE r.id = $1`, id).Scan(&hf, &hv, &hl, &hm, &ht, &qf, &qv, &ql, &qm, &qt, &changed, &since)
+	if err != nil {
+		return err
+	}
+	if ht != nil {
+		c := chargesOf(*hf, *hv, *hl, *hm, *ht)
+		v.AuthorisedCharges = &c
+	}
+	if qt != nil {
+		c := chargesOf(*qf, *qv, *ql, *qm, *qt)
+		v.QuotedCharges = &c
+	}
+	if changed && since != nil {
+		sentence := "The charge changed between your request and its approval: you were quoted " + naira(*qt) +
+			" and were charged " + naira(*ht) + ", because the society's charges changed on " + since.Format("2 January 2006") + "."
+		v.ChargeChanged = &sentence
+	}
+	return nil
 }
 
 func refusedBy(err error) string {
