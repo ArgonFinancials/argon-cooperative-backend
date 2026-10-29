@@ -314,8 +314,11 @@ func TestApiSession09_ABrowserSignInSetsTheSessionCookieNeverABodyToken(t *testi
 	if !c.Secure {
 		t.Fatalf("INSECURE — the session cookie is not Secure")
 	}
-	if c.SameSite != http.SameSiteStrictMode {
-		t.Fatalf("WRONG SAMESITE — the session cookie's SameSite is %s; want Strict", sameSiteName(c.SameSite))
+	// Lax, ruled 2026-10-29 on the evidence available (Chromium and Firefox
+	// passed Strict; the WebKit run was never completed): never a posture that
+	// differs by browser. The CSRF token does the work; SameSite reinforces it.
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("WRONG SAMESITE — the session cookie's SameSite is %s; want Lax", sameSiteName(c.SameSite))
 	}
 	if c.Path != "/" {
 		t.Fatalf("WRONG PATH — the session cookie's Path is %q; want /", c.Path)

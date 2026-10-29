@@ -42,7 +42,7 @@
 //	signout_without_csrf        sign-out needs no token
 //	token_in_browser_body       a browser's sign-in body still carries the session token
 //	cookie_for_non_browser      a non-browser's sign-in gets a cookie as well
-//	cookie_lax                  the session cookie is SameSite=Lax
+//	cookie_strict               the session cookie is SameSite=Strict: proven in two engines of three, and not ruled
 //	cookie_not_httponly         the session cookie is readable by script
 //	cookie_with_domain          the session cookie names a Domain
 //	max_age_fixed_30_days       the session cookie lives 30 days whoever holds it
@@ -208,10 +208,10 @@ func (f *fakeAPI) sessionCookieHeader(value string, maxAge int) string {
 		c += "; HttpOnly"
 	}
 	c += "; Secure"
-	if f.brk == "cookie_lax" {
-		c += "; SameSite=Lax"
-	} else {
+	if f.brk == "cookie_strict" {
 		c += "; SameSite=Strict"
+	} else {
+		c += "; SameSite=Lax"
 	}
 	if f.brk == "cookie_with_domain" {
 		c += "; Domain=argon.test"

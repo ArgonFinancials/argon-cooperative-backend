@@ -1294,7 +1294,7 @@ components:
       name: __Host-argon_session
       description: |
         A BROWSER's session (LEDGER_CONTRACT.md §12): HttpOnly, Secure,
-        SameSite=Strict, Path=/, no Domain; set by sign-in and code-verify for
+        SameSite=Lax, Path=/, no Domain; set by sign-in and code-verify for
         a caller that sent an Origin. Every state-changing request must carry
         X-CSRF-Token, the session's own (403 csrf_failed otherwise, before
         any handler runs; the session untouched, nothing counted against a

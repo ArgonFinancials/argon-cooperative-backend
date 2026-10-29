@@ -52,9 +52,11 @@ func (s *server) csrfFor(tok string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// The session cookie is Lax (ruled 2026-10-29, the WebKit run never
+// completed): one posture for every browser, the CSRF token doing the work.
 func setSessionCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", MaxAge: maxAge,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
 func clearSessionCookie(w http.ResponseWriter) { setSessionCookie(w, "", -1) } // Max-Age=0
