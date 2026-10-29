@@ -137,6 +137,14 @@ sudo grep -qE '^ARGON_CSRF_KEY=[0-9a-f]{64,}$' "$F" || { sudo sed -i '/^ARGON_CS
 sudo grep -c '^ARGON_CSRF_KEY=' "$F"   # must print 1
 ```
 
+`ARGON_SMS` (2026-10-29, the Termii sender) is the second. It is a decision, not a secret, so the line sets `refusing` (new devices go to an officer, as before) only when no valid value is there; `termii` waits on `deploy/AUTH_SMS.md`'s go-live list and is set by hand with its three `TERMII_*` lines.
+
+```bash
+F=/etc/argon/deploy.env
+sudo grep -qE '^ARGON_SMS=(termii|refusing)$' "$F" || { sudo sed -i '/^ARGON_SMS=/d' "$F"; echo "ARGON_SMS=refusing" | sudo tee -a "$F" >/dev/null; }
+sudo grep '^ARGON_SMS=' "$F"   # must print one line
+```
+
 Why not a plain append: run twice, it leaves two keys; the later one wins, and every open page's CSRF token is refused until it reloads, which would look like the cookie work was broken rather than the install. Why not the first-install `sed s|^…=.*|…|` alone: on a file without the line it changes nothing and says nothing.
 
 ### Findings from the first runs (2026-10-02/03)

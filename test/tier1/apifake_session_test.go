@@ -31,6 +31,9 @@
 //	csrf_first_key_kept         the key a server first started with is kept: a rotation changes nothing
 //	csrf_key_generated          a server started with no key makes one up instead of refusing to start
 //	csrf_key_default            the configuration supplies a default key when ARGON_CSRF_KEY is unset
+//	sms_unset_refusing          an unset ARGON_SMS quietly means the refusing sender
+//	termii_key_optional         ARGON_SMS=termii starts without TERMII_API_KEY
+//	termii_plain_http           TERMII_URL may be plain http, the key in the clear
 //	csrf_after_handler          the token is checked after the request has had its effect
 //	csrf_failure_ends_session   a failed check ends the session (a cross-site page signs the member out)
 //	csrf_failure_counts_as_sign_in_failure  a failed check counts toward the lockout
@@ -140,6 +143,35 @@ func loadConfig() (config.Config, error) {
 		return c, errors.New("ARGON_CSRF_KEY must be at least 32 bytes as hex (openssl rand -hex 32)")
 	}
 	c.CSRFKey = b
+	// The SMS sender, with an auth service (2026-10-28).
+	if os.Getenv("AUTH_DATABASE_URL") == "" {
+		return c, nil
+	}
+	c.SMS = os.Getenv("ARGON_SMS")
+	if c.SMS == "" && brk == "sms_unset_refusing" {
+		c.SMS = "refusing" // forgetting the line quietly means no codes
+	}
+	switch c.SMS {
+	case "refusing":
+		return c, nil
+	case "termii":
+	default:
+		return c, errors.New("ARGON_SMS must be termii or refusing")
+	}
+	c.TermiiURL, c.TermiiAPIKey, c.TermiiSenderID = os.Getenv("TERMII_URL"), os.Getenv("TERMII_API_KEY"), os.Getenv("TERMII_SENDER_ID")
+	if c.TermiiAPIKey == "" && brk == "termii_key_optional" {
+		c.TermiiAPIKey = "none"
+	}
+	switch {
+	case !strings.HasPrefix(c.TermiiURL, "https://") && brk != "termii_plain_http":
+		return c, errors.New("TERMII_URL must be set, https")
+	case c.TermiiURL == "":
+		return c, errors.New("TERMII_URL must be set")
+	case c.TermiiAPIKey == "":
+		return c, errors.New("TERMII_API_KEY must be set")
+	case c.TermiiSenderID == "":
+		return c, errors.New("TERMII_SENDER_ID must be set")
+	}
 	return c, nil
 }
 

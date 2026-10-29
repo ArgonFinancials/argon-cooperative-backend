@@ -46,6 +46,10 @@ type Result struct {
 	// registered number to send a code to. That case cannot be solved on a
 	// screen; it goes to officers who know the member by sight.
 	SeeOfficer bool
+	// Delayed: the code was handed to the SMS provider and no readable answer
+	// came back (the Termii sender's "unknown"). It may arrive; the challenge
+	// is returned so the member can use it, with word that it may be late.
+	Delayed bool
 }
 
 var (
@@ -121,11 +125,38 @@ type Proof struct {
 	ExpiresAt time.Time
 }
 
-// SMS delivers a text to a phone number. The real one is a procurement item
-// (see deploy/AUTH_SMS.md); tests use a fake.
+// SMS hands a text to a provider for a phone number (deploy/AUTH_SMS.md).
+// It answers WHAT HAPPENED (Sent); its error is only for a sender that cannot
+// send at all (UnavailableSMS). Tests use fakes.
 type SMS interface {
-	Send(ctx context.Context, to, text string) error
+	Send(ctx context.Context, to, text string) (Sent, error)
 }
+
+// SendOutcome: what came of handing a text to the provider. Four facts, never
+// blurred (the Termii sender, piece 2, 2026-10-28):
+type SendOutcome string
+
+const (
+	SendAccepted   SendOutcome = "accepted"    // the provider said yes and gave a message id; NOT "delivered"
+	SendRefused    SendOutcome = "refused"     // the provider said no: the code certainly did not go
+	SendNotReached SendOutcome = "not_reached" // the connection was never made: the code certainly did not go
+	SendUnknown    SendOutcome = "unknown"     // it may have reached the provider; no readable answer came back
+)
+
+// Sent: one send's outcome. A sender with no Provider (a test fake) is
+// recorded nowhere; a real provider's every send is (sms_sends, 0019).
+type Sent struct {
+	Provider     string
+	Outcome      SendOutcome
+	MessageID    string // the provider's id, when it accepted
+	ProviderCode string // the provider's refusal CODE, never its wording
+}
+
+// ErrCodeNotSent: the provider refused the code or could not be reached. The
+// member is told to try again in a minute (the database's resend rule), with
+// an officer as the fallback if it keeps failing; never routed to an officer
+// by itself, and nothing counts against the lockout: the PIN was right.
+var ErrCodeNotSent = errors.New("auth: the sign-in code could not be handed to the SMS provider")
 
 // ErrSMSUnavailable is what UnavailableSMS answers EVERY send with. The API
 // turns it into "see an officer" for a new device, saying why.
@@ -140,7 +171,7 @@ type UnavailableSMS struct {
 	Log *slog.Logger // nil: slog.Default()
 }
 
-func (u UnavailableSMS) Send(ctx context.Context, to, _ string) error {
+func (u UnavailableSMS) Send(ctx context.Context, to, _ string) (Sent, error) {
 	log := u.Log
 	if log == nil {
 		log = slog.Default()
@@ -148,7 +179,7 @@ func (u UnavailableSMS) Send(ctx context.Context, to, _ string) error {
 	// Never the text: it carries the code. Never the whole number either.
 	log.ErrorContext(ctx, "REFUSED to send a sign-in code: TEMPORARY, no SMS provider yet (deploy/AUTH_SMS.md); the person is routed to an officer",
 		"to_last4", last4(to))
-	return ErrSMSUnavailable
+	return Sent{}, ErrSMSUnavailable
 }
 
 func last4(phone string) string {

@@ -30,6 +30,12 @@ import (
 	"github.com/argon/backend/internal/auth"
 )
 
+// The member's words when a code is not sent, or may be late (2026-10-28).
+const (
+	codeNotSentMessage = "We couldn't send your code just now. Please try again in a minute. If it keeps failing, an officer of your society can confirm this phone with you in person."
+	codeDelayedMessage = "Your code may take a little longer to arrive. If it hasn't come in a minute, try again."
+)
+
 var signinServiceBreak = map[string]string{
 	"unknown_says_why":    "distinct_unknown",
 	"unknown_skips_hash":  "timing_fast_unknown",
@@ -38,6 +44,12 @@ var signinServiceBreak = map[string]string{
 	// The device cookie honoured whatever the device's state: the service
 	// trusts any device token it is handed.
 	"revoked_device_cookie_ok": "trust_client_token",
+	// What came of handing the code to Termii (2026-10-28), in the service.
+	"refused_as_sent":      "refused_as_sent",      // a code that certainly did not go, reported as on its way
+	"unknown_as_not_sent":  "unknown_as_not_sent",  // strands a code that may arrive
+	"unknown_unsaid":       "unknown_unsaid",       // a late code, the member not told
+	"send_failure_counted": "send_failure_counted", // our failure counted against the member's lockout
+	"send_unrecorded":      "send_unrecorded",      // a send nobody can ever look up
 }
 
 func (f *fakeAPI) authDeps() auth.Deps {
@@ -91,6 +103,16 @@ func (f *fakeAPI) PostSignIn(ctx context.Context, req api.PostSignInRequestObjec
 			msg = "TEMPORARY: sign-in codes cannot be sent yet (no SMS provider), so a new device is confirmed in person by an officer of your society."
 		}
 		return api.PostSignIn200JSONResponse{Outcome: api.SeeOfficer, Reason: &why, Message: &msg}, nil
+	case errors.Is(err, auth.ErrCodeNotSent):
+		// Termii refused or could not be reached: try again; an officer only if
+		// it keeps failing (2026-10-28). refusal_to_officer routes it as if the
+		// member's phone were the problem.
+		if f.brk == "refusal_to_officer" {
+			why := "sms_unavailable"
+			return api.PostSignIn200JSONResponse{Outcome: api.SeeOfficer, Reason: &why}, nil
+		}
+		msg := codeNotSentMessage
+		return api.PostSignIn200JSONResponse{Outcome: api.CodeNotSent, Message: &msg}, nil
 	case errors.Is(err, auth.ErrRefused):
 		return api.PostSignIn401JSONResponse{Code: "refused", Message: "those details do not match an account"}, nil
 	case errors.Is(err, auth.ErrTryLater):
@@ -104,7 +126,12 @@ func (f *fakeAPI) PostSignIn(ctx context.Context, req api.PostSignInRequestObjec
 		}
 		return out, nil
 	case r.Challenge != "":
-		return api.PostSignIn200JSONResponse{Outcome: api.CodeSent, Challenge: &r.Challenge}, nil
+		out := api.PostSignIn200JSONResponse{Outcome: api.CodeSent, Challenge: &r.Challenge}
+		if r.Delayed {
+			msg := codeDelayedMessage
+			out.Message = &msg
+		}
+		return out, nil
 	}
 	return api.PostSignIn200JSONResponse{Outcome: api.SeeOfficer}, nil
 }

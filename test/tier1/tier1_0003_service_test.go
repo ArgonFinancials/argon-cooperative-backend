@@ -39,11 +39,11 @@ type fakeSMS struct {
 	sent []sentSMS
 }
 
-func (f *fakeSMS) Send(_ context.Context, to, text string) error {
+func (f *fakeSMS) Send(_ context.Context, to, text string) (auth.Sent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, sentSMS{to, text})
-	return nil
+	return auth.Sent{}, nil // no provider: accepted, recorded nowhere
 }
 
 var codeRE = regexp.MustCompile(`\b\d{6}\b`)

@@ -20,6 +20,10 @@ type Config struct {
 	AllowedOrigins string
 	// CSRFKey: ARGON_CSRF_KEY, hex, at least 32 bytes; required (2026-10-24).
 	CSRFKey []byte
+	// The sign-in code sender (sms.go): ARGON_SMS, termii or refusing, required
+	// with an auth service; termii's three settings have no defaults.
+	SMS                                     string
+	TermiiURL, TermiiAPIKey, TermiiSenderID string
 }
 
 func Load() (Config, error) {
@@ -58,7 +62,7 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("ARGON_CSRF_KEY must be set, at least 32 bytes as hex (openssl rand -hex 32)")
 	}
 	c.CSRFKey = ck
-	return c, nil
+	return c, c.loadSMS()
 }
 
 func envOr(key, fallback string) string {

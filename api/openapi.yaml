@@ -148,7 +148,16 @@ components:
       properties:
         outcome:
           type: string
-          enum: [signed_in, code_sent, see_officer]
+          enum: [signed_in, code_sent, code_not_sent, see_officer]
+          description: |
+            signed_in: a session. code_sent: a code was handed to the SMS
+            provider (challenge given; when message is set, the provider gave no
+            readable answer and the code may be late). code_not_sent: the
+            provider refused it or could not be reached; NO challenge, try again
+            in a minute (the database's resend rule); the officer is named as
+            the fallback, never the first answer (2026-10-28). see_officer: no
+            single agreed number (a shared handset) or none: an officer confirms
+            the device in person.
         sessionToken:
           type: string
           description: |
@@ -178,7 +187,15 @@ components:
             than one person; "no_agreed_number" — no single registered number
             to send a code to; "sms_unavailable" — TEMPORARY: codes cannot be
             sent yet (no SMS provider), so a new device goes to an officer.
-        message: { type: string }
+        message:
+          type: string
+          description: |
+            To show as written. code_not_sent: "We couldn't send your code just
+            now. Please try again in a minute. If it keeps failing, an officer of
+            your society can confirm this phone with you in person." code_sent
+            with a late code: "Your code may take a little longer to arrive. If
+            it hasn't come in a minute, try again." see_officer: why, for the
+            member.
 
     ActKind:
       type: string

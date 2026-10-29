@@ -175,15 +175,40 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 		user, f.codeDigest(code), phones[0]).Scan(&id); err != nil {
 		return auth.Result{}, err
 	}
+	var sent auth.Sent
 	if f.brk != "never_send" {
 		// A failed send is an error, never a code_sent that delivers nothing.
-		if err := f.d.SMS.Send(ctx, phones[0], "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it."); err != nil {
+		var err error
+		sent, err = f.d.SMS.Send(ctx, phones[0], "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it.")
+		if err != nil {
+			return auth.Result{}, err
+		}
+	}
+	// A real provider's every send is recorded (0019), as the service does.
+	if sent.Provider != "" && f.brk != "send_unrecorded" {
+		if _, err := f.d.DB.Exec(ctx, `INSERT INTO sms_sends (code_id, provider, outcome, provider_message_id, provider_code)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''))`, id, sent.Provider, string(sent.Outcome), sent.MessageID, sent.ProviderCode); err != nil {
 			return auth.Result{}, err
 		}
 	}
 	challenge := id
 	if f.brk == "code_in_challenge" {
 		challenge = id + ":" + code
+	}
+	switch sent.Outcome {
+	case auth.SendRefused, auth.SendNotReached:
+		if f.brk == "send_failure_counted" { // our failure counted against the member's lockout
+			f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, false)`, user, digest())
+		}
+		if f.brk == "refused_as_sent" { // a code that certainly did not go, reported as on its way
+			return auth.Result{Challenge: challenge}, nil
+		}
+		return auth.Result{}, auth.ErrCodeNotSent
+	case auth.SendUnknown:
+		if f.brk == "unknown_as_not_sent" { // strands a code that may arrive
+			return auth.Result{}, auth.ErrCodeNotSent
+		}
+		return auth.Result{Challenge: challenge, Delayed: f.brk != "unknown_unsaid"}, nil
 	}
 	return auth.Result{Challenge: challenge}, nil
 }

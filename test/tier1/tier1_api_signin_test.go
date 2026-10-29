@@ -377,9 +377,9 @@ type testRefusingSMS struct {
 	log *slog.Logger
 }
 
-func (s testRefusingSMS) Send(context.Context, string, string) error {
+func (s testRefusingSMS) Send(context.Context, string, string) (auth.Sent, error) {
 	if s.brk == "sms_adapter_silent" {
-		return nil
+		return auth.Sent{}, nil
 	}
 	var err error = auth.ErrSMSUnavailable
 	if s.brk == "sms_adapter_sounds_final" {
@@ -388,7 +388,7 @@ func (s testRefusingSMS) Send(context.Context, string, string) error {
 	if s.brk != "sms_adapter_quiet" {
 		s.log.Error("refused to send an SMS", "err", err)
 	}
-	return err
+	return auth.Sent{}, err
 }
 
 // finalSoundingRefusal IS ErrSMSUnavailable (callers still route it to an
@@ -440,7 +440,7 @@ func TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy(t *testing.T) 
 // Error-level line every time; and it says it is temporary.
 func TestApiSignIn11_RefusingSMSRefusesLoudlyAndSaysItIsTemporary(t *testing.T) {
 	var logs bytes.Buffer
-	err := refusingSMS(&logs).Send(bg(), "+2348000000000", "Your Argon code is 123456.")
+	_, err := refusingSMS(&logs).Send(bg(), "+2348000000000", "Your Argon code is 123456.")
 	switch {
 	case err == nil:
 		t.Fatalf("SILENT — the send reported success and delivered nothing: the worst outcome available")

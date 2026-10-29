@@ -17,6 +17,19 @@ on_server || die "30-install-api.sh is for the server (ARGON_HOST=1)"
 require_env ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_CODE_KEY ARGON_CSRF_KEY ARGON_DB API_PORT
 [[ $ARGON_CODE_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CODE_KEY must be at least 32 bytes of lowercase hex (openssl rand -hex 32)"
 [[ $ARGON_CSRF_KEY =~ ^[0-9a-f]{64,}$ ]] || die "ARGON_CSRF_KEY must be at least 32 bytes of lowercase hex: add it on the instance with the line in deploy/README.md, 'A new key on an existing instance' (it writes a key only when none is there)"
+# The sign-in code sender: said, never inherited (deploy/AUTH_SMS.md). termii
+# waits on that file's go-live list; until then, refusing.
+case ${ARGON_SMS:-} in
+  refusing) sms_env="ARGON_SMS=refusing" ;;
+  termii)
+    require_env TERMII_URL TERMII_API_KEY TERMII_SENDER_ID
+    [[ $TERMII_URL == https://* ]] || die "TERMII_URL must be https: the key travels in the request body"
+    sms_env="ARGON_SMS=termii
+TERMII_URL=${TERMII_URL}
+TERMII_API_KEY=${TERMII_API_KEY}
+TERMII_SENDER_ID=${TERMII_SENDER_ID}" ;;
+  *) die "ARGON_SMS must be termii or refusing: add it on the instance with the line in deploy/README.md, 'A new key on an existing instance'" ;;
+esac
 command -v go >/dev/null || die "go not found: run 15-install-tools.sh"
 
 export ARGON_RELEASE=$(cat "$REPO_DIR/RELEASE")
@@ -38,6 +51,7 @@ ARGON_CSRF_KEY=${ARGON_CSRF_KEY}
 PORT=8080
 ENV=production
 ARGON_ALLOWED_ORIGINS=${ARGON_ALLOWED_ORIGINS:-}
+${sms_env}
 EOF
 chmod 0600 /etc/argon/argon.env "$ARGON_ENV"
 ok "image argon-api:$ARGON_RELEASE and /opt/argon/bin/tier1.test ready; the API is NOT started"

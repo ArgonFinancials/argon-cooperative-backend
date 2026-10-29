@@ -136,6 +136,14 @@ GRANT UPDATE (revoked_at) ON auth_devices TO argon_auth;
 GRANT INSERT (id, user_id, device_id, token_digest) ON auth_sessions TO argon_auth;
 GRANT UPDATE (ended_at, ended_by_session) ON auth_sessions TO argon_auth;
 GRANT INSERT (user_id, credential_digest, device_id, succeeded) ON sign_in_attempts TO argon_auth;
+-- 0019: the record of each code handed to the SMS provider. The sign-in
+-- service writes and reads it; the app neither (probes P49, P50).
+DO $$
+BEGIN
+  IF to_regclass('public.sms_sends') IS NOT NULL THEN
+    GRANT SELECT, INSERT (code_id, provider, outcome, provider_message_id, provider_code) ON sms_sends TO argon_auth;
+  END IF;
+END $$;
 -- A proof names the act it is minted for once 0005 has added the column.
 DO $$
 BEGIN

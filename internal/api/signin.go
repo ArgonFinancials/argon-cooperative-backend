@@ -45,6 +45,8 @@ func (s *server) PostSignIn(ctx context.Context, req PostSignInRequestObject) (P
 		// Loudly logged by the adapter; said plainly to the person.
 		why, msg := "sms_unavailable", smsUnavailableMessage
 		return PostSignIn200JSONResponse{Outcome: SeeOfficer, Reason: &why, Message: &msg}, nil
+	case errors.Is(err, auth.ErrCodeNotSent):
+		return codeNotSent(), nil // try again; never routed to an officer by itself
 	case errors.Is(err, auth.ErrRefused):
 		return PostSignIn401JSONResponse{Code: "refused", Message: "those details do not match an account"}, nil
 	case errors.Is(err, auth.ErrTryLater):
@@ -61,7 +63,7 @@ func (s *server) PostSignIn(ctx context.Context, req PostSignInRequestObject) (P
 		}
 		return out, nil
 	case r.Challenge != "":
-		return PostSignIn200JSONResponse{Outcome: CodeSent, Challenge: &r.Challenge}, nil
+		return codeSent(r.Challenge, r.Delayed), nil
 	}
 	return PostSignIn200JSONResponse{Outcome: SeeOfficer}, nil
 }

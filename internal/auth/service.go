@@ -235,8 +235,23 @@ func (s *service) signInOne(ctx context.Context, c candidate, credDigest string,
 		}
 		return Result{}, err
 	}
-	if err := s.d.SMS.Send(ctx, *dest, "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it."); err != nil {
-		return Result{}, err
+	sent, err := s.d.SMS.Send(ctx, *dest, "Your Argon code is "+code+". It expires in 5 minutes. Nobody from Argon will ask you for it.")
+	if err != nil {
+		return Result{}, err // a sender that cannot send at all: the refusing one
+	}
+	// Every send by a real provider is recorded (0019): which code, the
+	// outcome, the provider's message id or refusal code; never the text.
+	if sent.Provider != "" {
+		if _, err := s.d.DB.Exec(ctx, `INSERT INTO sms_sends (code_id, provider, outcome, provider_message_id, provider_code)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''))`, challenge, sent.Provider, string(sent.Outcome), sent.MessageID, sent.ProviderCode); err != nil {
+			return Result{}, err
+		}
+	}
+	switch sent.Outcome {
+	case SendRefused, SendNotReached:
+		return Result{}, ErrCodeNotSent // certainly not on its way: try again
+	case SendUnknown:
+		return Result{Challenge: challenge, Delayed: true}, nil // may be on its way
 	}
 	return Result{Challenge: challenge}, nil
 }

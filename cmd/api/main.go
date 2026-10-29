@@ -63,12 +63,19 @@ func main() {
 			os.Exit(1)
 		}
 		defer authPool.Close()
+		// The code sender is chosen, never defaulted (ARGON_SMS). refusing: every
+		// send is refused loudly and a new device is routed to an officer.
+		// Known devices and the step-up need no SMS.
+		var sms auth.SMS = auth.UnavailableSMS{Log: log}
+		if cfg.SMS == "termii" {
+			if sms, err = auth.NewTermii(auth.TermiiConfig{URL: cfg.TermiiURL, APIKey: cfg.TermiiAPIKey, SenderID: cfg.TermiiSenderID, Log: log}); err != nil {
+				log.Error("sms sender", "err", err)
+				os.Exit(1)
+			}
+		}
 		svc, err := auth.New(auth.Deps{
-			DB: authPool,
-			// TEMPORARY until an SMS provider is procured (deploy/AUTH_SMS.md):
-			// every code send is refused loudly, and a new device is routed to
-			// an officer. Known devices and the step-up need no SMS.
-			SMS:     auth.UnavailableSMS{Log: log},
+			DB:      authPool,
+			SMS:     sms,
 			Notify:  auth.LogNotifier{Log: log},
 			CodeKey: cfg.AuthCodeKey,
 			Argon:   auth.Argon2{MemoryKiB: 19 * 1024, Time: 2, Threads: 1},
@@ -77,7 +84,11 @@ func main() {
 			log.Error("auth service", "err", err)
 			os.Exit(1)
 		}
-		log.Warn("sign-in runs with the REFUSING SMS adapter (TEMPORARY): new devices are routed to an officer until an SMS provider exists")
+		if cfg.SMS == "termii" {
+			log.Info("sign-in codes are sent through Termii", "sender_id", cfg.TermiiSenderID)
+		} else {
+			log.Warn("sign-in runs with the REFUSING SMS sender (ARGON_SMS=refusing): new devices are routed to an officer")
+		}
 		deps.Auth = svc
 	}
 	h, err := api.NewServer(deps)

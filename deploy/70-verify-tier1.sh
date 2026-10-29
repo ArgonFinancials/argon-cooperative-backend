@@ -117,6 +117,8 @@ has_raisers=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WH
 # may request. From the catalog (finding 34).
 has_quotes=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.approval_requests'::regclass
   AND attname = 'quoted_on' AND NOT attisdropped" </dev/null)
+# 0019: the record of each sign-in code sent. From the catalog.
+has_sms=$(pg_as argon_app "$db" -At -c "SELECT to_regclass('public.sms_sends') IS NOT NULL" </dev/null)
 # raised_sql REQUEST REFERENCE AMOUNT PROOF ACT: M2's own withdrawal request.
 # From 0016 on M2's own withdrawal_request act, in the same transaction; before
 # it a request names no raiser. (if/fi, never `[[ ]] &&`: finding 7.)
@@ -555,6 +557,14 @@ probe req P16 argon_app '42501.*permission denied for table credential_acts' "ap
   "SELECT new_pin_hash FROM credential_acts LIMIT 1;"
 probe req P17 argon_app '42501.*permission denied for table auth_codes' "app reads the sign-in code digests" \
   "SELECT code_digest FROM auth_codes LIMIT 1;"
+if [[ $has_sms == t ]]; then
+probe req P49 argon_app '42501.*permission denied for table sms_sends' "app records a sign-in code as sent" \
+  "INSERT INTO sms_sends (code_id, provider, outcome) VALUES (gen_random_uuid(), 'termii', 'not_reached');"
+probe req P50 argon_app '42501.*permission denied for table sms_sends' "app reads who was sent which code" \
+  "SELECT outcome, provider_message_id FROM sms_sends LIMIT 1;"
+else
+  info "schema before 0019: no record of codes sent to probe (P49, P50 not run)"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no
