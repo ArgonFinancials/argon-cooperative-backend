@@ -45,12 +45,12 @@ import (
 // Society S (chart: newChart's seven role accounts, newSociety's 1000 and 2000,
 // and a non-postable grouping account 2900). Member A and member B.
 //
-//   eOpening   opening_balance, NO as-at date (batch R)  3901 +48,000,000 / 2001 −48,000,000 (A)
-//   eContrib   contribution_in, value 2026-03-02         1001 +2,500,000 / 2001 −2,491,250 (A) / 2101 −5,000 / 2111 −3,750
+//   eOpening   opening_balance, NO as-at date (batch R)  3901 +48,000,000 / 2000 −48,000,000 (A)
+//   eContrib   contribution_in, value 2026-03-02         1000 +2,500,000 / 2000 −2,491,250 (A) / 2101 −5,000 / 2111 −3,750
 //   eReversal  reverses eContrib, value 2026-03-05       the mirror of eContrib (D-02: charges refunded)
-//   eLate      payroll_remittance, value 2026-09-01      1001 +200,000 / 2001 −200,000 (B)
+//   eLate      payroll_remittance, value 2026-09-01      1000 +200,000 / 2000 −200,000 (B)
 //   eBackdated contribution_in, value 2026-01-15, POSTED LAST, by another actor
-//                                                        1001 +1,000,000 / 2001 −996,500 (A) / 2101 −2,000 / 2111 −1,500
+//                                                        1000 +1,000,000 / 2000 −996,500 (A) / 2101 −2,000 / 2111 −1,500
 //
 // Every entry is posted today, in that order, so posting order and value-date
 // order differ: eBackdated is posted last but happened first.
@@ -128,7 +128,7 @@ func newBooks(t *testing.T) *books {
 }
 
 // The chart's codes, in code order: newSociety's 1000/2000, newChart's seven, and 2900.
-var booksCodes = []string{"1000", "1001", "1201", "2000", "2001", "2101", "2111", "2201", "2900", "3901"}
+var booksCodes = []string{"1000", "1201", "2000", "2101", "2111", "2201", "2900", "3901"}
 
 func (b *books) path(society, rest string) string { return "/societies/" + society + rest }
 func (b *books) read(t *testing.T, as, rest string) resp {
@@ -264,7 +264,7 @@ func (b *books) wantEntries(t *testing.T, got []string, want ...string) {
 // WHO MAY READ THE BOOKS
 // =============================================================================
 
-var booksEndpoints = []string{"/accounts", "/trial-balance?asOf=" + booksAsOf, "/accounts/2001/ledger", "/journal"}
+var booksEndpoints = []string{"/accounts", "/trial-balance?asOf=" + booksAsOf, "/accounts/2000/ledger", "/journal"}
 
 func TestApiBooks1_AuditorReadsTheBooks(t *testing.T) {
 	b := newBooks(t)
@@ -356,7 +356,7 @@ func wantRow(t *testing.T, tb bTB, code string, debits, credits, balance int64, 
 // Everything is POSTED today, after asOf; three entries HAPPENED before it.
 func TestApiBooks8_TrialBalanceIsAsAtTheValueDate(t *testing.T) {
 	b := newBooks(t)
-	wantRow(t, b.tb(t, booksAsOf), "1001", 3500000, -2500000, 1000000,
+	wantRow(t, b.tb(t, booksAsOf), "1000", 3500000, -2500000, 1000000,
 		"eContrib, eReversal and eBackdated happened before 30 June though all were posted after it")
 }
 
@@ -365,15 +365,15 @@ func TestApiBooks8_TrialBalanceIsAsAtTheValueDate(t *testing.T) {
 func TestApiBooks9_UndatedOpeningBalanceCountsAtEveryDate(t *testing.T) {
 	b := newBooks(t)
 	wantRow(t, b.tb(t, "2000-01-01"), "3901", 48000000, 0, 48000000, "the opening balance, as at 2000")
-	wantRow(t, b.tb(t, "2000-01-01"), "2001", 0, -48000000, -48000000, "the member's opening savings, as at 2000")
+	wantRow(t, b.tb(t, "2000-01-01"), "2000", 0, -48000000, -48000000, "the member's opening savings, as at 2000")
 }
 
 func TestApiBooks10_EntriesAfterAsOfAreLeftOut(t *testing.T) {
 	b := newBooks(t)
 	tb := b.tb(t, booksAsOf)
-	wantRow(t, tb, "1001", 3500000, -2500000, 1000000, "eLate (1 September) is after 30 June")
-	if late := b.tb(t, "2026-09-01"); kobo(t, tbRow(t, late, "1001").Balance) != 1200000 {
-		t.Fatalf("FIXTURE: eLate should count as at its own value date; bank balance %s", tbRow(t, late, "1001").Balance)
+	wantRow(t, tb, "1000", 3500000, -2500000, 1000000, "eLate (1 September) is after 30 June")
+	if late := b.tb(t, "2026-09-01"); kobo(t, tbRow(t, late, "1000").Balance) != 1200000 {
+		t.Fatalf("FIXTURE: eLate should count as at its own value date; bank balance %s", tbRow(t, late, "1000").Balance)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestApiBooks11_EveryAccountOfTheChartIsListed(t *testing.T) {
 func TestApiBooks12_DebitsAndCreditsAreTurnoverNotNetted(t *testing.T) {
 	b := newBooks(t)
 	tb := b.tb(t, booksAsOf)
-	wantRow(t, tb, "2001", 2491250, -51487750, -48996500, "opening, contribution, its reversal, the backdated contribution")
+	wantRow(t, tb, "2000", 2491250, -51487750, -48996500, "opening, contribution, its reversal, the backdated contribution")
 	wantRow(t, tb, "2101", 5000, -7000, -2000, "partner charge taken twice, refunded once")
 	wantRow(t, tb, "2111", 3750, -5250, -1500, "Argon margin taken twice, refunded once")
 }
@@ -447,7 +447,7 @@ func (b *books) wantGL(t *testing.T, g bGL, ids []string, balances []int64) {
 
 func TestApiBooks15_LedgerIsInValueDateOrder(t *testing.T) {
 	b := newBooks(t)
-	b.wantGL(t, b.gl(t, "2001", ""),
+	b.wantGL(t, b.gl(t, "2000", ""),
 		[]string{b.eOpening, b.eBackdated, b.eContrib, b.eReversal, b.eLate},
 		[]int64{-48000000, -48996500, -51487750, -48996500, -49196500})
 }
@@ -458,7 +458,7 @@ func TestApiBooks16_UndatedRowsComeFirst(t *testing.T) {
 	if len(g.Rows) == 0 || g.Rows[0].EntryId != b.eOpening || g.Rows[0].ValueDate != nil {
 		t.Fatalf("ACCEPTED — the migration account's first row should be the undated opening balance with valueDate null; got %+v", g.Rows)
 	}
-	g = b.gl(t, "2001", "")
+	g = b.gl(t, "2000", "")
 	if len(g.Rows) == 0 || g.Rows[0].EntryId != b.eOpening {
 		t.Fatalf("ACCEPTED — on the savings account the undated opening balance should come first, before everything dated; got %s", b.names([]string{g.Rows[0].EntryId}))
 	}
@@ -466,7 +466,7 @@ func TestApiBooks16_UndatedRowsComeFirst(t *testing.T) {
 
 func TestApiBooks17_OpeningBalanceCarriesWhatCameBeforeFrom(t *testing.T) {
 	b := newBooks(t)
-	g := b.gl(t, "2001", "?from=2026-02-01&to="+booksAsOf)
+	g := b.gl(t, "2000", "?from=2026-02-01&to="+booksAsOf)
 	if kobo(t, g.Opening) != -48996500 {
 		t.Fatalf("ACCEPTED — opening balance %s, want -48996500 (the undated opening balance and eBackdated, both before 1 February)", g.Opening)
 	}
@@ -481,7 +481,7 @@ func TestApiBooks18_AmountIsThisAccountsLinesOnly(t *testing.T) {
 	for _, c := range []struct {
 		code string
 		want int64
-	}{{"2001", -2491250}, {"1001", 2500000}, {"2101", -5000}} {
+	}{{"2000", -2491250}, {"1000", 2500000}, {"2101", -5000}} {
 		for _, r := range b.gl(t, c.code, "").Rows {
 			if r.EntryId == b.eContrib && kobo(t, r.Amount) != c.want {
 				t.Fatalf("ACCEPTED — eContrib on %s reads %s, want %d (this account's line, not the whole entry)", c.code, r.Amount, c.want)
@@ -576,7 +576,7 @@ func TestApiBooks28_LinesDebitsFirstThenByCode(t *testing.T) {
 	for _, l := range entryOf(t, b.journal(t, ""), b.eContrib).Lines {
 		got = append(got, l.AccountCode+" "+l.Amount)
 	}
-	want := []string{"1001 2500000", "2001 -2491250", "2101 -5000", "2111 -3750"}
+	want := []string{"1000 2500000", "2000 -2491250", "2101 -5000", "2111 -3750"}
 	if strings.Join(got, ", ") != strings.Join(want, ", ") {
 		t.Fatalf("ACCEPTED — eContrib's lines read %v, want debits first, then by code: %v", got, want)
 	}
@@ -596,7 +596,7 @@ var koboField = regexp.MustCompile(`"([A-Za-z]*Kobo)":\s*([^,}\]]+)`)
 
 func TestApiBooks30_MoneyIsAStringOnTheWire(t *testing.T) {
 	b := newBooks(t)
-	for _, ep := range []string{"/trial-balance?asOf=" + booksAsOf, "/accounts/2001/ledger", "/journal"} {
+	for _, ep := range []string{"/trial-balance?asOf=" + booksAsOf, "/accounts/2000/ledger", "/journal"} {
 		r := b.read(t, b.officer, ep)
 		ms := koboField.FindAllSubmatch(r.body, -1)
 		if len(ms) == 0 {

@@ -38,6 +38,7 @@
 //	money_hold_member_as_500      not the hold's member answers 500
 //	money_payout_charges_dropped  a held payout is built with no charges, not the hold's
 //	money_reference_optional      a blank transfer reference is passed on, and its refusal answers 500
+//	money_guesses_account         two accounts of a role: the first by code is posted to (the finding of 2026-10-30)
 //
 // Breaks — 0015 (nobody authorises or attests to what they benefit from; the
 // authoriser never records; a contribution is recorded once):
@@ -147,10 +148,20 @@ type mline struct {
 	kobo               int64
 }
 
+// accountByRole: THE one account of a role, or none: two is a chart the code
+// cannot read without guessing (the finding of 2026-10-30). money_guesses_account
+// takes the first by code, as the real path did.
 func (f *fakeAPI) accountByRole(ctx context.Context, society, role string) string {
-	var id string
-	f.db.QueryRow(ctx, `SELECT id::text FROM accounts WHERE society_id = $1 AND role = $2 ORDER BY code LIMIT 1`, society, role).Scan(&id)
-	return id
+	q := `SELECT CASE WHEN count(*) = 1 THEN min(id::text) END FROM accounts WHERE society_id = $1 AND role = $2`
+	if f.brk == "money_guesses_account" {
+		q = `SELECT id::text FROM accounts WHERE society_id = $1 AND role = $2 ORDER BY code LIMIT 1`
+	}
+	var id *string
+	f.db.QueryRow(ctx, q, society, role).Scan(&id)
+	if id == nil {
+		return ""
+	}
+	return *id
 }
 
 func (f *fakeAPI) chargeLines(ctx context.Context, society string, c chg) []mline {
@@ -186,6 +197,9 @@ func (f *fakeAPI) postMoney(ctx context.Context, caller, act, proof string, e mo
 			return err
 		}
 		for _, l := range e.lines {
+			if l.acct == "" {
+				return errors.New("this society's chart has no single account of a role this movement needs")
+			}
 			var member *string
 			if l.member != "" {
 				member = &l.member

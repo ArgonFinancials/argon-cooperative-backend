@@ -51,6 +51,7 @@ declare -gA SVC_TARGET_OF=(
   [money_duplicate_as_500]='TestApiMoney24_ATransferIsRecordedOnce'
   [money_hold_member_as_500]='TestApiMoney25_AHeldPayoutIsTheHoldsMembers'
   [money_reference_optional]='TestApiMoney28_APayoutNamesItsTransfer'
+  [money_guesses_account]='TestApiMoney36_TwoAccountsOfARoleRefuseRatherThanGuess'
   [money_retry_records_twice]='TestApiMoney29_ARetriedContributionIsRecordedOnce'
   [money_retry_needs_step_up]='TestApiMoney29_ARetriedContributionIsRecordedOnce'
   [money_key_optional]='TestApiMoney30_AContributionCarriesItsIdempotencyKey'

@@ -729,6 +729,29 @@ func TestApiMoney32_NobodyAuthorisesTheirOwnPayout(t *testing.T) {
 
 // WHICH LAYER REFUSES: the DATABASE (payout_not_recorded_by_beneficiary); the API maps it to 403. With the
 // mapping removed the refusal answers 500, and this test goes red.
+// THE FINDING OF 2026-10-30: a money path posted to the first account by code
+// when a society had two accounts of a role, while the batch refused the same
+// chart. The database now refuses such a chart (0020); this is the SECOND
+// defence: with the rule suspended, the money path refuses rather than guesses,
+// and writes nothing.
+func TestApiMoney36_TwoAccountsOfARoleRefuseRatherThanGuess(t *testing.T) {
+	suspendRoleOnce(t)
+	w := newMoneyAPI(t)
+	fixture(t, addAccount(w.c.s.id, "1999", "member_savings", "liability"), "a second member_savings account, coded first")
+	before := savingsOf(t, w.g1Mem)
+	var entries int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM ledger_entries WHERE society_id = $1`, w.c.s.id).Scan(&entries), "entries")
+	r := w.contribute(t, w.poster, w.g1Mem, "2500000", stepUp(t, w.poster, "contribution_record"))
+	if r.status == http.StatusCreated {
+		t.Fatalf("GUESSED — a contribution was recorded with two member_savings accounts in the chart: %s", r.body)
+	}
+	var after int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM ledger_entries WHERE society_id = $1`, w.c.s.id).Scan(&after), "entries")
+	if after != entries || savingsOf(t, w.g1Mem) != before {
+		t.Fatalf("WRITTEN — the refused contribution left %d new entries", after-entries)
+	}
+}
+
 func TestApiMoney33_NobodyRecordsTheirOwnPayout(t *testing.T) {
 	w := newMoneyAPI(t)
 	req := w.ownRequest(t)

@@ -172,8 +172,11 @@ func (s *server) postMoney(ctx context.Context, act, proof string, e moneyEntry)
 			if chargeRole == "" {
 				chargeRole = "principal"
 			}
+			// THE one account of the role: no ORDER BY, no LIMIT. Two accounts of
+			// a role would write two lines and be refused below, never guessed
+			// between (the finding of 2026-10-30; 0020 refuses such a chart).
 			tag, err := x.Exec(ctx, `INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id)
-				SELECT $1, a.id, $3, $4, $5 FROM accounts a WHERE a.society_id = $2 AND a.role = $6 ORDER BY a.code LIMIT 1`,
+				SELECT $1, a.id, $3, $4, $5 FROM accounts a WHERE a.society_id = $2 AND a.role = $6`,
 				id, e.society, l.kobo, chargeRole, member, l.role)
 			if err != nil {
 				return err
@@ -187,7 +190,8 @@ func (s *server) postMoney(ctx context.Context, act, proof string, e moneyEntry)
 	return id, err
 }
 
-// errNoAccount: the society's chart has no account of a role this movement needs.
+// errNoAccount: the society's chart has no single account of a role this
+// movement needs (none, or more than one).
 type errNoAccount struct{ role string }
 
 func (e errNoAccount) Error() string { return "this society's chart has no " + e.role + " account" }

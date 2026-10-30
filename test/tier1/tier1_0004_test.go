@@ -25,15 +25,18 @@ type chart struct {
 func newChart(t *testing.T) *chart {
 	t.Helper()
 	c := &chart{s: newSociety(t)}
+	// The society's own bank and savings accounts (newSociety's), never a
+	// second of each: until 2026-10-30 this added 1001 and 2001 beside 1000 and
+	// 2000, and every money test ran on a chart with two of each role (the
+	// finding of that day; 0020 now refuses such a chart).
+	c.savings, c.bank = c.s.savings, c.s.bank
 	for _, a := range []struct {
 		dst        *string
 		code, kind string
 		role       string
 	}{
-		{&c.savings, "2001", "liability", "member_savings"},
 		{&c.wallet, "2201", "liability", "member_wallet"},
 		{&c.loan, "1201", "asset", "member_loan"},
-		{&c.bank, "1001", "asset", "bank"},
 		{&c.partner, "2101", "liability", "charges_partner"},
 		{&c.margin, "2111", "liability", "charges_margin"},
 		{&c.migration, "3901", "equity", "migration_control"},
@@ -128,8 +131,10 @@ func TestRole_Control_ContributionWithEveryRoleRight(t *testing.T) {
 func TestRole_Control_UnusedAccountMayBeRelabelled(t *testing.T) {
 	c := newChart(t)
 	var fresh string
-	fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, 'Spare', 'liability', 'member_wallet') RETURNING id`,
+	// A role the chart does not have yet (0020: one account per role, so the
+	// spare is general, relabelled to a role still free).
+	fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, 'Spare', 'liability', 'general') RETURNING id`,
 		c.s.id, fmt.Sprintf("29%02d", seq.Add(1)%100)).Scan(&fresh), "unused account")
-	accepted(t, one(`UPDATE accounts SET role = 'member_savings' WHERE id = $1`, fresh), "correcting the role of an account no line has used")
+	accepted(t, one(`UPDATE accounts SET role = 'charges_vat' WHERE id = $1`, fresh), "correcting the role of an account no line has used")
 }
 

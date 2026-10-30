@@ -1,0 +1,3 @@
+BEGIN;
+DROP INDEX IF EXISTS account_role_once;
+COMMIT;

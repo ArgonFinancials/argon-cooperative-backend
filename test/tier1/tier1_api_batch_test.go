@@ -935,6 +935,7 @@ func TestApiBatch20_NoValidSessionGetsUnauthorized(t *testing.T) {
 // =============================================================================
 
 func TestApiBatch21_ChartThatCannotTakeTheBatchRefuses(t *testing.T) {
+	suspendRoleOnce(t) // two member_savings: refused by 0020 first; this is the batch's own check
 	for _, c := range []struct {
 		what string
 		opt  worldOpt

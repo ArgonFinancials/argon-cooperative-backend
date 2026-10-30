@@ -614,9 +614,15 @@ func TestApiStatement20_EveryChargeRoleIsShownAndCountedInTheGross(t *testing.T)
 	}
 	accountOf := map[string]string{}
 	for i, a := range candidates {
+		// The society's own account of the role where it has one (0020: one
+		// per role), else a new one.
 		var id string
-		fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, $3, 'liability', $3) RETURNING id`,
-			s.id, fmt.Sprintf("97%02d", i), a).Scan(&id), "candidate account "+a)
+		fixture(t, db.QueryRow(bg(), `SELECT coalesce((SELECT id::text FROM accounts WHERE society_id = $1 AND role = $2 AND role <> 'general' LIMIT 1), '')`,
+			s.id, a).Scan(&id), "the chart")
+		if id == "" {
+			fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role) VALUES ($1, $2, $3, 'liability', $3) RETURNING id`,
+				s.id, fmt.Sprintf("97%02d", i), a).Scan(&id), "candidate account "+a)
+		}
 		for _, r := range roles {
 			if accountOf[r] != "" {
 				continue
