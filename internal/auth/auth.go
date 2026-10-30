@@ -60,6 +60,10 @@ var (
 	// ErrTryLater follows too many attempts, for a registered and an
 	// unregistered credential alike.
 	ErrTryLater = errors.New("auth: too many attempts; try again later")
+	// ErrResendTooSoon: the right PIN, but another code inside the resend
+	// minute (0003's code_resend_interval). Never the lockout's answer, and
+	// nothing counted (2026-10-30).
+	ErrResendTooSoon = errors.New("auth: another code was asked for too soon")
 	// ErrNoSession: the step-up was asked for without a live session.
 	ErrNoSession = errors.New("auth: no live session")
 	// ErrUnknownAct: a proof was asked for an act that does not exist.

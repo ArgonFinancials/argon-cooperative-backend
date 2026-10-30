@@ -25,6 +25,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/argon/backend/internal/auth"
 )
 
@@ -173,6 +175,16 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	var id string
 	if err := f.d.DB.QueryRow(ctx, `INSERT INTO auth_codes (user_id, purpose, code_digest, sent_to) VALUES ($1, 'new_device', $2, $3) RETURNING id`,
 		user, f.codeDigest(code), phones[0]).Scan(&id); err != nil {
+		if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.ConstraintName == "code_resend_interval" {
+			// Too soon for another code: its own answer, nothing counted (2026-10-30).
+			if f.brk == "resend_counted" {
+				f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, false)`, user, digest())
+			}
+			if f.brk == "resend_as_lockout" {
+				return auth.Result{}, auth.ErrTryLater
+			}
+			return auth.Result{}, auth.ErrResendTooSoon
+		}
 		return auth.Result{}, err
 	}
 	var sent auth.Sent

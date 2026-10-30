@@ -1447,7 +1447,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '429':
-          description: try_later — locked, for a registered and an unregistered credential alike.
+          description: |
+            try_later: locked, for a registered and an unregistered credential
+            alike. code_resend_too_soon (2026-10-30): the PIN was right, but
+            another code was asked for inside the resend minute; nothing is
+            counted, and the message is for the member as written: "Please wait
+            a moment before asking for another code." Never the lockout's words.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

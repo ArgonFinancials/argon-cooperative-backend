@@ -26,8 +26,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,15 +46,20 @@ const (
 )
 
 // fakeTermii: a Termii send endpoint inside the test, answering one way.
+// Each fake has its own message id, as Termii's are unique: 0019 refuses one
+// id recorded twice (sms_message_id_once).
 type fakeTermii struct {
 	srv      *httptest.Server
 	mu       sync.Mutex
 	received []map[string]any
+	msgID    string
 }
+
+var fakeTermiiSeq atomic.Int64
 
 func newFakeTermii(t *testing.T, mode string) *fakeTermii {
 	t.Helper()
-	f := &fakeTermii{}
+	f := &fakeTermii{msgID: termiiMsgID + strconv.FormatInt(fakeTermiiSeq.Add(1), 10)}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		raw, _ := io.ReadAll(r.Body)
@@ -63,7 +70,7 @@ func newFakeTermii(t *testing.T, mode string) *fakeTermii {
 		w.Header().Set("Content-Type", "application/json")
 		switch mode {
 		case "ok":
-			w.Write([]byte(`{"code":"ok","message_id":"` + termiiMsgID + `","message":"Successfully Sent","balance":9,"user":"Argon"}`))
+			w.Write([]byte(`{"code":"ok","message_id":"` + f.msgID + `","message":"Successfully Sent","balance":9,"user":"Argon"}`))
 		case "refused_body":
 			w.Write([]byte(`{"code":"insufficient_balance","message":"Your balance is too low to send this message"}`))
 		case "refused_4xx":
@@ -71,7 +78,7 @@ func newFakeTermii(t *testing.T, mode string) *fakeTermii {
 			w.Write([]byte(`{"code":"invalid_sender","message":"ApplicationSenderId not found"}`))
 		case "slow":
 			time.Sleep(1500 * time.Millisecond)
-			w.Write([]byte(`{"code":"ok","message_id":"` + termiiMsgID + `"}`))
+			w.Write([]byte(`{"code":"ok","message_id":"` + f.msgID + `"}`))
 		case "garbage":
 			w.Write([]byte(`<html>502 Bad Gateway</html>`))
 		}
@@ -125,8 +132,8 @@ func TestSmsTermii01_AnAcceptedSendCarriesTermiisMessageId(t *testing.T) {
 	f := newFakeTermii(t, "ok")
 	var logs bytes.Buffer
 	got := sendCode(t, termiiSenderFor(t, f.srv.URL, &logs), memberPhone)
-	if got.Provider != "termii" || got.Outcome != auth.SendAccepted || got.MessageID != termiiMsgID {
-		t.Fatalf("WRONG — %+v; want termii, accepted, message id %s", got, termiiMsgID)
+	if got.Provider != "termii" || got.Outcome != auth.SendAccepted || got.MessageID != f.msgID {
+		t.Fatalf("WRONG — %+v; want termii, accepted, message id %s", got, f.msgID)
 	}
 	if f.count() != 1 {
 		t.Fatalf("RETRIED — Termii received %d requests for one code; one call per code", f.count())

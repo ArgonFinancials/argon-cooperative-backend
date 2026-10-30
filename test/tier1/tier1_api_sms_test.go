@@ -113,8 +113,8 @@ func TestApiSms01_AnAcceptedCodeIsSentRecordedAndWorks(t *testing.T) {
 		t.Fatalf("WRONG — accepted by Termii: %d %+v; want code_sent with a challenge and no message", st, out)
 	}
 	rec, ok := lastSend(t, p.user)
-	if !ok || rec.outcome != "accepted" || rec.messageID == nil || *rec.messageID != termiiMsgID {
-		t.Fatalf("UNRECORDED — the send: %+v (found %v); want accepted with Termii's message id %s", rec, ok, termiiMsgID)
+	if !ok || rec.outcome != "accepted" || rec.messageID == nil || *rec.messageID != f.msgID {
+		t.Fatalf("UNRECORDED — the send: %+v (found %v); want accepted with Termii's message id %s", rec, ok, f.msgID)
 	}
 	if !verifies(t, srv, *out.Challenge, f.codeSent(t)) {
 		t.Fatalf("UNUSABLE — the code Termii was handed does not sign the member in")
@@ -232,6 +232,50 @@ func TestApiSms06_TheConfigurationNamesTheSender(t *testing.T) {
 	set("refusing", "", map[string]string{"TERMII_URL": "", "TERMII_API_KEY": "", "TERMII_SENDER_ID": ""})
 	if cfg, err := loadConfig(); err != nil || cfg.SMS != "refusing" {
 		t.Fatalf("REFUSED — ARGON_SMS=refusing: %v (sms %q)", err, cfg.SMS)
+	}
+}
+
+// Too soon for another code is its own answer, never the lockout's (ruled
+// 2026-10-30): a member whose PIN was right, asking again inside the resend
+// minute, is not told they are paused or out of attempts, and nothing is
+// counted. A real lockout keeps its own answer.
+func TestApiSms07_TooSoonForAnotherCodeIsNotALockout(t *testing.T) {
+	f := newFakeTermii(t, "ok")
+	srv := smsServer(t, f.srv.URL)
+	p := smsMember(t)
+	if out, st := newDeviceSignIn(t, srv, p); out.Outcome != "code_sent" {
+		msg := ""
+		if out.Message != nil {
+			msg = *out.Message
+		}
+		t.Fatalf("FIXTURE: the first sign-in: %d %s %q", st, out.Outcome, msg)
+	}
+	before := failedAttemptsOf(t, p.user)
+	var pr struct{ Code, Message string }
+	r := postJSON(t, srv, "/auth/sign-in", "", map[string]string{"credential": p.number, "pin": signPIN})
+	json.Unmarshal(r.body, &pr)
+	if r.status != http.StatusTooManyRequests || pr.Code != "code_resend_too_soon" {
+		t.Fatalf("WRONG — a second code inside the minute: %d %+v; want 429 code_resend_too_soon", r.status, pr)
+	}
+	if pr.Message != resendTooSoonMessage {
+		t.Fatalf("WRONG WORDS — %q; want %q (nothing about attempts, nothing about pausing)", pr.Message, resendTooSoonMessage)
+	}
+	if after := failedAttemptsOf(t, p.user); after != before {
+		t.Fatalf("COUNTED — asking again too soon added %d failed attempts; the PIN was right", after-before)
+	}
+
+	q := smsMember(t)
+	wrong := "0000"
+	if signPIN == wrong {
+		wrong = "1111"
+	}
+	for i := 0; i < 5; i++ {
+		postJSON(t, srv, "/auth/sign-in", "", map[string]string{"credential": q.number, "pin": wrong})
+	}
+	r = postJSON(t, srv, "/auth/sign-in", "", map[string]string{"credential": q.number, "pin": signPIN})
+	json.Unmarshal(r.body, &pr)
+	if r.status != http.StatusTooManyRequests || pr.Code != "try_later" {
+		t.Fatalf("WRONG — a locked account: %d %+v; want 429 try_later, the lockout's own answer", r.status, pr)
 	}
 }
 

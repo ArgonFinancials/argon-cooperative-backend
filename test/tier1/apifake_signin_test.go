@@ -16,6 +16,8 @@
 //	sms_failure_silent   a refused code send is reported as code_sent: the worst outcome
 //	sms_message_for_developers  the member is shown a developer's note about the SMS provider (until 2026-10-22, the real wording)
 //	verify_any_code      any code completes a new-device sign-in
+//	resend_says_attempts too soon for another code is worded as too many attempts
+//	lockout_as_resend    a locked account is told only to wait a moment
 //	no_token_reaches     a request with no token reaches the handlers as nobody
 //	router_errors_plain  the generated router's own errors answer text/plain, not the JSON Problem
 package tier1
@@ -34,6 +36,8 @@ import (
 const (
 	codeNotSentMessage = "We couldn't send your code just now. Please try again in a minute. If it keeps failing, an officer of your society can confirm this phone with you in person."
 	codeDelayedMessage = "Your code may take a little longer to arrive. If it hasn't come in a minute, try again."
+	// Inside the resend minute (2026-10-30).
+	resendTooSoonMessage = "Please wait a moment before asking for another code."
 )
 
 var signinServiceBreak = map[string]string{
@@ -50,6 +54,9 @@ var signinServiceBreak = map[string]string{
 	"unknown_unsaid":       "unknown_unsaid",       // a late code, the member not told
 	"send_failure_counted": "send_failure_counted", // our failure counted against the member's lockout
 	"send_unrecorded":      "send_unrecorded",      // a send nobody can ever look up
+	// The resend minute (2026-10-30), in the service.
+	"resend_as_lockout": "resend_as_lockout", // too soon for a code answered as a lockout
+	"resend_counted":    "resend_counted",    // asking again too soon counted as a failed attempt
 }
 
 func (f *fakeAPI) authDeps() auth.Deps {
@@ -113,9 +120,18 @@ func (f *fakeAPI) PostSignIn(ctx context.Context, req api.PostSignInRequestObjec
 		}
 		msg := codeNotSentMessage
 		return api.PostSignIn200JSONResponse{Outcome: api.CodeNotSent, Message: &msg}, nil
+	case errors.Is(err, auth.ErrResendTooSoon):
+		msg := resendTooSoonMessage
+		if f.brk == "resend_says_attempts" {
+			msg = "too many attempts; try again later"
+		}
+		return api.PostSignIn429JSONResponse{Code: "code_resend_too_soon", Message: msg}, nil
 	case errors.Is(err, auth.ErrRefused):
 		return api.PostSignIn401JSONResponse{Code: "refused", Message: "those details do not match an account"}, nil
 	case errors.Is(err, auth.ErrTryLater):
+		if f.brk == "lockout_as_resend" { // a locked account told only to wait a moment
+			return api.PostSignIn429JSONResponse{Code: "code_resend_too_soon", Message: resendTooSoonMessage}, nil
+		}
 		return api.PostSignIn429JSONResponse{Code: "try_later", Message: "too many attempts; try again later"}, nil
 	case err != nil:
 		return nil, err

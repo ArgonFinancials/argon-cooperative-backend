@@ -231,7 +231,7 @@ func (s *service) signInOne(ctx context.Context, c candidate, credDigest string,
 	if err := s.d.DB.QueryRow(ctx, `INSERT INTO auth_codes (user_id, purpose, code_digest, sent_to)
 		VALUES ($1, 'new_device', $2, $3) RETURNING id::text`, c.user, s.codeDigest(code), *dest).Scan(&challenge); err != nil {
 		if isConstraint(err, "code_resend_interval") {
-			return Result{}, ErrTryLater
+			return Result{}, ErrResendTooSoon // the PIN was right: nothing counted
 		}
 		return Result{}, err
 	}

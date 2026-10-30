@@ -47,6 +47,8 @@ func (s *server) PostSignIn(ctx context.Context, req PostSignInRequestObject) (P
 		return PostSignIn200JSONResponse{Outcome: SeeOfficer, Reason: &why, Message: &msg}, nil
 	case errors.Is(err, auth.ErrCodeNotSent):
 		return codeNotSent(), nil // try again; never routed to an officer by itself
+	case errors.Is(err, auth.ErrResendTooSoon):
+		return resendTooSoon(), nil // never the lockout's answer
 	case errors.Is(err, auth.ErrRefused):
 		return PostSignIn401JSONResponse{Code: "refused", Message: "those details do not match an account"}, nil
 	case errors.Is(err, auth.ErrTryLater):
