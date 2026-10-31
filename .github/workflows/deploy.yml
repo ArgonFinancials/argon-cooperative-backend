@@ -151,6 +151,29 @@ jobs:
       - name: Every suite is in the matrix and in mutate.sh, and nothing else is
         run: bash scripts/check-suite-list.sh
 
+  # Going live (2026-10-30): nginx in front of the API on its public name, the
+  # origin rule and the loopback guard, run against real nginx with the
+  # rendered templates; then every rule sabotaged one copy at a time, each of
+  # which must turn its own test red.
+  going-live-ops:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: nginx (fail fast, saying it is CI setup)
+        timeout-minutes: 6
+        run: |
+          if ! command -v /usr/sbin/nginx >/dev/null; then
+            sudo timeout 240 apt-get -y -q -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update &&
+            sudo timeout 240 apt-get -y -q -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install nginx-core ||
+              { echo "::error title=CI setup, not a test::nginx did not install: the package mirror. Nothing was tested."; exit 1; }
+          fi
+          /usr/sbin/nginx -v
+      - name: The tests
+        run: NGINX_BIN=/usr/sbin/nginx bash test/ops/going_live_test.sh
+      - name: Every rule sabotaged, each caught
+        run: NGINX_BIN=/usr/sbin/nginx bash test/ops/sabotage_going_live.sh
+
   # The gate: who, and which commit. Its own job so a refusal comes in seconds
   # and the deploy job never starts. Inputs reach the script as environment
   # variables, never as text pasted into it.
@@ -174,7 +197,7 @@ jobs:
           echo "deploying ${GITHUB_SHA:0:12}, confirmed by $ACTOR"
 
   deploy:
-    needs: [gate, tier1, suite-list, ci-setup-selftest]
+    needs: [gate, tier1, suite-list, ci-setup-selftest, going-live-ops]
     # Never on a push: only a person running the workflow by hand, on main.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

@@ -30,6 +30,12 @@ TERMII_API_KEY=${TERMII_API_KEY}
 TERMII_SENDER_ID=${TERMII_SENDER_ID}" ;;
   *) die "ARGON_SMS must be termii or refusing: add it on the instance with the line in deploy/README.md, 'A new key on an existing instance'" ;;
 esac
+# Once the API has a public name, the app's one https origin under the same
+# domain, and nothing else (going live, 2026-10-30; nginx/check-origin.sh).
+if [[ -n ${ARGON_API_DOMAIN:-} ]]; then
+  bash "$DEPLOY_DIR/nginx/check-origin.sh" "${ARGON_ALLOWED_ORIGINS:-}" "$ARGON_API_DOMAIN" ||
+    die "fix ARGON_ALLOWED_ORIGINS in $ARGON_ENV"
+fi
 command -v go >/dev/null || die "go not found: run 15-install-tools.sh"
 
 export ARGON_RELEASE=$(cat "$REPO_DIR/RELEASE")

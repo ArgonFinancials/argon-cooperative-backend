@@ -1,0 +1,40 @@
+# PORT 80, PUBLIC (going live, 2026-10-30). Rendered by nginx/render-public.sh
+# (86-install-tls.sh) into /etc/nginx/sites-available/argon-acme.
+#
+# Port 80 is open for ONE reason: Let's Encrypt's certificate check comes in
+# over plain HTTP. It serves that check's file, redirects a GET to HTTPS, and
+# refuses everything else. It never passes a request to the API: a sign-in
+# sent here was already in the clear, and it goes no further. REFUSED, NEVER
+# REDIRECTED: a redirect would look helpful and be wrong, because the PIN has
+# already crossed the network unencrypted before any redirect arrives, and a
+# client that follows it learns that plain HTTP "works".
+# Tests: test/ops/going_live_test.sh N01-N04.
+
+# Any name that is not the API's: no answer at all.
+server {
+    listen @HTTP_LISTEN@ default_server;
+    server_name _;
+    server_tokens off;
+    return 444;
+}
+
+server {
+    listen @HTTP_LISTEN@;
+    server_name @API_DOMAIN@;
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root @ACME_ROOT@;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        default_type application/json;
+        if ($request_method !~ ^(GET|HEAD)$) {
+            return 403 '{"code":"tls_required","message":"This API is served over HTTPS only."}';
+        }
+        # The literal name, never $host: the redirect goes where we say.
+        return 301 https://@API_DOMAIN@$request_uri;
+    }
+}

@@ -1,0 +1,108 @@
+# THE API ON ITS PUBLIC NAME, HTTPS (going live, 2026-10-30). Rendered by
+# nginx/render-public.sh (86-install-tls.sh) into
+# /etc/nginx/sites-available/argon-api-tls. Tests: test/ops/going_live_test.sh
+# N05-N14.
+#
+# Nginx adds three things the API does not do itself:
+#   - TLS and HSTS.
+#   - A RATE LIMIT ON SIGN-IN AND CODE CHECKS, per address. The API's lockout
+#     is per ACCOUNT: it stops guessing one member's PIN, not trying one PIN
+#     against many members. This is the only control against that from one
+#     address. 30 a minute with a burst of 30: a meeting signing in together
+#     on one network passes; a script does not. Preflights are not counted.
+#     IT IS LOOSE ON PURPOSE. DO NOT TIGHTEN IT ON INSTINCT. Many members
+#     share one public address: a mobile network puts a whole area behind a
+#     few addresses (carrier NAT), and a society meeting shares one Wi-Fi. A
+#     tight limit would lock out everyone behind that address because one
+#     person mistyped a PIN. The per-account lockout already stops guessing
+#     one member's PIN; this limit is only for spraying many accounts from one
+#     address. Tightening it is a decision, made with that cost stated, and
+#     N08 in test/ops/going_live_test.sh says what it allows.
+#   - Its own refusals (429, and 503 when the API is down) in the API's error
+#     format, WITH the app's CORS headers: without them the app cannot read
+#     the answer and sees only "network error". The origin is matched exactly,
+#     as the API does (internal/api/cors.go); any other origin gets none.
+
+map $request_method $argon_auth_limit_key {
+    OPTIONS "";
+    default $binary_remote_addr;
+}
+limit_req_zone $argon_auth_limit_key zone=argon_auth:10m rate=30r/m;
+
+map $http_origin $argon_cors_origin {
+    "@APP_ORIGIN@" $http_origin;
+    default "";
+}
+map $http_origin $argon_cors_credentials {
+    "@APP_ORIGIN@" "true";
+    default "";
+}
+
+# Any name that is not the API's: the handshake is refused, no certificate shown.
+server {
+    listen @HTTPS_LISTEN@ ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen @HTTPS_LISTEN@ ssl;
+    server_name @API_DOMAIN@;
+    server_tokens off;
+
+    ssl_certificate @CERT@;
+    ssl_certificate_key @KEY@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:argon_tls:5m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+
+    # A year. No includeSubDomains: this header binds this name only.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    # The API sets no body limit of its own: this is it.
+    client_max_body_size 1m;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 30s;
+
+    error_page 429 = @rate_limited;
+    error_page 502 503 504 = @api_down;
+
+    location = /auth/sign-in {
+        limit_req zone=argon_auth burst=30 nodelay;
+        limit_req_status 429;
+        proxy_pass http://@UPSTREAM@;
+    }
+    location = /auth/codes/verify {
+        limit_req zone=argon_auth burst=30 nodelay;
+        limit_req_status 429;
+        proxy_pass http://@UPSTREAM@;
+    }
+    location / {
+        proxy_pass http://@UPSTREAM@;
+    }
+
+    # A location that adds headers inherits none from the server, so HSTS is
+    # repeated in each.
+    location @rate_limited {
+        default_type application/json;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header Access-Control-Allow-Origin $argon_cors_origin always;
+        add_header Access-Control-Allow-Credentials $argon_cors_credentials always;
+        add_header Vary Origin always;
+        add_header Retry-After 60 always;
+        return 429 '{"code":"too_many_requests","message":"Too many requests from this network just now. Please wait a minute and try again."}';
+    }
+    location @api_down {
+        default_type application/json;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header Access-Control-Allow-Origin $argon_cors_origin always;
+        add_header Access-Control-Allow-Credentials $argon_cors_credentials always;
+        add_header Vary Origin always;
+        return 503 '{"code":"service_unavailable","message":"Argon cannot be reached just now. Please try again in a few minutes."}';
+    }
+}

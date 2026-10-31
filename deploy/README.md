@@ -23,8 +23,10 @@ server with `ARGON_HOST=1`), or `host` (a native server install).
 | `65-check-freshness.sh` | server | Newest dump, newest passing drill, timers enabled: raises an alert if any is stale. Daily via `argon-freshness.timer`. |
 | `alert.sh` | server | Raise / list / acknowledge alerts: journal, SSH login banner, and `ALERT_CHANNEL`. |
 | `80-install-timers.sh` | host | Backup, drill and freshness timers, the alert unit and login banner. Refuses until a drill has passed. |
-| `75-assert-loopback.sh` | server | Every listener and every published container port on loopback, except `PUBLIC_PORTS`. Run after anything that can open a port. |
-| `85-install-nginx.sh` | server | Nginx on loopback only: healthz proxied, everything else refused until TLS exists. |
+| `75-assert-loopback.sh` | server | Every listener and every published container port on loopback, except `PUBLIC_PORTS` (22; and 80, 443 once `ARGON_API_DOMAIN` is set), each held only by its own program (sshd; nginx). Run after anything that can open a port. |
+| `85-install-nginx.sh` | server | Nginx on loopback only: healthz proxied, everything else refused. Stays, beside 86's public servers. |
+| `86-install-tls.sh` | server | Going live: the API on `ARGON_API_DOMAIN` over HTTPS. Port 80 for the certificate check and redirects; 443 with HSTS and the sign-in rate limit; a Let's Encrypt certificate and its reload hook. |
+| `87-prove-renewal.sh` | server | Proves renewal: the timer, a dry run, and one real forced renewal that nginx must pick up by itself. |
 
 ## Local
 
@@ -58,7 +60,8 @@ PostgreSQL 18 (Debian image) and the API run as containers on Argon's own
 Docker network (`deploy/compose/docker-compose.prod.yml`). Nginx runs on the
 host. **Everything listens on loopback only**, except sshd; Docker's published
 ports bypass ufw, so `75-assert-loopback.sh` checks this by script after every
-step that can open a port. Public exposure waits for a domain and TLS.
+step that can open a port. Public exposure is its own step, below: "Going
+live".
 
 ```bash
 # 1. The code, on the instance (CI does this later): a checkout at ~/argon-src.
@@ -201,6 +204,7 @@ Why not a plain append: run twice, it leaves two keys; the later one wins, and e
 | 55 | **The member's statement dropped VAT and the levy, and the spec could not say they existed** (2026-10-22, found moving the statement tests to D-07). Since 0011 and 0013, VAT on Argon's fee and the transfer levy are their own ledger lines. The statement read only the partner's and Argon's lines: a withdrawal charged ₦60.75 showed a ₦10 charge, VAT and the levy left the member's savings and appeared nowhere on their statement, and the row's gross came out wrong (the savings line less only two of the four charges). A read that hid money from the member it belongs to. As a member sees it (the frontend's live screen, 2026-10-23, the real server against a seeded dev history): the ₦20,000 withdrawal reads "Moved −₦20,050.75 · Charges Argon −₦10", an amount that is neither what was withdrawn (₦20,000) nor what left the savings (₦20,060.75), the VAT and the levy folded into it and gone as charges; a member reading their own statement could reconcile it against nothing. Underneath, the spec's lists had drifted from the schema in four places (MovementKind lacked loan_write_off and loan_recovery since 0009; AccountRole four roles; the journal's ChargeRole and the statement's ChargeLine role lacked vat and statutory_levy), so a generated client could receive values it had no type for, and nothing failed. Also found: `ledger_discrepancies.kind` is unconstrained TEXT, so there is no schema list for the spec's Discrepancy.kind to be checked against. | Tests first: TestApiSpec01 compares every spec list beside a schema type or constraint with what the schema allows, read from the catalog (the TestApiMoney01 model), deliberate differences named in the test (`referred`); shown failing on the old spec with every drift named, then the spec corrected. The statement tests moved to the D-07 world (every component distinct, so any swap or omission shows); shown failing on the real handler (only Argon's line; no VAT or levy in the period) before the handler is changed; break `charges_two_roles_only` is the defect. One layer along (2026-10-23): the spec test catches a role the spec does not declare, never one the handler does not READ, so TestApiStatement20 reads every charge role from the schema's own constraint, posts one line of each (power-of-two amounts, so a shortfall names the roles skipped) and checks the GROSS first, then each line; proven on the real handler by a fifth-role schema (mutants_api/fifth_charge_role.sql, red on the gross by exactly its amount) and by break `gross_skips_levy` (every line shown, the levy left out of the gross). To run that mutant on the real handler, mutate.sh gained `SUITE_MUTANTS_REAL=1`: a suite's SQL mutants run as GREEN does (the fake's variable unset, the production roles' grants); before it, a SQL mutant in an API suite could only have run against the fake's setup. The limit, named so it is not assumed closed: only the api suite opts in, and it holds the ONLY SQL mutant of any API suite (the other twelve have none). So every other API suite meets the real handler in GREEN alone, against the schema as it is; every break they prove is in the fake. No API suite but this one is proven against a schema its handler has not caught up with. A gap, not a defect. The discrepancy kind's missing constraint: open, and worse than the six drifts, not better: a list with no schema cannot drift from one, so no test can compare it with anything, and a kind any code can invent is a kind nobody can report on. Whether to constrain it is a question of its own (raised 2026-10-23). |
 | 56 | **Two money paths disagreed about where money goes, and one guessed** (2026-10-30, found designing the chart a new society is created with). The money endpoints (`internal/api/money.go`, every contribution, hold and payout) found each line's account by role with `ORDER BY a.code LIMIT 1`: a society with two accounts of a role had its money posted to whichever sorted first. The opening-balance batch refused the same chart (409 `chart_incomplete`). The test fixtures were that world: `newChart` added bank 1001 and savings 2001 beside `newSociety`'s 1000 and 2000, so EVERY money test ran on a chart with two of each, the API posted to 1000/2000, and `savingsOf` summed across the role, so nothing ever noticed. A role names where the code posts; two accounts of one is a chart the code can read only by guessing. | Tests first. 0020: one account per role in a society, except `general` (suite 0020: a second account of each posting role refused; general accounts many; each society its own; mutants `m_role_once_savings_only`, over-strict `c_general_once` and `c_role_once_platform`). The migration refuses to apply on a chart that already breaks it, naming each, never choosing. The second defence: TestApiMoney36 suspends the rule for itself and shows the money path refusing, nothing written; red against the live code ("GUESSED": the contribution was recorded) before money.go lost its `ORDER BY … LIMIT 1`; break `money_guesses_account`. The fixtures are finding 57. |
 | 57 | **The tests made the guessing invisible: every money test ran on a chart no society should be in** (2026-10-30, the fixture half of finding 56, recorded on its own at the reviewer's direction). `newSociety` creates bank 1000 and savings 2000; `newChart`, under nearly every ledger and money suite, then added bank 1001 and savings 2001 beside them. Every money test ran on a chart with two of each; the API posted to 1000/2000 by its guess, the tests posted to 1001/2001 by the fixture's own handles, and `savingsOf` and the trial-balance checks summed ACROSS the role, so the two never met. The fixture described a world the system could not safely be in, then proved the system safe in it: finding 44's question (would a society actually be in this state?) at the scale of a whole suite, answered no, and the suite was written in it. The code guessed; the tests made the guessing invisible. | `newChart` now reuses the society's own bank and savings accounts, never a second of each, and says why. Everything written on the old chart, found by running every suite with 0020 in place (the rule itself was the detector): the books tests' codes 1001/2001 became 1000/2000, in their assertions, endpoint paths and expected line lists; TestApiStatement20's trial accounts use the society's own account of a role where one exists; TestRole's relabelling control relabels a `general` spare to a role still free; TestApiBatch21's two-savings case suspends the rule for itself, being the batch's own second defence. **Rule: a check that sums across a role, or any grouping, cannot see a fixture that splits money inside the group.** Where a test checks where money went, it names the account, not the role's total. |
+| 58 | **Two sabotaged copies passed because an earlier copy's nginx was still answering** (2026-10-31, the first sabotage runs of `test/ops/going_live_test.sh`). Each copy starts its own nginx and stub API on fixed ports. The test's cleanup deleted its temporary directory before stopping nginx, so `nginx -s stop` had no pid file to act on, and a bash `kill` does not reach a native Windows process. One copy's nginx and stub kept running. The copies after it found their ports taken, their own servers never bound, and every request went to the leftover, carrying the PREVIOUS copy's config: `tls_default_serves` "stayed green" on the very rule it broke. **The test checked the wrong process and reported success.** The third time on this project a leftover process has produced a false result (twice before, a dev API surviving its stopped task). | Two refusals, both proven to fire by starting a stray listener on each port: the test refuses to start nginx or the stub on a port that already answers (N00, so the sabotage runner reports "proves nothing"), and something counts as STOPPED only when its port is closed. On Windows the last resort is the whole process tree (`taskkill /T`). Cleanup stops the servers BEFORE deleting their directory. The leftovers, both this session's own, were stopped by PID. **Rule: a test that assumes it is alone will eventually not be, and the symptom is a pass.** A test that starts a server first proves its port is free, and a stop is proven by the port closing, never by the signal being sent. |
 
 **Rule: when a hand-written list becomes a derived one, the derivation must select the same things the list did, or the difference is explained** (2026-10-22, finding 52). Compare the two entry by entry before the list is deleted. Deriving the restore drill from each suite's plain run pattern would have silently lost suite 0003's ten service tests; the comparison against the 26 lines being replaced caught it before it was written.
 
@@ -267,6 +271,73 @@ the rest: name the shape, search every script for it, and prove the search
 finds a planted example before trusting its silence. Finding 7's shape
 (an assignment from a failing substitution under `set -e`) turned up twice
 more that way: `65-check-freshness.sh`, `80-install-timers.sh`.
+
+## Going live: the API on its public name
+
+**Reachable is not ready.** Going live makes the API reachable. It does not make
+the platform ready for a real society: **no real society's records go on this
+platform until backups are off the instance and a restore drill from S3 has
+passed** (LEDGER_CONTRACT.md §12, "Reachable is not ready": what counts, and
+that it is not waived). Until then it holds test data only.
+
+**What this instance serves: the API alone**, on `ARGON_API_DOMAIN` (an
+`api.<domain>` name). The app is hosted elsewhere, on its own subdomain of the
+same domain (the session cookie needs one registrable domain, §12), with its
+own certificate from its host. So the certificate here covers the API's name
+only, and `ARGON_ALLOWED_ORIGINS` is the app's one https origin.
+
+What nginx adds in front of the API (`nginx/argon-acme.conf.in`,
+`nginx/argon-api-tls.conf.in`; tested by `test/ops/going_live_test.sh`, every
+rule sabotaged by `test/ops/sabotage_going_live.sh`):
+- **Port 80 is open for the certificate check alone.** It serves that check's
+  file and redirects a GET to HTTPS. Any other method is refused with
+  `tls_required`, and nothing on port 80 ever reaches the API: a PIN sent over
+  plain HTTP goes no further.
+- **443**: TLS 1.2 and 1.3, HSTS for a year (this name only), a 1 MB body limit
+  (the API sets none of its own). Names that are not the API's get no
+  certificate (443) and no answer (80).
+- **A rate limit on sign-in and code checks, per address**: 30 a minute, with a
+  burst of 30. The API's lockout is per account; this is what stops one
+  address trying one PIN across many members. Preflights are not counted. It
+  is loose on purpose, because many members share one mobile-network address.
+- **Its own refusals in the API's format, with the app's CORS headers**
+  (`429 too_many_requests`; `503 service_unavailable` while the API is down),
+  so the app can read them instead of seeing a network error.
+
+**Before the first run** (not scripts; the account holders):
+1. An **Elastic IP** on the instance. Its public address otherwise changes on
+   every stop and start, and the DNS record goes stale.
+2. An **A record** for the API's name, pointing at that Elastic IP. The app's
+   name is a record at the app's host, not here.
+3. The **security group**: 443 and 80 from anywhere; 22 from the operator's
+   address only.
+4. **On the instance**, in `/etc/argon/deploy.env`, the three values below,
+   set by hand once (they are decisions, not secrets): `ARGON_API_DOMAIN`, the
+   API's name; `ACME_EMAIL`, a mailbox someone reads; `ARGON_ALLOWED_ORIGINS`,
+   the app's `https://` origin and nothing else. 30 and 86 refuse anything else
+   (`nginx/check-origin.sh`). `ARGON_CSRF_KEY` and `ARGON_SMS=refusing` must
+   already be there ("A new key on an existing instance"). `ARGON_SMS` stays
+   `refusing` until `deploy/AUTH_SMS.md`'s go-live list is done.
+
+```bash
+E=ARGON_ENV=/etc/argon/deploy.env
+cd /opt/argon/src
+sudo $E bash deploy/30-install-api.sh     # rewrites argon.env with the app's origin
+sudo ARGON_RELEASE=$(cat RELEASE) docker compose --env-file /etc/argon/deploy.env -f deploy/compose/docker-compose.prod.yml --profile api up -d --no-build api
+sudo $E bash deploy/85-install-nginx.sh   # loopback server (unchanged)
+sudo $E bash deploy/86-install-tls.sh     # refuses until the name resolves HERE; then 80, the certificate, 443
+sudo $E bash deploy/87-prove-renewal.sh   # timer, dry run, one real renewal nginx picks up alone
+
+# The certificate alert, made to fire once (a failure path is proven by making it fire):
+sudo $E CERT_MIN_DAYS=100 bash deploy/65-check-freshness.sh   # must raise "certificate not renewing" and exit 3
+sudo $E bash deploy/alert.sh list                              # it is there; with Slack set, it arrived there
+sudo $E bash deploy/alert.sh ack all
+```
+
+From outside: `curl -sI https://<api name>/healthz` gives 200 with a
+`strict-transport-security` header; `curl -sI http://<api name>/healthz` gives
+301. A deploy does not re-render nginx: after a release that changes
+`deploy/nginx/`, run 86 again (it keeps the certificate).
 
 ## Alerts
 
