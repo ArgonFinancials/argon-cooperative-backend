@@ -57,4 +57,14 @@ declare -gA SVC_TARGET_OF=(
   [csrf_key_generated]='TestApiSession31_WithNoCsrfKeyTheServerRefusesToStart'
   [csrf_per_user]='TestApiSession04_AnotherSessionsTokenIsRefused'
   [csrf_unkeyed]='TestApiSession29_TheCsrfTokenDependsOnTheServersKey'
+  # A body is JSON, or it is refused (2026-10-31; apifake_json_test.go).
+  [json_unchecked]='TestApiSession33_AFormSignInIsRefusedAndSetsNoCookie|TestApiSession35_AFormCodeVerifyIsRefused|TestApiSession36_AFormStateChangeIsRefusedEvenWithTheToken|TestApiSession37_ABodyWithNoContentTypeIsRefused'
+  [json_signin_only]='TestApiSession35_AFormCodeVerifyIsRefused|TestApiSession36_AFormStateChangeIsRefusedEvenWithTheToken'
+  [json_plain_text_ok]='TestApiSession33_AFormSignInIsRefusedAndSetsNoCookie|TestApiSession34_AFormSignInIsRefusedBeforeThePinCounts'
+  [json_form_ok]='TestApiSession33_AFormSignInIsRefusedAndSetsNoCookie|TestApiSession35_AFormCodeVerifyIsRefused'
+  [json_missing_ok]='TestApiSession37_ABodyWithNoContentTypeIsRefused'
+  [json_after_handler]='TestApiSession34_AFormSignInIsRefusedBeforeThePinCounts|TestApiSession36_AFormStateChangeIsRefusedEvenWithTheToken'
+  [json_no_cors]='TestApiSession39_TheRefusalCarriesTheAppsCorsHeaders'
+  [json_bodiless_refused]='TestApiSession38_Control_JsonWithParametersAndBodilessPostsAreAccepted'
+  [json_params_refused]='TestApiSession38_Control_JsonWithParametersAndBodilessPostsAreAccepted'
 )

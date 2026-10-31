@@ -47,6 +47,10 @@ func fakeCORS(origins []string, brk string, next http.Handler) http.Handler {
 		return false
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// json_no_cors: the JSON rule outside CORS, its refusal unreadable.
+		if brk == "json_no_cors" && jsonGate(w, r, brk, next) {
+			return
+		}
 		o := r.Header.Get("Origin")
 		ok := allowed(o)
 		allow := func() {
@@ -96,6 +100,11 @@ func fakeCORS(origins []string, brk string, next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"userId":"","fullName":"","memberships":[]}`))
+			return
+		}
+		// A body is JSON or it is refused (apifake_json_test.go): inside CORS,
+		// before authentication.
+		if brk != "json_no_cors" && jsonGate(w, r, brk, next) {
 			return
 		}
 		next.ServeHTTP(w, r)

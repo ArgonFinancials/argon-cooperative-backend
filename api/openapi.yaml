@@ -20,6 +20,15 @@ info:
     the running server, in both directions; a screen may not call an operation
     marked false.
 
+    A BODY IS JSON, OR IT IS REFUSED (2026-10-31). Any request with a body
+    must send `Content-Type: application/json` (parameters such as charset
+    allowed), on every operation, or it is refused 415
+    `unsupported_media_type` before anything runs: no session looked up, no
+    PIN checked or counted. A request with no body (sign-out) needs no type.
+    Why: an HTML form on another subdomain of the same domain can post
+    text/plain with no preflight; JSON forces the preflight, which only the
+    app's origin passes (LEDGER_CONTRACT.md §12).
+
     Every enum below names the decision it came from. The semantics were settled
     in the design package; this file is where they are read, not where they are
     decided.

@@ -71,6 +71,7 @@ type call struct {
 	bearer, csrf    string // Authorization: Bearer, X-CSRF-Token
 	session, device string // the cookies' values
 	body            any
+	ctype           string // Content-Type: "" means application/json when there is a body; "-" sends none
 }
 
 type answer struct {
@@ -88,7 +89,11 @@ func send(t *testing.T, srv *httptest.Server, c call) answer {
 		rd = bytes.NewReader(raw)
 	}
 	req, _ := http.NewRequest(c.method, srv.URL+c.path, rd)
-	if c.body != nil {
+	switch {
+	case c.ctype == "-":
+	case c.ctype != "":
+		req.Header.Set("Content-Type", c.ctype)
+	case c.body != nil:
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.origin {
@@ -699,5 +704,119 @@ func TestApiSession32_TheConfigurationRequiresTheCsrfKey(t *testing.T) {
 	cfg, err := loadConfig()
 	if err != nil || len(cfg.CSRFKey) != 32 {
 		t.Fatalf("REFUSED — a 32-byte ARGON_CSRF_KEY: %v (key %d bytes)", err, len(cfg.CSRFKey))
+	}
+}
+
+// =============================================================================
+// A BODY IS JSON, OR IT IS REFUSED (ruled 2026-10-31, LEDGER_CONTRACT.md §12)
+// =============================================================================
+//
+// The app and the API share a domain with the company's other platforms, so a
+// page on any of them is SAME-SITE: the browser sends it the Lax session
+// cookie. A form can post text/plain, application/x-www-form-urlencoded or
+// multipart/form-data with NO PREFLIGHT, and the API decoded any body as JSON
+// whatever its type. Sign-in carries no CSRF token (there is no session yet),
+// so such a page could sign a member's browser into an account the attacker
+// controls; the member then sees a working app and pays into someone else's
+// society (login CSRF: session fixation).
+//
+// application/json cannot be sent cross-origin without a preflight, and the
+// preflight passes only for the app's origin. So a request WITH A BODY that is
+// not application/json is refused, 415 unsupported_media_type: before
+// authentication and before the PIN (nothing counted), inside CORS (the app
+// can read the refusal). A request with no body is untouched.
+
+// The three types an HTML form can send, none of which needs a preflight.
+var formTypes = []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"}
+
+func TestApiSession33_AFormSignInIsRefusedAndSetsNoCookie(t *testing.T) {
+	srv, _ := sessionServer(t)
+	p := newSigner(t, newSociety(t), "A member on their phone", "", false)
+	for _, ct := range formTypes {
+		a := send(t, srv, call{method: http.MethodPost, path: "/auth/sign-in", origin: true, device: p.device, ctype: ct,
+			body: map[string]string{"credential": p.number, "pin": signPIN}})
+		wantRefused(t, a, http.StatusUnsupportedMediaType, "unsupported_media_type", "a sign-in with the RIGHT PIN, sent as "+ct)
+		if c := a.cookie(sessionCookie); c != nil && c.Value != "" {
+			t.Fatalf("SIGNED IN — a sign-in sent as %s set %s: a form on another subdomain can sign a browser in", ct, sessionCookie)
+		}
+	}
+}
+
+// Refused BEFORE the PIN is checked: a form's wrong PINs count against nothing,
+// so another site's page cannot lock a member out either.
+func TestApiSession34_AFormSignInIsRefusedBeforeThePinCounts(t *testing.T) {
+	srv, _ := sessionServer(t)
+	p := newSigner(t, newSociety(t), "A member on their phone", "", false)
+	before := failedAttemptsOf(t, p.user)
+	for i := 0; i < 6; i++ {
+		send(t, srv, call{method: http.MethodPost, path: "/auth/sign-in", origin: true, device: p.device, ctype: "text/plain",
+			body: map[string]string{"credential": p.number, "pin": "000000"}})
+	}
+	if after := failedAttemptsOf(t, p.user); after != before {
+		t.Fatalf("COUNTED — six form sign-ins with a wrong PIN added %d failed attempts; the refusal must come before the PIN", after-before)
+	}
+}
+
+// Code-verify takes no session either: the same opening, the same refusal.
+func TestApiSession35_AFormCodeVerifyIsRefused(t *testing.T) {
+	srv, _ := sessionServer(t)
+	for _, ct := range formTypes {
+		a := send(t, srv, call{method: http.MethodPost, path: "/auth/codes/verify", origin: true, ctype: ct,
+			body: map[string]string{"challenge": "00000000-0000-0000-0000-000000000000", "code": "123456"}})
+		wantRefused(t, a, http.StatusUnsupportedMediaType, "unsupported_media_type", "a code-verify sent as "+ct)
+	}
+}
+
+// A cookie session's state change as a form is refused even WITH the right
+// CSRF token, and has no effect: the rule is about the request, not the token.
+func TestApiSession36_AFormStateChangeIsRefusedEvenWithTheToken(t *testing.T) {
+	srv, _, b := newBrowserMember(t, "")
+	before := proofsOf(t, b.signer.user)
+	for _, ct := range formTypes {
+		c := stepUpCall(b)
+		c.ctype = ct
+		wantRefused(t, send(t, srv, c), http.StatusUnsupportedMediaType, "unsupported_media_type", "a step-up sent as "+ct)
+	}
+	if after := proofsOf(t, b.signer.user); after != before {
+		t.Fatalf("EFFECT — a refused form step-up minted %d proofs", after-before)
+	}
+}
+
+// A body with no Content-Type at all is not JSON by default.
+func TestApiSession37_ABodyWithNoContentTypeIsRefused(t *testing.T) {
+	srv, _ := sessionServer(t)
+	p := newSigner(t, newSociety(t), "A member on their phone", "", false)
+	a := send(t, srv, call{method: http.MethodPost, path: "/auth/sign-in", origin: true, device: p.device, ctype: "-",
+		body: map[string]string{"credential": p.number, "pin": signPIN}})
+	wantRefused(t, a, http.StatusUnsupportedMediaType, "unsupported_media_type", "a sign-in body with no Content-Type")
+}
+
+// What must still work: JSON with parameters or in another case (media types
+// are case-insensitive), and a state change with NO body and no type.
+func TestApiSession38_Control_JsonWithParametersAndBodilessPostsAreAccepted(t *testing.T) {
+	srv, _ := sessionServer(t)
+	p := newSigner(t, newSociety(t), "A member on their phone", "", false)
+	for _, ct := range []string{"application/json; charset=utf-8", "Application/JSON"} {
+		a := send(t, srv, call{method: http.MethodPost, path: "/auth/sign-in", origin: true, device: p.device, ctype: ct,
+			body: map[string]string{"credential": p.number, "pin": signPIN}})
+		if a.status != http.StatusOK {
+			t.Fatalf("REFUSED — a sign-in sent as %q: %d %s; that IS application/json", ct, a.status, a.body)
+		}
+	}
+	b, _ := signInBrowser(t, srv, p)
+	a := send(t, srv, call{method: http.MethodPost, path: "/auth/sign-out", origin: true, session: b.session, csrf: b.csrf, ctype: "-"})
+	if a.status != http.StatusNoContent {
+		t.Fatalf("REFUSED — a sign-out with no body and no Content-Type: %d %s; there is no body to be JSON", a.status, a.body)
+	}
+}
+
+// The app can READ the refusal: the API's error format, with its CORS headers.
+func TestApiSession39_TheRefusalCarriesTheAppsCorsHeaders(t *testing.T) {
+	srv, _ := sessionServer(t)
+	a := send(t, srv, call{method: http.MethodPost, path: "/auth/sign-in", origin: true, ctype: "text/plain",
+		body: map[string]string{"credential": "x", "pin": "000000"}})
+	wantRefused(t, a, http.StatusUnsupportedMediaType, "unsupported_media_type", "a form sign-in")
+	if got := a.header.Get("Access-Control-Allow-Origin"); got != appOrigin {
+		t.Fatalf("UNREADABLE — the 415 carries Access-Control-Allow-Origin %q; the app's page cannot read it and shows a network error", got)
 	}
 }

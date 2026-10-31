@@ -62,7 +62,8 @@ func NewServer(d Deps) (http.Handler, error) {
 		ResponseErrorHandlerFunc: ResponseError,
 	}), ChiServerOptions{ErrorHandlerFunc: RequestError})
 	// CORS OUTSIDE authentication: a preflight carries no credentials (cors.go).
-	return CORS(d.AllowedOrigins, s.gate(h)), nil
+	// Inside it, before anything else, a body must be JSON (json.go).
+	return CORS(d.AllowedOrigins, requireJSON(s.gate(h))), nil
 }
 
 // Paths that need no session.
