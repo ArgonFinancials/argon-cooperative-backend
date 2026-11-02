@@ -329,3 +329,36 @@ func ok200or201(t *testing.T, r resp) aView {
 	}
 	return v
 }
+
+// A member never signs their own withdrawal, and is told so: a refusal (403),
+// never an outage (500). The rule is 0011's; the answer is this layer's (ruled
+// 2026-10-30: "a 500 says we broke; a 403 says you may not").
+func TestApiApprovals19_NobodySignsTheirOwnWithdrawal(t *testing.T) {
+	w := newApprovalAPI(t)
+	// The treasurer's own withdrawal, raised for them by the chairman, so the
+	// only thing wrong with the treasurer's signature is whose money it is.
+	req, err := w.s.withdrawalRequest(wreq{member: w.tMem, raiser: w.chairman, amount: 5000000, reference: "APR-OWN-" + digest()[:12], topUp: true})
+	fixture(t, err, "the treasurer's own withdrawal")
+	wantProblem(t, w.sign(t, w.treasurer, req, stepUp(t, w.treasurer, "approval_signature")), http.StatusForbidden, "conflict_of_interest",
+		"the treasurer signing their own withdrawal")
+}
+
+// A request that has its quorum is decided: a further signature is a signature
+// on nothing, and the count of signatures must stay the count that approved it
+// (ruled 2026-10-30).
+func TestApiApprovals20_ADecidedRequestTakesNoMoreSignatures(t *testing.T) {
+	w := newApprovalAPI(t)
+	req := w.memberRequest(t, "")
+	for _, as := range []string{w.treasurer, w.chairman} {
+		if r := w.sign(t, as, req, stepUp(t, as, "approval_signature")); r.status != http.StatusCreated {
+			t.Fatalf("FIXTURE: a quorum signature: %d %s", r.status, r.body)
+		}
+	}
+	wantProblem(t, w.sign(t, w.secretary, req, stepUp(t, w.secretary, "approval_signature")), http.StatusConflict, "request_decided",
+		"a third signature on a request already approved")
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM signatory_approvals WHERE request_id = $1`, req).Scan(&n), "signatures")
+	if n != 2 {
+		t.Fatalf("COUNTED — %d signatures on a request two approved", n)
+	}
+}

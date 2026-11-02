@@ -288,6 +288,10 @@ func (s *server) SignApproval(ctx context.Context, req SignApprovalRequestObject
 			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: "the borrower and the guarantors of a loan never sign its requests"}), nil
 		case c == "raiser_never_signs": // §10, "raises" (0016)
 			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: "you raised this request: nobody signs a request they raised. Another signatory signs it"}), nil
+		case c == "requester_never_signs_own_withdrawal": // 0011; a refusal, never a 500 (2026-10-30)
+			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: "this withdrawal is yours: nobody signs their own. Another signatory signs it"}), nil
+		case c == "signature_on_decided_request": // 0021: approved, not closed
+			return SignApproval409JSONResponse(Problem{Code: "request_decided", Message: "this request is already approved: it takes no more signatures"}), nil
 		case c == "signature_before_expiry" || c == "signature_on_open_request":
 			return SignApproval409JSONResponse(Problem{Code: "request_closed", Message: "this request has expired or been rejected"}), nil
 		case c == "signatory_approvals_one_per_user":

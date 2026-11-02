@@ -1905,7 +1905,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "step_up_required (no valid proof for approval_signature, the caller's own, unspent); not_a_signatory (no current signing post here, the auditor included); conflict_of_interest (the borrower or a guarantor of the loan the request is for)."
+          description: "step_up_required (no valid proof for approval_signature, the caller's own, unspent); not_a_signatory (no current signing post here, the auditor included); conflict_of_interest (the borrower or a guarantor of the loan the request is for; the caller raised the request; the withdrawal is the caller's own)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1915,7 +1915,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: "request_closed (expired or rejected); already_signed."
+          description: "request_closed (expired or rejected); request_decided (already approved: it takes no more signatures); already_signed."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

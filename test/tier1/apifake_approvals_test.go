@@ -25,6 +25,8 @@
 //	appr_not_signatory_as_404     a refused non-signatory is told "no such request"
 //	appr_closed_as_403            signing a closed request reads as a step-up problem
 //	appr_already_signed_as_closed signing twice reads as "closed"
+//	appr_own_withdrawal_as_500    signing your own withdrawal answers 500, not a refusal
+//	appr_decided_as_closed        a signature on a decided request reads as "closed", not decided
 //	appr_reject_without_step_up   no proof: rejects anyway, with no act
 //	appr_rejection_note_dropped   the officer projection drops the rejection's note
 //	appr_note_refusal_as_500      looks_wrong with no note answers 500, not 422 note_required
@@ -290,6 +292,14 @@ func (f *fakeAPI) SignApproval(ctx context.Context, req api.SignApprovalRequestO
 			return api.SignApproval403JSONResponse(api.Problem{Code: "conflict_of_interest", Message: "you raised this request: nobody signs a request they raised"}), nil
 		case c == "borrower_never_signs_own_loan" || c == "signatory_not_guarantor":
 			return api.SignApproval403JSONResponse(api.Problem{Code: "conflict_of_interest", Message: "the borrower and the guarantors of a loan never sign its requests"}), nil
+		case c == "requester_never_signs_own_withdrawal" && f.brk != "appr_own_withdrawal_as_500":
+			return api.SignApproval403JSONResponse(api.Problem{Code: "conflict_of_interest", Message: "this withdrawal is yours: nobody signs their own. Another signatory signs it"}), nil
+		case c == "signature_on_decided_request":
+			code := "request_decided"
+			if f.brk == "appr_decided_as_closed" {
+				code = "request_closed"
+			}
+			return api.SignApproval409JSONResponse(api.Problem{Code: code, Message: "this request is already approved: it takes no more signatures"}), nil
 		case c == "signature_before_expiry" || c == "signature_on_open_request":
 			if f.brk == "appr_closed_as_403" {
 				return api.SignApproval403JSONResponse(api.Problem{Code: "step_up_required", Message: "sign again"}), nil
