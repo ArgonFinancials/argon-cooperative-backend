@@ -64,6 +64,9 @@ var (
 	// minute (0003's code_resend_interval). Never the lockout's answer, and
 	// nothing counted (2026-10-30).
 	ErrResendTooSoon = errors.New("auth: another code was asked for too soon")
+	// ErrPINNotAllowed: a new PIN that is not six digits, or is on the closed
+	// list of trivial PINs (CheckNewPIN, pin.go; ruled 2026-10-30).
+	ErrPINNotAllowed = errors.New("auth: a PIN is six digits, and not one that is easy to guess")
 	// ErrNoSession: the step-up was asked for without a live session.
 	ErrNoSession = errors.New("auth: no live session")
 	// ErrUnknownAct: a proof was asked for an act that does not exist.
