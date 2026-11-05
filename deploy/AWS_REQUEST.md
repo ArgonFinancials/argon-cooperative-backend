@@ -50,7 +50,7 @@ Instance `i-0df0964197555cc26`, us-east-1d, t4g.medium (arm64), Ubuntu 26.04. Re
 ## PART B — needed for backups and the restore drill
 
 ### B1. S3 bucket
-- [ ] Name `argon-prod-backups-<ACCOUNT_ID>` (must be globally unique; tell us the final name), region `us-east-1`
+- [ ] Name `argon-prod-backups-<ACCOUNT_ID>` (must be globally unique; tell us the final name), region `us-east-1`. The console may append a regional namespace suffix it does not let you control (it did, 2026-11-05): the FINAL name is what goes into `BACKUP_STORE` and the policy, never this pattern. The real name lives in the instance's `/etc/argon/deploy.env` and the IAM policy, not in this repository.
 - [ ] Block Public Access: all four settings **on**. Object Ownership: bucket owner enforced (ACLs disabled).
 - [ ] Versioning **enabled**. Default encryption SSE-S3 (`AES256`); the scripts send `--sse AES256`.
 - [ ] Bucket policy: deny any request where `aws:SecureTransport` is `false`
