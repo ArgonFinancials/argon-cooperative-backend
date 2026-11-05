@@ -337,8 +337,13 @@ rule sabotaged by `test/ops/sabotage_going_live.sh`):
    every stop and start, and the DNS record goes stale.
 2. An **A record** for the API's name, pointing at that Elastic IP. The app's
    name is a record at the app's host, not here.
-3. The **security group**: 443 and 80 from anywhere; 22 from the operator's
-   address only.
+3. The **security group**: 443 and 80 from anywhere. **22 stays open to
+   anywhere for now, key-only:** the deploy runs on a GitHub-hosted machine
+   and connects over SSH from GitHub's address ranges, so "22 from the
+   operator's address only" (as this said until 2026-11-04) would stop every
+   deploy. The end state is no 22 at all: deploys over SSM through the
+   instance role (`AmazonSSMManagedInstanceCore`), operators through Session
+   Manager. 22 closes when that is built, not before.
 4. **On the instance**, in `/etc/argon/deploy.env`, the three values below,
    set by hand once (they are decisions, not secrets): `ARGON_API_DOMAIN`, the
    API's name; `ACME_EMAIL`, a mailbox someone reads; `ARGON_ALLOWED_ORIGINS`,

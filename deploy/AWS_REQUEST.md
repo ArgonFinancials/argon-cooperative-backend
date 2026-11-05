@@ -18,7 +18,7 @@ Instance `i-0df0964197555cc26`, us-east-1d, t4g.medium (arm64), Ubuntu 26.04. Re
 
 ### A2. Security group
 - [ ] New SG `argon-prod-host`, replacing `launch-wizard-3` on `i-0df0964197555cc26` (current rules unknown to us)
-- [ ] Inbound TCP 22: from `<operator public IP>/32` only. If A3's SSM policy is attached, no inbound rules at all.
+- [ ] Inbound TCP 22: from anywhere, key-only, **until deploys move to SSM**. The deploy connects from GitHub-hosted runners, whose addresses are GitHub's, so restricting 22 to the operator's address stops every deploy (corrected 2026-11-04). Once deploys run over SSM (A3), no inbound 22 at all.
 - [ ] Inbound TCP 5432: **none**. Postgres binds 127.0.0.1 and is reached only by tunnel.
 - [ ] Inbound TCP 8080: **none**. The API sits behind TLS, which is still undecided.
 - [ ] Inbound TCP 443: none yet. Added when TLS and DNS are decided.
@@ -54,7 +54,8 @@ Instance `i-0df0964197555cc26`, us-east-1d, t4g.medium (arm64), Ubuntu 26.04. Re
 - [ ] Block Public Access: all four settings **on**. Object Ownership: bucket owner enforced (ACLs disabled).
 - [ ] Versioning **enabled**. Default encryption SSE-S3 (`AES256`); the scripts send `--sse AES256`.
 - [ ] Bucket policy: deny any request where `aws:SecureTransport` is `false`
-- [ ] Object Lock: **your decision.** If wanted, it must be enabled **at creation**: compliance mode, 35 days, on `prod/dumps/`. Nobody, including root, can then delete a recent backup.
+- [ ] Object Lock: **your decision; recommended.** Compliance mode, default retention 35 days. Nobody, including root, can then delete a recent backup. Default retention covers the WHOLE bucket, not one prefix (corrected 2026-11-04; this said `prod/dumps/`): fine, since everything in it is a backup or a drill record. Simplest enabled at creation.
+- [ ] Lifecycle, whole bucket: delete incomplete multipart uploads after 7 days. The host cannot clean up a large upload that failed partway (it has no delete), so S3 does.
 - [ ] Lifecycle `prod/dumps/`: expire current versions after 90 days, noncurrent after 30. Lifecycle `prod/drills/`: expire after 365 days.
 
 ### B2. Backup permissions on the instance role
