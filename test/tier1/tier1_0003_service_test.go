@@ -79,9 +79,37 @@ func (f *fakeNotifier) NewDeviceSignedIn(_ context.Context, user string, at time
 	return nil
 }
 
-// Small but real argon2id cost: enough that a hash takes measurable time
-// (the timing test depends on it), small enough for a constrained machine.
+// Small but real argon2id cost, small enough for a constrained machine. Read
+// when a fixture hashes a PIN and when a service is built, so a test that
+// swaps it (useTimingArgon) gets one cost everywhere.
 var testArgon = auth.Argon2{MemoryKiB: 8 * 1024, Time: 2, Threads: 1}
+
+// timingArgon: the cost the TIMING tests run at (finding 61). At testArgon a
+// hash is ~15 ms, less than one request's noise on a loaded CI runner, so a
+// skipped hash could not be told from noise. About twelve times the work, so
+// the hash stands well above it; only those two tests pay for it.
+var timingArgon = auth.Argon2{MemoryKiB: 64 * 1024, Time: 3, Threads: 1}
+
+// useTimingArgon: for this test, every fixture PIN, every service's dummy
+// hash and the fake's at timingArgon. Call it before building the service.
+func useTimingArgon(t *testing.T) {
+	t.Helper()
+	old := testArgon
+	testArgon = timingArgon
+	t.Cleanup(func() { testArgon = old })
+}
+
+var dummies = map[auth.Argon2]string{}
+
+// dummyPHC: a hash of nothing at the current cost, for the fake's unknown
+// number to verify against, as the service verifies its own dummy.
+func dummyPHC() string {
+	if d, ok := dummies[testArgon]; ok {
+		return d
+	}
+	dummies[testArgon] = hashPIN("not-a-real-pin")
+	return dummies[testArgon]
+}
 
 // hashPIN writes an argon2id PHC string — the format pin_is_argon2id checks.
 func hashPIN(pin string) string {
@@ -204,25 +232,73 @@ func TestAuthS2_LockoutLooksTheSameForUnknownNumbers(t *testing.T) {
 // Same answer, different time, still tells an attacker which numbers are
 // registered: a real account hashes a PIN; an unknown one must cost the same.
 func TestAuthS3_RefusalTimingDoesNotRevealRegistration(t *testing.T) {
+	useTimingArgon(t)
 	s := newSvc(t)
-	var known, unknown []time.Duration
-	for i := 0; i < 11; i++ {
+	i := 0
+	timingUniform(t, "ACCEPTED — refusal time reveals registration", func() time.Duration {
+		i++
 		m := s.member(fmt.Sprintf("Member %d", i)) // fresh account each time: no lockout interferes
 		t0 := time.Now()
 		s.signIn(m.phone, "0000", m.deviceToken)
-		known = append(known, time.Since(t0))
-		t0 = time.Now()
+		return time.Since(t0)
+	}, func() time.Duration {
+		t0 := time.Now()
 		s.signIn(unregistered(), "0000", "")
-		unknown = append(unknown, time.Since(t0))
+		return time.Since(t0)
+	})
+}
+
+// timingUniform: a wrong PIN for a real account and any PIN for an unknown
+// number must cost the same. FINDING 61 (2026-11-02): this was a ratio of
+// medians, 0.5-2, over 11 calls each, at the cheap fixture hash. Skipping the
+// hash moved that ratio less than a loaded CI runner's noise did, and the
+// break that skips it passed on CI. Now:
+//   - the hash is costly (useTimingArgon), so skipping it is far above noise;
+//   - the yardstick is that hash, timed here beside the calls, under the same
+//     load: skipping it makes the two paths differ by a whole hash, so they
+//     must differ by less than HALF of one;
+//   - the comparison is PAIRED: each wrong-PIN call against the unknown-number
+//     call next to it, the median of those differences, so load shared by a
+//     pair cancels. The pair's order alternates, so drift favours neither.
+// A hash too cheap to measure is a failure of the instrument, never a pass.
+func timingUniform(t *testing.T, disclosed string, known, unknown func() time.Duration) {
+	t.Helper()
+	if testArgon != timingArgon {
+		t.Fatalf("INSTRUMENT — the timing test runs at testArgon's cheap cost: call useTimingArgon first")
 	}
 	med := func(d []time.Duration) time.Duration {
-		sort.Slice(d, func(i, j int) bool { return d[i] < d[j] })
-		return d[len(d)/2]
+		s := append([]time.Duration(nil), d...)
+		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+		return s[len(s)/2]
 	}
-	k, u := med(known), med(unknown)
-	if ratio := float64(u) / float64(k); ratio < 0.5 || ratio > 2 {
-		t.Fatalf("ACCEPTED — refusal time reveals registration: wrong PIN median %s, unregistered number median %s (ratio %.2f, want 0.5–2)",
-			k.Round(time.Microsecond), u.Round(time.Microsecond), ratio)
+	hash := func() time.Duration {
+		t0 := time.Now()
+		verifyPHC(dummyPHC(), "000000")
+		return time.Since(t0)
+	}
+	known() // warm both paths
+	unknown()
+	var diffs, hs []time.Duration
+	for i := 0; i < 21; i++ {
+		var k, u time.Duration
+		if i%2 == 0 {
+			k, u = known(), unknown()
+		} else {
+			u, k = unknown(), known()
+		}
+		diffs, hs = append(diffs, k-u), append(hs, hash())
+	}
+	d, h := med(diffs), med(hs)
+	if h < 10*time.Millisecond {
+		t.Fatalf("INSTRUMENT — one PIN hash takes %s here: too little to measure a skipped hash against. Raise timingArgon", h)
+	}
+	if d < 0 {
+		d = -d
+	}
+	t.Logf("paired median difference %s, one hash %s", d.Round(time.Microsecond), h.Round(time.Microsecond))
+	if d >= h/2 {
+		t.Fatalf("%s: a wrong PIN and an unknown number differ by %s (paired median); one hash is %s, and they must differ by less than half of one",
+			disclosed, d.Round(time.Microsecond), h.Round(time.Microsecond))
 	}
 }
 

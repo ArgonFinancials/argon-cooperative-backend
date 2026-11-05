@@ -32,7 +32,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -287,27 +286,19 @@ func TestApiSignIn06_UnknownCredentialAndWrongPinAnswerIdentically(t *testing.T)
 // The identical answer proves nothing if the real account takes measurably
 // longer because it hashed a PIN: the timing says which numbers exist.
 func TestApiSignIn07_RefusalTimingDoesNotRevealRegistration(t *testing.T) {
+	useTimingArgon(t)
 	srv := authServer(t, &fakeSMS{}, 0)
 	s := newSociety(t)
-	var known, unknown []time.Duration
-	for i := 0; i < 11; i++ {
+	timingUniform(t, "DISCLOSED — over HTTP", func() time.Duration {
 		p := newSigner(t, s, "Member", "", false) // fresh each time: no lockout interferes
 		t0 := time.Now()
 		signInAs(t, srv, p.number, "0000", p.device, "")
-		known = append(known, time.Since(t0))
-		t0 = time.Now()
+		return time.Since(t0)
+	}, func() time.Duration {
+		t0 := time.Now()
 		signInAs(t, srv, unregistered(), "0000", "", "")
-		unknown = append(unknown, time.Since(t0))
-	}
-	med := func(d []time.Duration) time.Duration {
-		sort.Slice(d, func(i, j int) bool { return d[i] < d[j] })
-		return d[len(d)/2]
-	}
-	k, u := med(known), med(unknown)
-	if ratio := float64(u) / float64(k); ratio < 0.5 || ratio > 2 {
-		t.Fatalf("DISCLOSED — over HTTP, a wrong PIN takes %s (median) and an unregistered number %s: ratio %.2f, want 0.5–2",
-			k.Round(time.Microsecond), u.Round(time.Microsecond), ratio)
-	}
+		return time.Since(t0)
+	})
 }
 
 // =============================================================================

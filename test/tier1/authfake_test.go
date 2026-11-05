@@ -53,8 +53,6 @@ type fakeService struct {
 
 func newFakeService(d auth.Deps, brk string) auth.Service { return &fakeService{d: d, brk: brk} }
 
-var dummyPHC = hashPIN("not-a-real-pin")
-
 func sha(s string) string { return auth.TokenDigest(s) }
 
 func (f *fakeService) codeDigest(code string) string {
@@ -123,7 +121,7 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	if found {
 		ok = verifyPHC(phc, req.PIN)
 	} else if f.brk != "timing_fast_unknown" {
-		verifyPHC(dummyPHC, req.PIN) // spend the same time as a real check
+		verifyPHC(dummyPHC(), req.PIN) // spend the same time as a real check
 	}
 	var uid any
 	if found {

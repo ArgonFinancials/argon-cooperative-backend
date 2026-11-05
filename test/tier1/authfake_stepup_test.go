@@ -59,7 +59,7 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	f.d.DB.QueryRow(ctx, `SELECT pin_hash FROM auth_credentials WHERE user_id = $1`, user).Scan(&phc)
 	ok := phc != "" && verifyPHC(phc, pin)
 	if phc == "" {
-		verifyPHC(dummyPHC, pin)
+		verifyPHC(dummyPHC(), pin)
 	}
 	if (ok && f.brk != "stepup_success_silent") || (!ok && f.brk != "stepup_not_counted") {
 		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, $3)`, user, key, ok)
