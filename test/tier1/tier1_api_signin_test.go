@@ -485,6 +485,27 @@ func TestApiSignIn13_LockedAccountIsTryLaterEvenWithTheRightPin(t *testing.T) {
 	}
 }
 
+// Anyone who knows a member's number can send wrong PINs from their own
+// device. Fifteen of them, across the three lockouts, must not lock the
+// member out of their own phone (0022, finding 60): the stranger is locked,
+// the member signs in.
+func TestApiSignIn15_AStrangersWrongPinsNeverLockTheMembersOwnPhone(t *testing.T) {
+	p := newSigner(t, newSociety(t), "Member", "", false)
+	for _, at := range []time.Duration{0, 16 * time.Minute, 47 * time.Minute} {
+		srv := authServer(t, &fakeSMS{}, at)
+		for i := 0; i < 5; i++ {
+			signInAs(t, srv, p.number, "0000", "", "")
+		}
+	}
+	srv := authServer(t, &fakeSMS{}, 48*time.Minute)
+	if r := signInAs(t, srv, p.number, "0000", "", ""); r.status != http.StatusTooManyRequests {
+		t.Fatalf("FIXTURE: fifteen wrong PINs from elsewhere did not lock sign-in from elsewhere: %d %s", r.status, r.body)
+	}
+	if r := signInAs(t, srv, p.number, signPIN, p.device, ""); r.status != http.StatusOK {
+		t.Fatalf("LOCKED OUT — after a stranger's fifteen wrong PINs, the member's own phone with the right PIN answered %d %s; want 200", r.status, r.body)
+	}
+}
+
 // =============================================================================
 // ONE ERROR FORMAT
 // =============================================================================

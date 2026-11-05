@@ -46,6 +46,7 @@ import (
 //	ambiguous_before_pin (D-21) routes a shared credential to an officer without checking the PIN
 //	one_account_per_record (over-strict) one person's two records counted as two people
 //	signin_ignores_lock  a locked account still signs in
+//	one_lock_all_devices one lock for every device: a stranger's wrong PINs lock the member's own phone (0022)
 type fakeService struct {
 	d   auth.Deps
 	brk string
@@ -113,7 +114,22 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	if found && f.brk != "per_credential_form" {
 		key = sha("user:" + user)
 	}
-	if (found || f.brk != "lock_real_only") && f.brk != "signin_ignores_lock" && f.recentFailures(ctx, key) >= 5 {
+	// The device first: two locks per account (0022), the member's own
+	// devices and any other.
+	known := false
+	var device any // the session runs on the device that signed it in, as the real service records (2026-10-23)
+	if found && req.DeviceToken != "" && f.brk != "always_code" {
+		if f.brk == "trust_client_token" {
+			known = true
+		} else {
+			var id string
+			if f.d.DB.QueryRow(ctx, `SELECT id::text FROM auth_devices WHERE user_id = $1 AND token_digest = $2 AND revoked_at IS NULL`,
+				user, sha(req.DeviceToken)).Scan(&id) == nil {
+				known, device = true, id
+			}
+		}
+	}
+	if (found || f.brk != "lock_real_only") && f.brk != "signin_ignores_lock" && f.recentFailures(ctx, key, device != nil, f.brk == "one_lock_all_devices") >= 5 {
 		return auth.Result{}, auth.ErrTryLater
 	}
 
@@ -127,7 +143,7 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	if found {
 		uid = user
 	}
-	f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, $3)`, uid, key, ok)
+	f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, device_id, succeeded) VALUES ($1, $2, $3, $4)`, uid, key, device, ok)
 	if !ok {
 		if !found && f.brk == "distinct_unknown" {
 			return auth.Result{}, errors.New("auth: no account with that number")
@@ -135,19 +151,6 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 		return auth.Result{}, auth.ErrRefused
 	}
 
-	known := false
-	var device any // the session runs on the device that signed it in, as the real service records (2026-10-23)
-	if req.DeviceToken != "" && f.brk != "always_code" {
-		if f.brk == "trust_client_token" {
-			known = true
-		} else {
-			var id string
-			if f.d.DB.QueryRow(ctx, `SELECT id::text FROM auth_devices WHERE user_id = $1 AND token_digest = $2 AND revoked_at IS NULL`,
-				user, sha(req.DeviceToken)).Scan(&id) == nil {
-				known, device = true, id
-			}
-		}
-	}
 	if known {
 		t := token()
 		if _, err := f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, device, sha(t)); err != nil {
@@ -223,12 +226,14 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 	return auth.Result{Challenge: challenge}, nil
 }
 
-func (f *fakeService) recentFailures(ctx context.Context, key string) int {
+// recentFailures: the failures of one lock, the member's own devices (own)
+// or any other; every device's when all is set (the one_lock_all_devices break).
+func (f *fakeService) recentFailures(ctx context.Context, key string, own, all bool) int {
 	var n int
 	f.d.DB.QueryRow(ctx, `SELECT count(*) FROM sign_in_attempts
-		WHERE credential_digest = $1 AND NOT succeeded
-		  AND at > coalesce((SELECT max(at) FROM sign_in_attempts WHERE credential_digest = $1 AND succeeded), '-infinity')
-		  AND at > now() - interval '15 minutes'`, key).Scan(&n)
+		WHERE credential_digest = $1 AND NOT succeeded AND ($3 OR (device_id IS NOT NULL) = $2)
+		  AND at > coalesce((SELECT max(at) FROM sign_in_attempts WHERE credential_digest = $1 AND succeeded AND ($3 OR (device_id IS NOT NULL) = $2)), '-infinity')
+		  AND at > now() - interval '15 minutes'`, key, own, all).Scan(&n)
 	return n
 }
 

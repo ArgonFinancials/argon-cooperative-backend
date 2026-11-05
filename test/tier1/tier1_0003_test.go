@@ -785,9 +785,24 @@ func (a *authT) attempt(user string, ok bool, d *dev) {
 		user, auth.TokenDigest("user:"+user), dv, ok), "sign-in attempt")
 }
 
+// own: the member's own device, one per account. The G tests are the lock on
+// the member's OWN devices: since 0022 (2026-11-05, the lockout split by
+// device) a device that is not theirs counts on a separate, timed-only lock
+// (tier1_0022_test.go), and these tests run against 0022 in the restore drill.
+var ownDevices = map[string]*dev{}
+
+func (a *authT) own(user string) *dev {
+	if d, ok := ownDevices[user]; ok {
+		return d
+	}
+	d := a.device(user)
+	ownDevices[user] = &d
+	return &d
+}
+
 func (a *authT) fails(user string, n int) {
 	for i := 0; i < n; i++ {
-		a.attempt(user, false, nil)
+		a.attempt(user, false, a.own(user))
 	}
 }
 
@@ -840,7 +855,7 @@ func TestAuthG4_SuccessDoesNotEraseLockoutHistory(t *testing.T) {
 	u := a.who("Member").user
 	a.fails(u, 5)
 	a.advance(16 * time.Minute)
-	a.attempt(u, true, nil)
+	a.attempt(u, true, a.own(u))
 	a.advance(time.Second) // after the success, not tied with it
 	a.fails(u, 5)
 	a.wantLockedFor("a second lockout after a successful sign-in", u, 30*time.Minute)
@@ -852,11 +867,11 @@ func TestAuthG4_SuccessDoesNotEraseLockoutHistory(t *testing.T) {
 func (a *authT) threeLockouts(u string) {
 	a.fails(u, 5)
 	a.advance(16 * time.Minute)
-	a.attempt(u, true, nil)
+	a.attempt(u, true, a.own(u))
 	a.advance(time.Second)
 	a.fails(u, 5)
 	a.advance(31 * time.Minute)
-	a.attempt(u, true, nil)
+	a.attempt(u, true, a.own(u))
 	a.advance(time.Second)
 	a.fails(u, 5)
 }
@@ -917,7 +932,7 @@ func TestAuthG_Control_FourFailuresThenSuccess(t *testing.T) {
 	u := a.who("Member").user
 	a.fails(u, 4)
 	a.advance(time.Second)
-	a.attempt(u, true, nil)
+	a.attempt(u, true, a.own(u))
 	if until, _ := a.lock(u); until != nil {
 		t.Fatalf("REFUSED — four wrong PINs then a right one locked the account")
 	}

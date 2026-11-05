@@ -1173,6 +1173,29 @@ components:
           enum: [open, paid, released]
         releaseReason: { type: string, nullable: true }
 
+    LockRelease:
+      type: object
+      required: [reason, pinProofId]
+      properties:
+        reason:
+          type: string
+          description: What happened, and how the member was identified in person. More than ten characters.
+        pinProofId:
+          type: string
+          format: uuid
+          description: The officer's own proof, minted for lock_release.
+
+    LockReleased:
+      type: object
+      required: [memberId, releasedAt, releasedBy]
+      properties:
+        memberId: { type: string, format: uuid }
+        releasedAt: { type: string, format: date-time }
+        releasedBy:
+          type: string
+          format: uuid
+          description: The officer who released it.
+
     ReleaseHold:
       type: object
       required: [reason]
@@ -2156,6 +2179,69 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "reason_required."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/lock-releases:
+    post:
+      operationId: releaseLock
+      x-argon-built: true
+      summary: An officer releases a member who is locked out of signing in, in person, saying why
+      description: |
+        TWO LOCKS PER ACCOUNT (0022, 2026-11-05). Wrong PINs on the member's
+        OWN devices lock 15 min, then 30, then until an officer releases it;
+        wrong PINs from any other device lock 15 min, then 30, then 48 hours,
+        never the officer. A release clears BOTH, and the failures before it
+        are not counted again: the member is in front of the officer.
+
+        The officer's own act, on their own step-up (a proof minted for
+        `lock_release`). The database's rules: a current officer of the
+        member's society, never the internal auditor; never their own lock; a
+        reason of more than ten characters; and a lock to release (a release
+        with nothing locked forgives the member's failures for nothing).
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LockRelease' }
+      responses:
+        '201':
+          description: Released. The member can sign in again, on any device.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LockReleased' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for lock_release, the caller's own, unspent); not_permitted (the internal auditor: read-only); conflict_of_interest (the caller's own lock: another officer releases it)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_locked (the member is not locked out: there is nothing to release)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required (more than ten characters: what happened, and how the member was identified)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

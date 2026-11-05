@@ -10,6 +10,7 @@
 //	unknown_skips_hash   an unregistered credential skips the PIN hash, so it answers sooner
 //	shared_first_match   a credential shared by two people signs in whichever is found first
 //	signin_ignores_lock  a locked account still signs in
+//	stranger_locks_own_phone one lock for every device: a stranger's wrong PINs lock the member's own phone (0022)
 //	expiry_from_surface  the session's reported length follows the surface, not the person
 //	signout_noop         sign-out answers 204 and ends nothing
 //	sms_failure_500      a refused code send is a bare 500
@@ -45,6 +46,8 @@ var signinServiceBreak = map[string]string{
 	"unknown_skips_hash":  "timing_fast_unknown",
 	"shared_first_match":  "first_match",
 	"signin_ignores_lock": "signin_ignores_lock",
+	// One lock for every device: a stranger's wrong PINs lock the member's own phone (0022).
+	"stranger_locks_own_phone": "one_lock_all_devices",
 	// The device cookie honoured whatever the device's state: the service
 	// trusts any device token it is handed.
 	"revoked_device_cookie_ok": "trust_client_token",

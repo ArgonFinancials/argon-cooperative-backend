@@ -31,7 +31,8 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 		valid = ``
 	}
 	var user string
-	if err := f.d.DB.QueryRow(ctx, `SELECT user_id::text FROM auth_sessions WHERE token_digest = $1 `+valid, sha(sessionToken)).Scan(&user); err != nil {
+	var device *string // the session's own device: the step-up counts on the member's own-device lock (0022)
+	if err := f.d.DB.QueryRow(ctx, `SELECT user_id::text, device_id::text FROM auth_sessions WHERE token_digest = $1 `+valid, sha(sessionToken)).Scan(&user, &device); err != nil {
 		return auth.Proof{}, auth.ErrNoSession
 	}
 	known := f.brk == "stepup_any_act"
@@ -47,7 +48,7 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	if f.brk == "stepup_own_counter" {
 		key = sha("stepup:" + user)
 	}
-	failures := f.recentFailures(ctx, key)
+	failures := f.recentFailures(ctx, key, device != nil, false)
 	if f.brk == "stepup_ignores_success" {
 		f.d.DB.QueryRow(ctx, `SELECT count(*) FROM sign_in_attempts WHERE credential_digest = $1 AND NOT succeeded
 			AND at > now() - interval '15 minutes'`, key).Scan(&failures)
@@ -62,7 +63,7 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 		verifyPHC(dummyPHC(), pin)
 	}
 	if (ok && f.brk != "stepup_success_silent") || (!ok && f.brk != "stepup_not_counted") {
-		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, $3)`, user, key, ok)
+		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, device_id, succeeded) VALUES ($1, $2, $3, $4)`, user, key, device, ok)
 	}
 	if !ok && f.brk != "stepup_mints_anyway" {
 		return auth.Proof{}, auth.ErrRefused

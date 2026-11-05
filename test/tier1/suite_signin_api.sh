@@ -22,6 +22,7 @@ declare -gA SVC_TARGET_OF=(
   [officer_any_society]='TestApiSignIn05_SessionDoesNotReachAnotherSociety'
   [unknown_says_why]='TestApiSignIn06_UnknownCredentialAndWrongPinAnswerIdentically'
   [unknown_skips_hash]='TestApiSignIn07_RefusalTimingDoesNotRevealRegistration'
+  [stranger_locks_own_phone]='TestApiSignIn15_AStrangersWrongPinsNeverLockTheMembersOwnPhone'
   [shared_first_match]='TestApiSignIn08_SharedPhoneAcrossSocietiesSignsNobodyIn'
   [expiry_from_surface]='TestApiSignIn09_ApproversSessionIsEightHoursOnAnySurface'
   [sms_failure_500]='TestApiSignIn10_NewDeviceWithoutSMSGoesToAnOfficerAndSaysWhy'

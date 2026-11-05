@@ -175,15 +175,6 @@ func (s *service) ambiguous(ctx context.Context, cands []candidate, credDigest, 
 }
 
 func (s *service) signInOne(ctx context.Context, c candidate, credDigest string, req SignInRequest) (Result, error) {
-	locked, err := s.locked(ctx, `SELECT locked_until, needs_officer FROM lock_state($1)`, c.user)
-	if err != nil {
-		return Result{}, err
-	}
-	ok := s.verify(c.pinHash, req.PIN)
-	if locked {
-		return Result{}, ErrTryLater
-	}
-
 	// A device is known only by a token this server issued to THIS person.
 	var deviceID *string
 	if req.DeviceToken != "" {
@@ -195,6 +186,22 @@ func (s *service) signInOne(ctx context.Context, c candidate, credDigest string,
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return Result{}, err
 		}
+	}
+
+	// TWO LOCKS (0022): the member's own devices, and any other. A stranger's
+	// wrong PINs never lock the member's own phone, so the device is known
+	// before the lock is read.
+	lock := `SELECT locked_until, needs_officer FROM lock_state($1)`
+	if deviceID == nil {
+		lock = `SELECT locked_until, needs_officer FROM lock_state_unknown_device($1)`
+	}
+	locked, err := s.locked(ctx, lock, c.user)
+	if err != nil {
+		return Result{}, err
+	}
+	ok := s.verify(c.pinHash, req.PIN)
+	if locked {
+		return Result{}, ErrTryLater
 	}
 
 	user := c.user
