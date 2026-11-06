@@ -7,10 +7,10 @@
 #
 # PUBLIC_PORTS defaults to 22 (sshd), and to 22 80 443 once the API has a
 # public name (ARGON_API_DOMAIN, 86-install-tls.sh). A public port is public
-# for ITS program only: 22 for sshd (or systemd, holding it for socket-
-# activated ssh), 80 and 443 for nginx. Anything else on them, or a listener
-# whose owner cannot be seen (run with sudo), is refused.
-# Tests: test/ops/going_live_test.sh L01-L07.
+# for ITS program only: 22 for sshd and systemd (holding it for socket-
+# activated ssh; either or both), 80 and 443 for nginx. Anything else on them,
+# or a listener whose owner cannot be seen (run with sudo), is refused.
+# Tests: test/ops/going_live_test.sh L01-L11.
 #
 # Run after every install step that can open a port; exit 1 names the offender.
 source "$(dirname "$0")/lib.sh"
@@ -19,11 +19,19 @@ if [[ -n ${ARGON_API_DOMAIN:-} ]]; then : "${PUBLIC_PORTS:=22 80 443}"; else : "
 
 # The programs holding a socket, from ss's users:(("nginx",pid=…),…): "nginx ".
 names() { grep -oE '\("[^"]+",' <<<"$1" | tr -d '(",' | sort -u | tr '\n' ' ' || true; }
+# only NAMES ALLOWED...: someone holds it, and every holder is allowed. One
+# socket can have several holders: with ssh.socket (Accept=no) systemd keeps 22
+# AND hands it to the sshd listener, so ss names both (finding 64).
+only() {
+  local n=$1 w; shift
+  [[ -n $n ]] || return 1
+  for w in $n; do [[ " $* " == *" $w "* ]] || return 1; done
+}
 owner_ok() {  # owner_ok PORT PROC: only the program this port is public for holds it
   local n; n=$(names "$2")
   case $1 in
-    22)     [[ $n == "sshd " || $n == "systemd " ]] ;;
-    80|443) [[ $n == "nginx " ]] ;;
+    22)     only "$n" sshd systemd ;;
+    80|443) only "$n" nginx ;;
     *)      [[ -n $n ]] ;;
   esac
 }

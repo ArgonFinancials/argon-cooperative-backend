@@ -26,10 +26,18 @@ M = {
  "render_hole_ok":     ({"R01"}, [(RP, "if grep -qE '@[A-Z_]+@' <<<\"$out\"; then", "if false; then")]),
  "render_empty_ok":    ({"R02"}, [(RP, '[[ -n ${!v:-} ]] || {', 'true || {')]),
  "loopback_80_always": ({"L01"}, [(LB, 'else : "${PUBLIC_PORTS:=22}"; fi', 'else : "${PUBLIC_PORTS:=22 80 443}"; fi')]),
- "loopback_any_owner": ({"L03", "L05", "L06"}, [(LB, '  local n; n=$(names "$2")', '  return 0')]),
+ "loopback_any_owner": ({"L03", "L05", "L06", "L09"}, [(LB, '  local n; n=$(names "$2")', '  return 0')]),
  "loopback_unseen_ok": ({"L06"}, [(LB, '  local n; n=$(names "$2")', '  [[ -z $2 ]] && return 0\n  local n; n=$(names "$2")')]),
  "loopback_8080_public": ({"L04"}, [(LB, '=22 80 443}"; else', '=22 80 443 8080}"; else')]),
- "loopback_sshd_only": ({"L07"}, [(LB, '[[ $n == "sshd " || $n == "systemd " ]]', '[[ $n == "sshd " ]]')]),
+ "loopback_sshd_only": ({"L07", "L08"}, [(LB, '22)     only "$n" sshd systemd ;;', '22)     only "$n" sshd ;;')]),
+ # The rule as it shipped in db1e763 and failed the deploy (finding 64): one
+ # holder per socket, so sshd and systemd together match neither.
+ "loopback_one_holder": ({"L08"}, [(LB, '22)     only "$n" sshd systemd ;;', '22)     [[ $n == "sshd " || $n == "systemd " ]] ;;')]),
+ # The easy wrong fix: one allowed holder is enough, whoever else holds it.
+ "loopback_any_holder": ({"L09"}, [(LB, 'for w in $n; do [[ " $* " == *" $w "* ]] || return 1; done', 'for w in $n; do [[ " $* " == *" $w "* ]] && return 0; done; return 1')]),
+ # The guard that does not fire: nothing beyond loopback is refused at all.
+ # L11 is the real socket; it runs where ss does (CI), and is skipped without it.
+ "loopback_stray_ok":  ({"L01", "L04", "L10", "L11"}, [(LB, "[[ $addr =~ ^127\\. || $addr == '[::1]' ]] && continue", "continue")]),
  "acme_no_challenge":  ({"N01"}, [(AC, 'location ^~ /.well-known/acme-challenge/ {', 'location ^~ /.well-known/not-the-challenge/ {')]),
  "http_proxies_post":  ({"N03"}, [(AC, "return 403 '{\"code\":\"tls_required\",\"message\":\"This API is served over HTTPS only.\"}';", "proxy_pass http://@UPSTREAM@;")]),
  "http_no_default":    ({"N04"}, [(AC, "    return 444;\n", "")]),

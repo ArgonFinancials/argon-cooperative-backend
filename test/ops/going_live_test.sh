@@ -7,7 +7,8 @@
 #       session cookie needs one registrable domain), and nothing else.
 #   L*  the loopback guard (deploy/75-assert-loopback.sh), fed fake `ss` and
 #       `docker` output: 80 and 443 are public only once the API has a public
-#       name, and only for nginx; 22 only for sshd.
+#       name, and only for nginx; 22 only for sshd (and systemd holding it
+#       for sshd). L11 is a real socket read by the real ss.
 #   N*  nginx itself, running the RENDERED templates (deploy/nginx/*.conf.in
 #       through deploy/nginx/render-public.sh, exactly as 86-install-tls.sh
 #       renders them) on high ports, with a self-signed certificate and a stub
@@ -142,6 +143,52 @@ if loopback "0.0.0.0:443 "; then red "unknown owner accepted"; else pass; fi
 T="L07 sshd by socket activation (systemd holding 22) passes"
 envf
 if loopback "0.0.0.0:22 users:((\"systemd\",pid=1,fd=50))"; then pass; else red "refused: $(tail -3 "$W/l.out")"; fi
+
+# The instance's own lines (ss -Htlnp, 2026-11-05, OpenSSH 10.2, ssh.socket
+# Accept=no): systemd holds 22 AND hands it to the sshd listener, so ONE socket
+# has TWO holders. L07 and $SSHD each modelled one of them; the deploy met both
+# and failed (finding 64). Sessions are sshd-session processes and hold no
+# listening socket, so an open session does not change these lines.
+SSHD_REAL4='users:(("sshd",pid=3175703,fd=3),("systemd",pid=1,fd=147))'
+SSHD_REAL6='users:(("sshd",pid=3175703,fd=4),("systemd",pid=1,fd=148))'
+
+T="L08 the instance's real sshd lines (sshd and systemd both holding 22, v4 and v6) pass"
+envf
+if loopback "0.0.0.0:22 $SSHD_REAL4" "[::]:22 $SSHD_REAL6"; then pass; else red "refused: $(tail -3 "$W/l.out")"; fi
+
+T="L09 22 held by sshd and systemd AND anything else is refused"
+if loopback "0.0.0.0:22 users:((\"sshd\",pid=900,fd=3),(\"systemd\",pid=1,fd=50),(\"python3\",pid=1300,fd=3))"; then red "a third holder on 22 accepted"; else pass; fi
+
+T="L10 beside the real sshd lines, a stray listener beyond loopback is refused, and named"
+if loopback "0.0.0.0:22 $SSHD_REAL4" "[::]:22 $SSHD_REAL6" "0.0.0.0:5432 users:((\"postgres\",pid=700,fd=7))"; then red "5432 accepted"
+elif grep -q 'beyond loopback: 0.0.0.0:5432 ' "$W/l.out" && ! grep -q 'port 22 is public' "$W/l.out"; then pass
+else red "refused, but not for 5432 alone: $(tail -3 "$W/l.out")"; fi
+
+# L11: a REAL socket, read by the real ss, not a fixture. A listener bound to
+# 0.0.0.0 on a free port must be named by the guard; the same run before it
+# existed must not name that port (the control: the port is what fired). The
+# host's other listeners may be refused too (not run as root, their owners
+# are not visible); this test reads only its own port. Needs Linux ss: skipped
+# without it locally, red without it in CI.
+T="L11 a real listener on 0.0.0.0, seen by the real ss, is refused and named"
+if ! ss -Htln >/dev/null 2>&1; then
+  if [[ -n ${CI:-} ]]; then red "no ss here: the real-socket proof did not run"; else echo "  skip $T (no ss here)"; fi
+else
+  "$PY" -c 'import socket,sys,time
+s=socket.socket(); s.bind(("0.0.0.0",0)); s.listen(); print(s.getsockname()[1], flush=True); time.sleep(60)' >"$W/real.port" &
+  REAL_PID=$!
+  for _ in $(seq 50); do [[ -s $W/real.port ]] && break; sleep 0.1; done
+  P=$(head -1 "$W/real.port")
+  envf
+  ARGON_ENV="$W/l.env" bash "$D/75-assert-loopback.sh" >"$W/real.out" 2>&1; rc=$?
+  kill "$REAL_PID" 2>/dev/null; wait "$REAL_PID" 2>/dev/null
+  ARGON_ENV="$W/l.env" bash "$D/75-assert-loopback.sh" >"$W/real0.out" 2>&1
+  if [[ -z $P ]]; then red "the listener never started"
+  elif ((rc == 0)); then red "a real listener on 0.0.0.0:$P passed"
+  elif ! grep -qE "beyond loopback: 0\.0\.0\.0:$P " "$W/real.out"; then red "refused, but $P not named: $(grep '!!' "$W/real.out" | head -3)"
+  elif grep -qE "0\.0\.0\.0:$P " "$W/real0.out"; then red "the control named $P with no listener: the port proves nothing"
+  else pass; fi
+fi
 
 # ---------------------------------------------------------------------------
 # N: nginx running the rendered templates
