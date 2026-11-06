@@ -24,6 +24,8 @@ for d in "$M"/*/; do
   elif [[ " $reds" == *" N00 "* ]]; then v="NGINX DID NOT START: the copy proves nothing"; bad=1
   else v="red as expected"; fi
   echo "$n | expect $exp | red: $reds| $v"
+  # Which rule refused, not only that one did: each expected test's own reason.
+  for e in $exp; do grep -E "^  RED  $e " "$d/log" | head -1 | cut -c1-400 | sed 's/^  RED  /      why: /'; done
 done
 ((bad)) && { echo "SABOTAGE NOT CAUGHT"; exit 1; }
 echo "every sabotaged copy was caught"

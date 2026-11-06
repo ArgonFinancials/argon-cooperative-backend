@@ -294,7 +294,7 @@ T="P01 apply.sh takes nginx from 85's site to the public one: nginx then listens
 if ! from85; then red "nginx would not start on 85's site"
 else
   go_public
-  if ! apply "0.0.0.0:$PP"; then red "apply.sh refused: $(tail -4 "$W/apply.out")"
+  if ! apply "0.0.0.0:$PP"; then red "apply.sh refused: $(grep -E 'bind\(\)|FATAL' "$W/apply.out" | tail -2 | tr -s '\n ' ' ')"
   elif ! held "0.0.0.0:$PP"; then red "apply.sh said ok and nginx does not listen on 0.0.0.0:$PP"
   else pass; fi
 fi
@@ -316,7 +316,7 @@ T="P02 a restart that changes nothing is caught: apply.sh refuses, naming the ad
 if ! from85; then red "nginx would not start on 85's site"
 else
   go_public
-  if FAKE_CTL=lying apply "0.0.0.0:$PP"; then red "apply.sh said ok with nothing on 0.0.0.0:$PP"
+  if FAKE_CTL=lying apply "0.0.0.0:$PP"; then red "apply.sh said ok with nothing on 0.0.0.0:$PP ($(held "0.0.0.0:$PP" || echo 'confirmed: not listening'))"
   elif ! grep -q "does not listen on 0.0.0.0:$PP" "$W/apply.out"; then red "refused, but not for the listener: $(tail -3 "$W/apply.out")"
   elif ! grep -q "bind() to 0.0.0.0:$PP failed" "$W/apply.out"; then red "refused without nginx's reason: $(tail -3 "$W/apply.out")"
   else pass; fi

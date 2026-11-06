@@ -83,10 +83,20 @@ chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/argon-nginx-reload
 render argon-api-tls.conf.in argon-api-tls
 apply 0.0.0.0:80 0.0.0.0:443
 
-# 5. Through nginx, on this host (independent of the security group).
-r=(--resolve "$D:443:127.0.0.1" --resolve "$D:80:127.0.0.1" -s -o /dev/null)
-c=$(curl "${r[@]}" -w '%{http_code}' -X POST "http://$D/auth/sign-in")
-[[ $c == 403 ]] || die "plain-HTTP sign-in on port 80 answered $c, not 403 tls_required"
+# 5. Through nginx, on this host (independent of the security group), at the
+#    instance's PRIVATE address. nginx picks a server by the address a request
+#    arrives on before its name, so on 127.0.0.1 it is 85's loopback site that
+#    answers, never the public one: checked there, the sign-in refusal passed on
+#    85's text and the redirect could never be seen (finding 68; E02 proves it).
+tok=$(curl -sf -m 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') ||
+  die "cannot reach the instance metadata service"
+priv=$(curl -sf -m 5 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/local-ipv4) ||
+  die "this instance has no private IPv4 address"
+r=(--resolve "$D:443:$priv" --resolve "$D:80:$priv" -s -o /dev/null)
+# The public site's refusal, by text only it has (85's names /healthz).
+body=$(curl -s --resolve "$D:80:$priv" -X POST "http://$D/auth/sign-in")
+[[ $body == *'"tls_required"'*'HTTPS only."}'* ]] ||
+  die "plain-HTTP sign-in at $priv:80 was not the public site's tls_required refusal: '${body:0:160}'"
 c=$(curl "${r[@]}" -w '%{http_code}' "http://$D/healthz")
 [[ $c == 301 ]] || die "plain-HTTP GET on port 80 answered $c, not a redirect"
 hsts=$(curl "${r[@]}" -D - "https://$D/healthz" | tr -d '\r' | awk 'tolower($0) ~ /^strict-transport-security:/')
