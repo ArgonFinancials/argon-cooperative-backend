@@ -213,12 +213,13 @@ components:
         contribution_record, withdrawal_payout (0011) and withdrawal_authorisation
         (0012) were missing here and from the auth service until 2026-10-14
         (finding 36, finding 24 recurring): no client could step up to record or
-        authorise money.
+        authorise money. enrolment_issue (0024): an officer issuing an enrolment
+        code; caught by TestApiMoney01 before it shipped.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
-             withdrawal_request]
+             withdrawal_request, enrolment_issue]
 
     PinProofRequest:
       type: object
