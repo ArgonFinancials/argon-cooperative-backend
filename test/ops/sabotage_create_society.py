@@ -26,6 +26,7 @@ M = {
  "value_optional": ({"S03"}, [('blank "${v[$f]-}" && die', 'false && die')]),
  "login_unrecorded": ({"S04"}, [('-v login="$login"', '-v login="operator"')]),
  "refusal_swallowed": ({"S05"}, [("  -f - <<'SQL'", "  -f - 2>/dev/null <<'SQL'")]),
+ "db_defaults": ({"S07"}, [("confirm=0 db=\n", "confirm=0 db=$ARGON_DB\n")]),
  "words_mangled": ({"S06"}, [('-v op="${v[operator]}"', '-v op="${v[operator]//\\"/}"')]),
 }
 

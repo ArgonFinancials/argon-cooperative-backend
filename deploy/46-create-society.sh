@@ -7,8 +7,11 @@
 #       --registration "LSCS/2019/0412" --directorate Lagos \
 #       --withdrawal-quorum N --write-off-quorum N --signature-count N \
 #       --operator "Your Name" --reason "why" \
-#       --resolution "minutes reference" --resolution-date YYYY-MM-DD [--confirm]
-#   (--db NAME, default ARGON_DB from the env file)
+#       --resolution "minutes reference" --resolution-date YYYY-MM-DD --db NAME [--confirm]
+#
+# --db is required, with no default: a default that silently picks a different
+# target is worse than none (finding 69: a missing --db fell back to the env
+# file's ARGON_DB, and the failures looked like the tests failing).
 #
 # Every value is required: the founding resolution sets all three quorums, and
 # none has a default. The society starts as a prospect, on the standard chart,
@@ -33,7 +36,7 @@ usage() { sed -n '5,11p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 
 declare -A v=()
 flags="code name registration directorate withdrawal-quorum write-off-quorum signature-count operator reason resolution resolution-date"
-confirm=0 db=$ARGON_DB
+confirm=0 db=
 while (($#)); do
   case $1 in
     --confirm) confirm=1; shift ;;
@@ -63,7 +66,7 @@ for f in withdrawal-quorum write-off-quorum signature-count; do
   [[ ${v[$f]} =~ ^[0-9]+$ ]] || die "--$f '${v[$f]}' is not a whole number"
 done
 [[ ${v[resolution-date]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "--resolution-date '${v[resolution-date]}' is not YYYY-MM-DD"
-[[ -n $db ]] || die "--db is empty and ARGON_DB is not set"
+[[ -n $db ]] || die "--db is required: name the database (on the server, the one in ARGON_DB). The script never chooses one itself (finding 69)."
 
 # The server login: as 45 records it, and labelled the same way (45 says why).
 login="$(id -un)@$(hostname) [login, verified by id -un]"

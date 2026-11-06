@@ -167,6 +167,19 @@ run --operator "$who" --confirm
 got=$(sql "SELECT operator_name FROM society_settings_log l JOIN societies s ON s.id = l.society_id WHERE s.code = '$C' AND setting = 'founded'")
 [[ $got == "$who" ]] && pass || red "recorded '$got'"
 
+# Finding 69: a missing --db fell back to the env file's ARGON_DB, the
+# developer's own database; every call failed there, and it looked like the
+# tests failing, not the target being wrong. No default target: --db or nothing.
+# (The env file here names a database that does not exist, so even a script
+# that still falls back reaches nothing real.)
+T="S07 without --db it refuses, naming --db: it never chooses a database itself"
+code; envf "BACKUP_STORE=s3://$BUCKET/prod" "ARGON_DB=argon_verify_no_such_db"
+RC=0; mapfile -d '' a < <(args)
+env -u SUDO_USER PATH="$W/bin:$PATH" ARGON_ENV="$W/env" bash "$SCRIPT" "${a[@]}" --confirm >"$OUT" 2>&1 </dev/null || RC=$?
+if ((RC == 0)) || [[ $(founded "$C") != 0 ]]; then red "founded with no --db"
+elif ! grep -q -- '--db is required' "$OUT"; then red "refused, but not for the missing --db: $(tail -2 "$OUT")"
+else pass; fi
+
 echo
 if ((${#RED[@]})); then echo "RED: ${RED[*]}"; exit 1; fi
 echo "all create-society tests pass"
