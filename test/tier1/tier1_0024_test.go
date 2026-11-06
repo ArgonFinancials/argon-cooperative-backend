@@ -121,12 +121,27 @@ func operatorIssue(member, digest, operator, login, reason string) (string, erro
 
 const enrolWhy = "Handing the founding treasurer their enrolment slip"
 
+// redeemSQL: the redemption the schema has. 0024's took (user, digest); 0025
+// replaced it with one that also trusts and records the device (a fresh token
+// digest per call). This suite's rules are the code's, the same in both, so
+// its mutation runs (0024's base) and GREEN (every migration) call each the
+// one that exists. $1 user, $2 digest; returns the code's id or NULL.
+func redeemSQL(t *testing.T) string {
+	t.Helper()
+	var has bool
+	fixture(t, db.QueryRow(bg(), `SELECT to_regprocedure('enrolment_redeem(uuid,text,text)') IS NOT NULL`).Scan(&has), "the redemption's shape")
+	if has {
+		return `SELECT code_id::text FROM enrolment_redeem($1, $2, '` + digest() + `')`
+	}
+	return `SELECT enrolment_redeem($1, $2)::text`
+}
+
 // redeem: the code the person typed, as the auth service would check it.
 // Returns the code's id, or "" when it is not accepted.
 func redeem(t *testing.T, user, code string) string {
 	t.Helper()
 	var id *string
-	fixture(t, db.QueryRow(bg(), `SELECT enrolment_redeem($1, $2)::text`, user, digestOf(code)).Scan(&id), "a redemption")
+	fixture(t, db.QueryRow(bg(), redeemSQL(t), user, digestOf(code)).Scan(&id), "a redemption")
 	if id == nil {
 		return ""
 	}
@@ -366,7 +381,7 @@ func TestEnrol16_ACodeExpiresAfterThirtyDays(t *testing.T) {
 	_, onTime := w.officerIssues(t, w.other, w.otherMem)
 	try := func(user, code string) string {
 		var id *string
-		fixture(t, a.c.QueryRow(bg(), `SELECT enrolment_redeem($1, $2)::text`, user, digestOf(code)).Scan(&id), "a redemption")
+		fixture(t, a.c.QueryRow(bg(), redeemSQL(t), user, digestOf(code)).Scan(&id), "a redemption")
 		if id == nil {
 			return ""
 		}

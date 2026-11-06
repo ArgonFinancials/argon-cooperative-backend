@@ -166,7 +166,14 @@ BEGIN
     GRANT INSERT (id, user_id, member_id, code_digest, issued_by_act) ON enrolment_codes TO argon_app;
     GRANT SELECT (id, user_id, member_id, issued_at, expires_at, issued_by_act, issued_by_operator, replaces_id,
                   wrong_tries, used_at, voided_at, void_reason) ON enrolment_codes TO argon_app;
-    GRANT EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT) TO argon_auth;
+    -- 0025: the redemption trusts and names the device; 0024's (no device) is
+    -- dropped there. An officer sees from what device a slip was redeemed.
+    IF to_regprocedure('enrolment_redeem(uuid,text,text)') IS NOT NULL THEN
+      GRANT SELECT (used_device_id) ON enrolment_codes TO argon_app;
+      GRANT EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT, TEXT) TO argon_auth;
+    ELSE
+      GRANT EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT) TO argon_auth;
+    END IF;
   END IF;
 END $$;
 

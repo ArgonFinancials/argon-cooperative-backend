@@ -578,8 +578,12 @@ probe req P52 argon_app '42501.*permission denied for table enrolment_codes' "ap
   "INSERT INTO enrolment_codes (user_id, member_id, code_digest, issued_by_operator, operator_login, operator_reason) VALUES ($U1, $M1, repeat('a', 64), 'app', 'app', 'app');"
 probe req P53 argon_app '42501.*permission denied for function operator_issue_enrolment' "app issues a code through the operator's function" \
   "SELECT operator_issue_enrolment($M1, repeat('a', 64), 'app', 'app', 'app');"
+# The redemption the copy has: 0025's trusts and names a device; 0024's did not.
+redeem_sql="SELECT enrolment_redeem($U1, repeat('a', 64));"
+[[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('enrolment_redeem(uuid,text,text)') IS NOT NULL)::int" </dev/null) == 1 ]] &&
+  redeem_sql="SELECT * FROM enrolment_redeem($U1, repeat('a', 64), repeat('b', 64));"
 probe req P54 argon_app '42501.*permission denied for function enrolment_redeem' "app redeems a code (the auth service's)" \
-  "SELECT enrolment_redeem($U1, repeat('a', 64));"
+  "$redeem_sql"
 probe req P55 argon_app '42501.*permission denied for table enrolment_codes' "app reads the enrolment code digests" \
   "SELECT code_digest FROM enrolment_codes LIMIT 1;"
 # (No P56, "the auth service issues a code": with the INSERT wrongly granted it
