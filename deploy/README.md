@@ -19,6 +19,7 @@ server with `ARGON_HOST=1`), or `host` (a native server install).
 | `40-migrate.sh` | all | Migrate as argon_migrator, then `sql/grants.sql`. Host: backup first, `--confirm`. |
 | `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
 | `60-restore.sh` | all | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
+| `46-create-society.sh` | server | Founds a society on its founding resolution (0023): the three quorums, the standard chart, a head office. Refuses while `BACKUP_STORE` is not `s3://` or the newest passing drill is over 8 days old. |
 | `70-verify-tier1.sh` | all | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
 | `65-check-freshness.sh` | server | Newest dump, newest passing drill, timers enabled: raises an alert if any is stale. Daily via `argon-freshness.timer`. |
 | `alert.sh` | server | Raise / list / acknowledge alerts: journal, SSH login banner, and `ALERT_CHANNEL`. |
@@ -489,6 +490,28 @@ the schema or the tests *appears to* depend on text sort order: ordering is
 by time, id or number, and uniqueness is exact. "Appears to" is the accurate
 claim; no test establishes it. A result that depends on how two strings sort
 should be checked on EC2, not trusted from a Windows run.
+
+## Founding a society: the operator (`46-create-society.sh`)
+
+A society is founded by the operator on its FOUNDING RESOLUTION, which sets
+all three quorums (withdrawals, write-offs, other governed acts; each at least
+2, none defaulted). It starts as a prospect, on the standard chart (one account
+per posting role, the same for every society; it adds its own general
+accounts after), with a head office. Then its first officers and their
+enrolment codes (next piece).
+
+```bash
+E=ARGON_ENV=/etc/argon/deploy.env
+sudo $E bash deploy/46-create-society.sh --code LAG001   --name "Ikeja Teachers' Cooperative Society" --registration "LSCS/2019/0412" --directorate Lagos   --withdrawal-quorum 2 --write-off-quorum 3 --signature-count 2   --operator "Your Name" --reason "Onboarding on the founding resolution"   --resolution "Founding resolution, inaugural meeting, item 3" --resolution-date 2026-09-30
+# shows the founding; add --confirm to found it
+```
+
+**It refuses while backups are not off the instance and proven** (§12, "Reachable
+is not ready"): `BACKUP_STORE` must be `s3://`, and the store's newest passing
+drill at most 8 days old. The 8 days are the script's, not the env file's.
+**The gate is the script's alone, deliberately:** the database could only know
+through a row someone writes, and the owner can write that row by hand, so a
+database half would be a check satisfied by asserting the thing it checks.
 
 ## A society's rules: the operator (`45-society-settings.sh`)
 

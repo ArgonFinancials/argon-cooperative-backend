@@ -21,13 +21,8 @@ on_server || die "65-check-freshness.sh is for the server (ARGON_HOST=1)"
 
 problems=(); cert_failed=0
 now=$(date -u +%s)
-# Keys carry their UTC time: dumps/…/argon-20261003T053515Z[-label].dump,
-# drills/…/drill-20261003T053548Z.ok. Same on S3 and on disk.
-# A key with no readable time counts as infinitely old (stale), never as an
-# error: under set -e a failing assignment would end this check SILENTLY.
-age_of() { local ts; ts=$(grep -oE '[0-9]{8}T[0-9]{6}Z' <<<"$1" | head -1 || true)
-  if [[ -z $ts ]]; then echo 999999999; return; fi
-  echo $(( now - $(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s) )); }
+# Keys carry their UTC time; age_of (lib.sh) reads it, and counts a key with no
+# readable time as stale, never as an error.
 
 dump=$(store_latest_dump || true)
 if [[ -z $dump ]]; then problems+=("no dump at all in $BACKUP_STORE/dumps")
@@ -35,10 +30,7 @@ else a=$(age_of "$dump"); h=$((a / 3600))
   ((a <= BACKUP_MAX_AGE_H * 3600)) && ok "newest dump ${h}h old: $dump" || problems+=("newest dump is ${h}h old (limit ${BACKUP_MAX_AGE_H}h): $dump")
 fi
 
-case "$BACKUP_STORE" in
-  s3://*)   drill=$(aws s3 ls --recursive "$BACKUP_STORE/drills/" | awk '{print $4}' | grep '\.ok$' | sort | tail -1 || true) ;;
-  file://*) drill=$(cd "${BACKUP_STORE#file://}" 2>/dev/null && find drills -name '*.ok' | sort | tail -1 || true) ;;
-esac
+drill=$(store_newest_drill)
 if [[ -z $drill ]]; then problems+=("no passing drill recorded in $BACKUP_STORE/drills")
 else a=$(age_of "$drill"); d=$((a / 86400))
   ((a <= DRILL_MAX_AGE_D * 86400)) && ok "newest passing drill ${d}d old: $drill" || problems+=("newest PASSING drill is ${d}d old (limit ${DRILL_MAX_AGE_D}d): $drill")

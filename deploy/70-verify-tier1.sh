@@ -501,6 +501,11 @@ if [[ $has_operator == 1 ]]; then
 probe req P36 argon_app '42501.*permission denied for function operator_set_withdrawal_quorum' "app sets its society's withdrawal quorum through the operator's function"   "SELECT operator_set_withdrawal_quorum($S, 2, 'app', 'app', 'none', current_date, 'app');"
 probe req P37 argon_app '42501.*permission denied for function operator_add_charge_series' "app adds a charge series through the operator's function"   "SELECT operator_add_charge_series($S, 'withdrawal_out', 'argon_margin', current_date, 'app', '[]'::jsonb, 'app', 'app', 'app');"
 probe req P38 argon_app '42501.*permission denied for function operator_set_lifecycle' "app moves its society's lifecycle through the operator's function"   "SELECT operator_set_lifecycle($S, 'active', 'app', 'app', 'app');"
+has_founding=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.standard_chart') IS NOT NULL)::int" </dev/null)
+[[ $has_founding == 1 ]] || info "schema before 0023: no founding function to probe (P51 not run)"
+if [[ $has_founding == 1 ]]; then
+probe req P51 argon_app '42501.*permission denied for function operator_create_society' "app founds a society through the operator's function"   "SELECT operator_create_society('APP', 'App Cooperative', 'X/1', 'Lagos', 2, 2, 2, 'app', 'app', 'none', current_date, 'app');"
+fi
 probe req P39 argon_app '42501.*permission denied for table society_settings_log' "app writes into the log of who changed a society's rules"   "INSERT INTO society_settings_log (society_id, setting, new_value) VALUES ($S, 'withdrawal_signatures_required', '1');"
 fi
 

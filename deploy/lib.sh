@@ -182,6 +182,23 @@ store_latest_dump() {  # prints key of newest *.dump
       (cd "$d" && find dumps -name '*.dump' 2>/dev/null | sort | tail -1) ;;
   esac
 }
+# The key of the newest passing drill (drills/YYYY/MM/DD/drill-<UTC>.ok: only
+# a PASSING drill writes one, 60-restore.sh), or nothing. ONE function for the
+# freshness check (65) and society creation (46): the two can never disagree
+# about what "a passing drill" is.
+store_newest_drill() {
+  case "$BACKUP_STORE" in
+    s3://*)   aws s3 ls --recursive "$BACKUP_STORE/drills/" | awk '{print $4}' | grep '\.ok$' | sort | tail -1 || true ;;
+    file://*) (cd "${BACKUP_STORE#file://}" 2>/dev/null && find drills -name '*.ok' | sort | tail -1) || true ;;
+  esac
+}
+# Seconds since the UTC time in a store key's name (argon-20261003T053515Z…,
+# drill-20261003T053548Z.ok). A key with no readable time counts as infinitely
+# old (stale), never as an error: under set -e a failing assignment would end
+# the caller SILENTLY.
+age_of() { local ts; ts=$(grep -oE '[0-9]{8}T[0-9]{6}Z' <<<"$1" | head -1 || true)
+  if [[ -z $ts ]]; then echo 999999999; return; fi
+  echo $(( $(date -u +%s) - $(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s) )); }
 
 # Deterministic manifest of a database's state. Compared byte-for-byte after a
 # restore, so every line must be stable: counts, the ledger sum, the Tier 1
