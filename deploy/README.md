@@ -373,9 +373,18 @@ sudo $E bash deploy/alert.sh list                              # it is there; wi
 sudo $E bash deploy/alert.sh ack all
 ```
 
-From outside: `curl -sI https://<api name>/healthz` gives 200 with a
-`strict-transport-security` header; `curl -sI http://<api name>/healthz` gives
-301. A deploy does not re-render nginx: after a release that changes
+From outside, with GET: `/healthz` is GET only, so `curl -I` (a HEAD) gets 405
+whatever the state, and its answer has no body, so a plain `curl` prints nothing
+(corrected 2026-11-06: this said `curl -sI`, expecting 200).
+
+```bash
+A=https://<api name>
+curl -s -o /dev/null -w '%{http_code}\n' "$A/healthz"                                  # 200 (503: the database is unreachable)
+curl -s -D - -o /dev/null "$A/healthz" | grep -i '^strict-transport-security'          # max-age=31536000
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://<api name>/healthz"   # 301 https://<api name>/healthz
+```
+
+A deploy does not re-render nginx: after a release that changes
 `deploy/nginx/`, run 86 again (it keeps the certificate).
 
 ## Alerts
