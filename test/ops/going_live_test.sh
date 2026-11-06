@@ -43,6 +43,7 @@ NGX_PID=""; UP_PID=""
 cleanup() {
   declare -F stop_nginx >/dev/null && stop_nginx
   declare -F stop_upstream >/dev/null && stop_upstream
+  [[ -x $W/pbin/pctl ]] && "$W/pbin/pctl" stop
   rm -rf "$W"
 }
 trap cleanup EXIT
@@ -188,6 +189,139 @@ s=socket.socket(); s.bind(("0.0.0.0",0)); s.listen(); print(s.getsockname()[1], 
   elif ! grep -qE "beyond loopback: 0\.0\.0\.0:$P " "$W/real.out"; then red "refused, but $P not named: $(grep '!!' "$W/real.out" | head -3)"
   elif grep -qE "0\.0\.0\.0:$P " "$W/real0.out"; then red "the control named $P with no listener: the port proves nothing"
   else pass; fi
+fi
+
+# The instance's env file has "PUBLIC_PORTS=22" (line 46, copied from the
+# example file at install; read 2026-11-06). No fixture above had it, and with
+# it the guard ignored the API's public name (finding 67).
+T="L12 the instance's PUBLIC_PORTS=22 line does not hide going live: nginx on 80 and 443 pass"
+envf "PUBLIC_PORTS=22" "ARGON_API_DOMAIN=api-coop.example.com"
+if ! loopback "0.0.0.0:22 $SSHD_REAL4" "0.0.0.0:80 $NGX" "0.0.0.0:443 $NGX"; then red "refused: $(grep '!!' "$W/l.out" | head -3)"
+elif ! grep -q 'PUBLIC_PORTS ("22") in .* is not read' "$W/l.out"; then red "passed, but the line was ignored without saying so"
+else pass; fi
+
+T="L13 a PUBLIC_PORTS line cannot open a port either: 8080 listed there is still refused"
+envf 'PUBLIC_PORTS="22 80 443 8080"'
+if loopback "0.0.0.0:22 $SSHD_REAL4" "0.0.0.0:8080 $PYP"; then red "8080 accepted from the env file's list"; else pass; fi
+
+# ---------------------------------------------------------------------------
+# E, P: going public FROM 85's state, with real nginx, as the server does it:
+# 85's own site (deploy/nginx/argon.conf) listening on 127.0.0.1, then 86's
+# port-80 site added on 0.0.0.0, same port. The N tests below start nginx on
+# the public sites alone, fresh: a state the server is never in (finding 66).
+#   E*  what nginx does (evidence, not our code): if one goes red, the
+#       diagnosis it backs was wrong, and so is the fix built on it.
+#   P*  deploy/nginx/apply.sh, the step 86 applies each change with.
+# Linux only (the bind rule, ss, a non-loopback address): skipped without them
+# locally, red without them in CI.
+PP=18990
+PW="$W/pub"; PB="$W/pbin"
+plinux() { [[ $(uname -s) == Linux ]] && command -v "$NGINX_BIN" >/dev/null && ss -Htln >/dev/null 2>&1 && [[ -n $(lan_ip) ]]; }
+lan_ip() { hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | grep -v '^127\.' | head -1; }
+if ! plinux; then
+  if [[ -n ${CI:-} ]]; then for t in E01 E02 P01 P02; do T="$t"; red "needs Linux, nginx, ss and a non-loopback address: did not run"; done
+  else echo "  skip E01 E02 P01 P02 (not Linux with nginx and ss)"; fi
+else
+LAN=$(lan_ip)
+mkdir -p "$PW/conf/sites" "$PW/logs" "$PW/temp" "$PB" "$W/acme2"
+# 85's site exactly as shipped, on the test's port: only the port is changed.
+sed "s/listen 127\.0\.0\.1:80 default_server;/listen 127.0.0.1:$PP default_server;/" "$D/nginx/argon.conf" >"$PW/loopback.conf"
+grep -q "listen 127.0.0.1:$PP default_server;" "$PW/loopback.conf" || { T=E00; red "85's site no longer has the listen line this fixture rewrites"; }
+# 86's port-80 site, rendered as 86 renders it, on 0.0.0.0 and the same port.
+NGX_API_DOMAIN=api-coop.test NGX_APP_ORIGIN=https://coop.test NGX_UPSTREAM=127.0.0.1:18981 \
+NGX_HTTP_LISTEN="0.0.0.0:$PP" NGX_HTTPS_LISTEN="0.0.0.0:18991" NGX_CERT=/x NGX_KEY=/x NGX_ACME_ROOT="$W/acme2" \
+  bash "$D/nginx/render-public.sh" "$D/nginx/argon-acme.conf.in" >"$PW/acme.conf" || { T=E00; red "the port-80 site did not render"; }
+cat >"$PW/conf/nginx.conf" <<EOF
+worker_processes 1;
+error_log $PW/logs/error.log warn;
+pid $PW/logs/nginx.pid;
+events { worker_connections 64; }
+http {
+  access_log off;
+  client_body_temp_path $PW/temp/body; proxy_temp_path $PW/temp/proxy; fastcgi_temp_path $PW/temp/fastcgi;
+  uwsgi_temp_path $PW/temp/uwsgi; scgi_temp_path $PW/temp/scgi;
+  include $PW/conf/sites/*.conf;
+}
+EOF
+# pctl: this test's nginx, the way systemd drives the server's.
+cat >"$PB/pctl" <<EOF
+#!/usr/bin/env bash
+N=("$NGINX_BIN" -e "$PW/logs/error.log" -p "$PW/" -c "$PW/conf/nginx.conf")
+case \$1 in
+  start)  "\${N[@]}" 2>>"$PW/logs/ctl.out" ;;
+  stop)   "\${N[@]}" -s stop 2>/dev/null; for _ in \$(seq 50); do [[ -s "$PW/logs/nginx.pid" ]] || break; sleep 0.1; done ;;
+  reload) "\${N[@]}" -s reload 2>>"$PW/logs/ctl.out" ;;
+  test)   "\${N[@]}" -t ;;
+esac
+EOF
+# apply.sh's nginx and systemctl, pointed at pctl. FAKE_CTL=lying: a restart
+# that reports success and changes nothing, as the instance's reload did.
+cat >"$PB/nginx" <<EOF
+#!/usr/bin/env bash
+exec "$PB/pctl" test
+EOF
+cat >"$PB/systemctl" <<EOF
+#!/usr/bin/env bash
+case "\$1:\${FAKE_CTL:-}" in
+  restart:lying|reload:*) "$PB/pctl" reload ;;
+  restart:*) "$PB/pctl" stop; "$PB/pctl" start ;;
+esac
+EOF
+chmod +x "$PB/pctl" "$PB/nginx" "$PB/systemctl"
+held() { ss -Htlnp | awk -v a="$1" '$4 == a' | grep -q '("nginx",'; }
+# State 85 leaves: its site alone, nginx running. Never someone else's port.
+from85() {
+  "$PB/pctl" stop; : >"$PW/logs/error.log"
+  rm -f "$PW/conf/sites/"*.conf; cp "$PW/loopback.conf" "$PW/conf/sites/argon.conf"
+  if (exec 3<>"/dev/tcp/127.0.0.1/$PP") 2>/dev/null; then echo "  port $PP already answers: refusing to test it"; return 1; fi
+  "$PB/pctl" start
+  for _ in $(seq 50); do held "127.0.0.1:$PP" && break; sleep 0.1; done
+  held "127.0.0.1:$PP" && ! held "0.0.0.0:$PP"
+}
+go_public() { cp "$PW/acme.conf" "$PW/conf/sites/argon-acme.conf"; }
+apply() { NGX_NGINX="$PB/nginx" NGX_SYSTEMCTL="$PB/systemctl" NGX_ERROR_LOG="$PW/logs/error.log" bash "$D/nginx/apply.sh" "$@" >"$W/apply.out" 2>&1; }
+
+T="E01 the instance's failure, reproduced: a reload cannot add 0.0.0.0 beside 85's 127.0.0.1 on one port"
+if ! from85; then red "nginx would not start on 85's site"
+else
+  go_public; "$PB/pctl" reload; sleep 1.5
+  if held "0.0.0.0:$PP"; then red "the reload DID bind 0.0.0.0:$PP: nginx behaves otherwise, and finding 66's diagnosis is wrong"
+  elif ! grep -q "bind() to 0.0.0.0:$PP failed (98" "$PW/logs/error.log"; then red "not listening, but not for the instance's reason: $(tail -2 "$PW/logs/error.log")"
+  else pass; fi
+fi
+
+T="P01 apply.sh takes nginx from 85's site to the public one: nginx then listens on 0.0.0.0"
+if ! from85; then red "nginx would not start on 85's site"
+else
+  go_public
+  if ! apply "0.0.0.0:$PP"; then red "apply.sh refused: $(tail -4 "$W/apply.out")"
+  elif ! held "0.0.0.0:$PP"; then red "apply.sh said ok and nginx does not listen on 0.0.0.0:$PP"
+  else pass; fi
+fi
+
+# With both sites live (P01's state): which one answers depends on the address
+# a request arrives on, before its name. 86's own checks curl 127.0.0.1.
+# The two refusals differ in text only each site has: 85's names /healthz.
+T="E02 on 127.0.0.1 it is 85's site that answers, not the public one; on another local address, the public one"
+if ! held "0.0.0.0:$PP"; then red "P01's state is missing: nothing to observe"
+else
+  lo=$(curl -s -X POST --resolve "api-coop.test:$PP:127.0.0.1" "http://api-coop.test:$PP/auth/sign-in")
+  pub=$(curl -s -X POST --resolve "api-coop.test:$PP:$LAN" "http://api-coop.test:$PP/auth/sign-in")
+  if [[ $lo != *'carries /healthz alone'* ]]; then red "on 127.0.0.1 the answer was not 85's site: '$lo' (nginx behaves otherwise: finding 68's diagnosis is wrong)"
+  elif [[ $pub != *'HTTPS only."}'* || $pub == *'/healthz alone'* ]]; then red "on $LAN the answer was not the public site's: '$pub'"
+  else pass; fi
+fi
+
+T="P02 a restart that changes nothing is caught: apply.sh refuses, naming the address and nginx's own error"
+if ! from85; then red "nginx would not start on 85's site"
+else
+  go_public
+  if FAKE_CTL=lying apply "0.0.0.0:$PP"; then red "apply.sh said ok with nothing on 0.0.0.0:$PP"
+  elif ! grep -q "does not listen on 0.0.0.0:$PP" "$W/apply.out"; then red "refused, but not for the listener: $(tail -3 "$W/apply.out")"
+  elif ! grep -q "bind() to 0.0.0.0:$PP failed" "$W/apply.out"; then red "refused without nginx's reason: $(tail -3 "$W/apply.out")"
+  else pass; fi
+fi
+"$PB/pctl" stop
 fi
 
 # ---------------------------------------------------------------------------

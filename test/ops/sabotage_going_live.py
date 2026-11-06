@@ -12,6 +12,7 @@ RP = "nginx/render-public.sh"
 LB = "75-assert-loopback.sh"
 AC = "nginx/argon-acme.conf.in"
 TL = "nginx/argon-api-tls.conf.in"
+AP = "nginx/apply.sh"
 
 # name: (expected red tests, [(file, old, new), ...])
 M = {
@@ -25,10 +26,19 @@ M = {
  "origin_empty_ok":    ({"O07"}, [(CO, '[[ -n $origin ]] || fail', '[[ -n $origin ]] || exit 0; true || fail')]),
  "render_hole_ok":     ({"R01"}, [(RP, "if grep -qE '@[A-Z_]+@' <<<\"$out\"; then", "if false; then")]),
  "render_empty_ok":    ({"R02"}, [(RP, '[[ -n ${!v:-} ]] || {', 'true || {')]),
- "loopback_80_always": ({"L01"}, [(LB, 'else : "${PUBLIC_PORTS:=22}"; fi', 'else : "${PUBLIC_PORTS:=22 80 443}"; fi')]),
+ "loopback_80_always": ({"L01"}, [(LB, 'else PUBLIC_PORTS="22"; fi', 'else PUBLIC_PORTS="22 80 443"; fi')]),
+ # The rule as it was (finding 67): an env file's PUBLIC_PORTS wins.
+ "loopback_env_wins":  ({"L12", "L13"}, [(LB, 'if [[ -n ${ARGON_API_DOMAIN:-} ]]; then PUBLIC_PORTS="22 80 443"; else PUBLIC_PORTS="22"; fi', 'if [[ -n ${ARGON_API_DOMAIN:-} ]]; then : "${PUBLIC_PORTS:=22 80 443}"; else : "${PUBLIC_PORTS:=22}"; fi')]),
+ # The line ignored without a word: the operator never learns to delete it.
+ "loopback_env_silent": ({"L12"}, [(LB, '[[ -n ${PUBLIC_PORTS+set} ]] && info', '[[ -n ${PUBLIC_PORTS+set} ]] && :')]),
+ # 86's step as it was (finding 66): a reload, which on the instance changed
+ # nothing. P01 must go red on nginx's real bind error.
+ "apply_reload":       ({"P01"}, [(AP, '"$ctl" restart nginx', '"$ctl" reload nginx')]),
+ # A restart trusted on its report: nothing confirms the listener.
+ "apply_trusts_restart": ({"P02"}, [(AP, '  for _ in $(seq 50); do held "$a" && continue 2; sleep 0.1; done\n', '  continue\n')]),
  "loopback_any_owner": ({"L03", "L05", "L06", "L09"}, [(LB, '  local n; n=$(names "$2")', '  return 0')]),
  "loopback_unseen_ok": ({"L06"}, [(LB, '  local n; n=$(names "$2")', '  [[ -z $2 ]] && return 0\n  local n; n=$(names "$2")')]),
- "loopback_8080_public": ({"L04"}, [(LB, '=22 80 443}"; else', '=22 80 443 8080}"; else')]),
+ "loopback_8080_public": ({"L04"}, [(LB, 'then PUBLIC_PORTS="22 80 443"; else', 'then PUBLIC_PORTS="22 80 443 8080"; else')]),
  "loopback_sshd_only": ({"L07", "L08"}, [(LB, '22)     only "$n" sshd systemd ;;', '22)     only "$n" sshd ;;')]),
  # The rule as it shipped in db1e763 and failed the deploy (finding 64): one
  # holder per socket, so sshd and systemd together match neither.

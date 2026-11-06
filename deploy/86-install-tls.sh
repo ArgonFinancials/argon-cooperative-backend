@@ -50,16 +50,14 @@ render() {  # render TEMPLATE TARGET-NAME, with the server's values
   mv "/etc/nginx/sites-available/$2.new" "/etc/nginx/sites-available/$2"
   ln -sf "/etc/nginx/sites-available/$2" "/etc/nginx/sites-enabled/$2"
 }
-reload() {
-  nginx -t 2>&1 | sed 's/^/    /' >&2
-  nginx -t >/dev/null 2>&1 || die "nginx configuration test failed"
-  systemctl reload nginx
-}
+# Each change applied by restart and confirmed by what nginx holds, never by a
+# reload's report (nginx/apply.sh; finding 66: the reload that changed nothing).
+apply() { bash "$DEPLOY_DIR/nginx/apply.sh" "$@" || die "nginx did not take the change: read its errors above"; }
 
 # 2. Port 80 first: the certificate check needs it, and 443 needs the certificate.
 render argon-acme.conf.in argon-acme
 [[ -f /etc/letsencrypt/live/$D/fullchain.pem ]] || rm -f /etc/nginx/sites-enabled/argon-api-tls
-reload
+apply 0.0.0.0:80
 ok "port 80 serves the certificate check for $D"
 
 # 3. The certificate.
@@ -83,7 +81,7 @@ chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/argon-nginx-reload
 
 # 4. 443.
 render argon-api-tls.conf.in argon-api-tls
-reload
+apply 0.0.0.0:80 0.0.0.0:443
 
 # 5. Through nginx, on this host (independent of the security group).
 r=(--resolve "$D:443:127.0.0.1" --resolve "$D:80:127.0.0.1" -s -o /dev/null)
