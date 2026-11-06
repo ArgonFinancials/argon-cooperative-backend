@@ -570,6 +570,25 @@ probe req P50 argon_app '42501.*permission denied for table sms_sends' "app read
 else
   info "schema before 0019: no record of codes sent to probe (P49, P50 not run)"
 fi
+# 0024: the app issues an officer's code; the operator's path, the digest and
+# redemption are not its. The auth service redeems, and issues nothing.
+has_enrol=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.enrolment_codes') IS NOT NULL)::int" </dev/null)
+if [[ $has_enrol == 1 ]]; then
+probe req P52 argon_app '42501.*permission denied for table enrolment_codes' "app writes a code as if the operator issued it" \
+  "INSERT INTO enrolment_codes (user_id, member_id, code_digest, issued_by_operator, operator_login, operator_reason) VALUES ($U1, $M1, repeat('a', 64), 'app', 'app', 'app');"
+probe req P53 argon_app '42501.*permission denied for function operator_issue_enrolment' "app issues a code through the operator's function" \
+  "SELECT operator_issue_enrolment($M1, repeat('a', 64), 'app', 'app', 'app');"
+probe req P54 argon_app '42501.*permission denied for function enrolment_redeem' "app redeems a code (the auth service's)" \
+  "SELECT enrolment_redeem($U1, repeat('a', 64));"
+probe req P55 argon_app '42501.*permission denied for table enrolment_codes' "app reads the enrolment code digests" \
+  "SELECT code_digest FROM enrolment_codes LIMIT 1;"
+# (No P56, "the auth service issues a code": with the INSERT wrongly granted it
+# was still refused, by the code's own rule, because argon_auth can write no
+# act. A neighbour covered it, so it could not show the grant; the act half is
+# P11–P14's.)
+else
+  info "schema before 0024: no enrolment codes to probe (P52–P55 not run)"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

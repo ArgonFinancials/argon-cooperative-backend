@@ -155,5 +155,20 @@ BEGIN
   END IF;
 END $$;
 
+-- 0024: enrolment codes. The app issues an officer's code (the step-up act
+-- and the code, one transaction) and reads a code's history: never its
+-- digest, and never the operator's columns, so the operator's path is the
+-- owner's function alone. The auth service redeems through enrolment_redeem
+-- only; no role updates a code directly (probes P52–P55).
+DO $$
+BEGIN
+  IF to_regclass('public.enrolment_codes') IS NOT NULL THEN
+    GRANT INSERT (id, user_id, member_id, code_digest, issued_by_act) ON enrolment_codes TO argon_app;
+    GRANT SELECT (id, user_id, member_id, issued_at, expires_at, issued_by_act, issued_by_operator, replaces_id,
+                  wrong_tries, used_at, voided_at, void_reason) ON enrolment_codes TO argon_app;
+    GRANT EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT) TO argon_auth;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;
