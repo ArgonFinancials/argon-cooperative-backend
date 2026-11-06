@@ -28,6 +28,8 @@ M = {
                                     ("[[ $rdate =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] ||", "true ||")]),
  "lifecycle_resolution_dropped": ({"S06"}, [("if ((have_ref || have_rdate)); then", "if ((have_ref || have_rdate)) && [[ $setting != lifecycle ]]; then")]),
  "series_resolution_dropped": ({"S15"}, [("if ((have_ref || have_rdate)); then", "if ((have_ref || have_rdate)) && [[ $setting != charge-series ]]; then")]),
+ # Finding 69: a missing --db falls back to the env file's ARGON_DB.
+ "db_defaults": ({"S25"}, [("file=\"\" confirm=0 db=\n", "file=\"\" confirm=0 db=$ARGON_DB\n")]),
  "refusal_unparsed": ({"S09", "S10", "S14"}, [("s/^\\(psql:[^ ]*: \\)\\{0,1\\}ERROR:", "s/^ERROR:")]),
  "refusal_reason_swallowed": ({"S09", "S10", "S14"}, [("printf '\\nREFUSED by the database%s:\\n  %s\\n' \"${rule:+ ($rule)}\" \"$msg\"", "printf '\\nREFUSED by the database%s.\\n' \"${rule:+ ($rule)}\"")]),
  "sql_spliced": ({"S17"}, [("q -v soc=\"$sid\" -v val=\"$value\" -v op=\"$operator\"", "q -v soc=\"$sid\" -v val=\"$value\" -v op=\"x\""),

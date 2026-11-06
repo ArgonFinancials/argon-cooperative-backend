@@ -10,7 +10,9 @@
 #   45-society-settings.sh charge-series --society CODE --file SERIES.json \
 #       --operator "Your Name" --reason "why" [--confirm]
 #   45-society-settings.sh show --society CODE
-#   (any of them: --db NAME, default ARGON_DB from the env file)
+#   (every one of them: --db NAME, REQUIRED. No default since 2026-11-06,
+#   finding 69: a default that silently picks a different database is worse
+#   than none. On the server, the one in ARGON_DB, named.)
 #
 # Without --confirm it shows the change and applies nothing (exit 3). The server
 # login is recorded by the script, labelled: "user@host [login, verified ...]",
@@ -49,7 +51,7 @@ usage() {
 # ---- arguments ---------------------------------------------------------------
 setting=${1:-}; shift || true
 [[ $setting == -h || $setting == --help || -z $setting ]] && { usage; exit 1; }
-society="" value="" operator="" reason="" ref="" rdate="" file="" confirm=0 db=$ARGON_DB
+society="" value="" operator="" reason="" ref="" rdate="" file="" confirm=0 db=
 have_ref=0 have_rdate=0
 while (($#)); do
   case $1 in
@@ -69,7 +71,7 @@ done
 
 case " $SETTINGS show " in *" $setting "*) ;; *) usage; die "unknown setting '$setting'. The settings: ${SETTINGS// /, }" ;; esac
 [[ -n $society ]] || die "--society CODE is required"
-[[ -n $db ]] || die "--db is empty and ARGON_DB is not set"
+[[ -n $db ]] || die "--db is required: name the database (on the server, the one in ARGON_DB). The script never chooses one itself (finding 69)."
 
 blank() { [[ -z ${1//[[:space:]]/} ]]; }
 

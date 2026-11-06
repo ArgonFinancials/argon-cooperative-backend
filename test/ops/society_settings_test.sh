@@ -341,6 +341,19 @@ if said "WARNING"; then red "warned with four signatories at a quorum of two"; s
 else pass; fi
 
 # Last, over every line every run printed.
+# Finding 69, applied here (the reviewer, 2026-11-06): no default database.
+# The env file names a database that does not exist, so even a script that
+# still falls back reaches nothing real.
+T="S25 without --db it refuses, naming --db: it never chooses a database itself"
+fresh
+noenv=$(mktemp); { cat "$ARGON_ENV"; echo "ARGON_DB=argon_verify_no_such_db"; } >"$noenv"
+before=$(snap "$c")
+RC=0; env -u SUDO_USER ARGON_ENV="$noenv" bash "$SCRIPT" withdrawal-quorum --society "$c" --value 2 "${society_args[@]}" --confirm >"$OUT" 2>&1 </dev/null || RC=$?
+cat "$OUT" >>"$ALL"; rm -f "$noenv"
+if ((RC == 0)) || [[ $(snap "$c") != "$before" ]]; then red "changed a society with no --db"
+elif ! grep -q -- '--db is required' "$OUT"; then red "refused, but not for the missing --db: $(tail -2 "$OUT")"
+else pass; fi
+
 T="S22 no credential is printed, on any path"
 leaked=""
 for v in $(compgen -v); do
@@ -351,7 +364,7 @@ done
 [[ -z $leaked ]] && pass || red "printed the value of:$leaked"
 
 echo
-total=24
+total=25
 if ((${#RED[@]})); then
   echo "settings script: $((total - ${#RED[@]}))/$total pass; RED: ${#RED[@]}"
   exit 1
