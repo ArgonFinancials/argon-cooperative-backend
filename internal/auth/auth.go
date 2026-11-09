@@ -71,7 +71,27 @@ var (
 	ErrNoSession = errors.New("auth: no live session")
 	// ErrUnknownAct: a proof was asked for an act that does not exist.
 	ErrUnknownAct = errors.New("auth: no such act")
+	// ErrNeedsNewPIN: the enrolment code was right, for someone who has never
+	// had a PIN, and no new PIN came with it. The code stays live.
+	ErrNeedsNewPIN = errors.New("auth: choose a PIN to finish enrolling")
+	// ErrPINAlreadySet: a new PIN came with a code for someone who already has
+	// one. A code never stands in for a reset (§12, D-15). The code stays live.
+	ErrPINAlreadySet = errors.New("auth: you already have a PIN; enter it, not a new one")
+	// ErrSlipUsed: the code typed is the person's own slip, already used (0025).
+	// Said only for the real slip; it tells the member what to do.
+	ErrSlipUsed = errors.New("auth: This code has already been used. Speak to your secretary.")
 )
+
+// EnrolRequest is a first device by enrolment code (0024, 0025; §12). PIN is
+// the person's existing PIN, if they have one; NewPIN is the PIN chosen by
+// someone who has never had one. Never both: a code never sets a PIN for
+// someone who has one.
+type EnrolRequest struct {
+	Credential string
+	Code       string
+	PIN        string
+	NewPIN     string
+}
 
 type Service interface {
 	SignIn(ctx context.Context, req SignInRequest) (Result, error)
@@ -87,6 +107,16 @@ type Service interface {
 	// role cannot end sessions itself (auth state is argon_auth's to write).
 	// ErrNoSession if it is not a live session.
 	SignOut(ctx context.Context, sessionToken string) error
+	// Enrol trusts a first device by enrolment code and signs in on it.
+	// Someone who has never had a PIN chooses one (CheckNewPIN); anyone else
+	// enters theirs, and it is checked FIRST: a wrong PIN counts against the
+	// lockout and never touches the code; a wrong code costs the code a try
+	// and never counts against the lockout. A refused or missing new PIN, or a
+	// new PIN for someone who has one, leaves the code live. Errors:
+	// ErrRefused (unknown credential, wrong PIN, wrong code: one answer),
+	// ErrTryLater, ErrNeedsNewPIN, ErrPINNotAllowed, ErrPINAlreadySet,
+	// ErrSlipUsed. Returns the session and the new device's token.
+	Enrol(ctx context.Context, req EnrolRequest) (Result, error)
 }
 
 // ActKind names the attributable act a PIN proof is minted FOR. The kind is
