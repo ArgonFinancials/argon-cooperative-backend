@@ -586,6 +586,13 @@ probe req P54 argon_app '42501.*permission denied for function enrolment_redeem'
   "$redeem_sql"
 probe req P55 argon_app '42501.*permission denied for table enrolment_codes' "app reads the enrolment code digests" \
   "SELECT code_digest FROM enrolment_codes LIMIT 1;"
+# 0026: the app writes the halves, never the assembled digest, and reads no half.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns WHERE table_name = 'enrolment_codes' AND column_name = 'first_half_digest'" </dev/null) == 1 ]]; then
+probe req P57 argon_app '42501.*permission denied for table enrolment_codes' "app sets a code's assembled digest itself" \
+  "UPDATE enrolment_codes SET code_digest = repeat('a', 64) WHERE false;"
+probe req P58 argon_app '42501.*permission denied for table enrolment_codes' "app reads a half's digest" \
+  "SELECT first_half_digest, second_half_digest FROM enrolment_codes LIMIT 1;"
+fi
 # (No P56, "the auth service issues a code": with the INSERT wrongly granted it
 # was still refused, by the code's own rule, because argon_auth can write no
 # act. A neighbour covered it, so it could not show the grant; the act half is

@@ -174,6 +174,14 @@ BEGIN
     ELSE
       GRANT EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT) TO argon_auth;
     END IF;
+    -- 0026: a signatory's code in two halves. The app writes half one with
+    -- the first act, and half two with the second; never a code's digest
+    -- (the server assembles it), and it reads no half (probes P57, P58).
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'enrolment_codes' AND column_name = 'first_half_digest') THEN
+      GRANT INSERT (first_half_digest) ON enrolment_codes TO argon_app;
+      GRANT UPDATE (second_half_digest, second_by_act) ON enrolment_codes TO argon_app;
+      GRANT SELECT (second_by_act) ON enrolment_codes TO argon_app;
+    END IF;
   END IF;
 END $$;
 
