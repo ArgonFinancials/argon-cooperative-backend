@@ -34,18 +34,24 @@ func (s *service) Enrol(ctx context.Context, req EnrolRequest) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// WHETHER A REQUEST COUNTS DEPENDS ON THE REQUEST, NEVER ON THE ACCOUNT
+	// (2026-11-09). Carrying a PIN, it meets a lock and is counted, whoever
+	// the number names. Carrying none, it is never counted. Otherwise five
+	// wrong PINs would tell an enrolled number from an unknown one.
+	pinGiven := req.PIN != ""
 	if len(cands) != 1 {
-		return s.enrolNobody(cands, req.PIN)
+		return s.enrolNobody(ctx, cands, credDigest, req.PIN)
 	}
 	c := cands[0]
 	hasPIN := c.pinHash != ""
 
-	if hasPIN {
+	switch {
+	case pinGiven:
 		locked, err := s.locked(ctx, `SELECT locked_until, needs_officer FROM lock_state_unknown_device($1)`, c.user)
 		if err != nil {
 			return Result{}, err
 		}
-		ok := s.verify(c.pinHash, req.PIN)
+		ok := s.verify(c.pinHash, req.PIN) // "" for someone with no PIN: the dummy, and never right
 		if locked {
 			return Result{}, ErrTryLater
 		}
@@ -56,7 +62,10 @@ func (s *service) Enrol(ctx context.Context, req EnrolRequest) (Result, error) {
 		if !ok {
 			return Result{}, ErrRefused // the code is not touched
 		}
-	} else {
+	case hasPIN:
+		s.verify(s.dummy, req.PIN)
+		return Result{}, ErrRefused // a holder must give their PIN; not a guess, so not counted
+	default:
 		s.verify(s.dummy, req.PIN) // the same cost whether or not the person has a PIN
 	}
 
@@ -123,17 +132,30 @@ func (s *service) Enrol(ctx context.Context, req EnrolRequest) (Result, error) {
 	return Result{SessionToken: sessTok, DeviceToken: devTok}, nil
 }
 
-// enrolNobody: the credential names no one, or more than one person (D-21):
-// refused as a wrong code is, after the same hashing cost. Nothing is counted.
-// OPEN (brought to the reviewer 2026-11-09): a holder's wrong PINs here lock
-// after five and an unknown number's never do, so the lock tells the two
-// apart. The fix and its tests come before this is changed.
-func (s *service) enrolNobody(cands []candidate, pin string) (Result, error) {
+// enrolNobody: the credential names no one, or more than one person (D-21).
+// Answered exactly as a named person would be for the same request: carrying
+// a PIN, it meets the credential's lock and is counted as a wrong PIN;
+// carrying none, it is refused and never counted. The same hashing cost.
+func (s *service) enrolNobody(ctx context.Context, cands []candidate, credDigest, pin string) (Result, error) {
+	if pin == "" {
+		s.verify(s.dummy, pin)
+		return Result{}, ErrRefused
+	}
+	locked, err := s.locked(ctx, `SELECT locked_until, needs_officer FROM lock_state_for_credential($1)`, credDigest)
+	if err != nil {
+		return Result{}, err
+	}
 	if len(cands) == 0 {
 		s.verify(s.dummy, pin)
 	}
 	for _, c := range cands {
 		s.verify(c.pinHash, pin)
+	}
+	if locked {
+		return Result{}, ErrTryLater
+	}
+	if err := s.attempt(ctx, nil, credDigest, nil, false); err != nil {
+		return Result{}, err
 	}
 	return Result{}, ErrRefused
 }

@@ -408,10 +408,14 @@ func TestEnrol17_WrongTriesNeverCountAgainstThePinLockout(t *testing.T) {
 		redeem(t, w.person, "wrong-"+fmt.Sprint(i))
 	}
 	fixture(t, db.QueryRow(bg(), count, w.person).Scan(&after), "attempts after")
-	var locked bool
-	fixture(t, db.QueryRow(bg(), `SELECT locked_until IS NOT NULL OR coalesce(needs_officer, false) FROM lock_state($1)`, w.person).Scan(&locked), "the lock")
-	if after != before || locked {
-		t.Fatalf("COUNTED — five wrong enrolment tries wrote %d sign-in attempts; locked %v", after-before, locked)
+	// Both locks (0022): the member's own phone, and any other device. A code
+	// try is never from a trusted device, so the other-device lock is the one
+	// a miscounted try would reach.
+	var own, other bool
+	fixture(t, db.QueryRow(bg(), `SELECT locked_until IS NOT NULL OR coalesce(needs_officer, false) FROM lock_state($1)`, w.person).Scan(&own), "the own-phone lock")
+	fixture(t, db.QueryRow(bg(), `SELECT locked_until IS NOT NULL OR coalesce(needs_officer, false) FROM lock_state_unknown_device($1)`, w.person).Scan(&other), "the other-device lock")
+	if after != before || own || other {
+		t.Fatalf("COUNTED — five wrong enrolment tries wrote %d sign-in attempts; own-phone lock %v, other-device lock %v", after-before, own, other)
 	}
 }
 

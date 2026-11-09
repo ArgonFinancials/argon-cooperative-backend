@@ -16,6 +16,7 @@
 //	stepup_expiry_wrong    the proof is reported to last an hour, not five minutes
 //	stepup_success_silent  a right PIN at step-up is not recorded, so it ends no run
 //	stepup_ignores_success the step-up's lock counts failures since ANY time, not since the last success
+//	stepup_wrong_ladder    the lock read is always the own-phone one, whatever device the session has
 package tier1
 
 import (
@@ -48,7 +49,7 @@ func (f *fakeService) ProvePIN(ctx context.Context, sessionToken, pin string, ac
 	if f.brk == "stepup_own_counter" {
 		key = sha("stepup:" + user)
 	}
-	failures := f.recentFailures(ctx, key, device != nil, false)
+	failures := f.recentFailures(ctx, key, device != nil || f.brk == "stepup_wrong_ladder", false)
 	if f.brk == "stepup_ignores_success" {
 		f.d.DB.QueryRow(ctx, `SELECT count(*) FROM sign_in_attempts WHERE credential_digest = $1 AND NOT succeeded
 			AND at > now() - interval '15 minutes'`, key).Scan(&failures)

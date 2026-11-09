@@ -32,6 +32,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -347,5 +348,58 @@ func TestRedeem11_TheEnrolledDeviceSignsInWithThePinAlone(t *testing.T) {
 	again, err := s.signIn(e.number, enrolNewPIN, r.DeviceToken)
 	if err != nil || again.SessionToken == "" || again.Challenge != "" {
 		t.Fatalf("NOT TRUSTED — sign-in on the enrolled device answered %+v, %v; want a session with no challenge", again, err)
+	}
+}
+
+// =============================================================================
+// THE UNIFORM REFUSAL REACHES THE LOCK (2026-11-09)
+// =============================================================================
+// Whether a request counts depends on the request, never on the account.
+// Carrying a PIN, it meets a lock and is counted, whoever the number names.
+// Carrying none, it is never counted. Otherwise five wrong PINs would tell an
+// enrolled number from an unknown one.
+
+// Six requests with a wrong PIN, to an enrolled member, to a registered
+// member who has no PIN, and to a number nobody holds: the same six answers,
+// ending in a lock.
+func TestRedeem12_AWrongPinLocksEveryNumberAlike(t *testing.T) {
+	s := newSvc(t)
+	holder := s.holder("Member (enrolled)")
+	newcomer := s.newcomer("Member (no PIN yet)")
+	answers := func(cred string) string {
+		var got []string
+		for i := 0; i < 6; i++ {
+			_, err := s.enrol(cred, "ENROL-NOT-A-CODE", "0000", "")
+			got = append(got, fmt.Sprint(err))
+		}
+		return strings.Join(got, " | ")
+	}
+	h, n, u := answers(holder.number), answers(newcomer.number), answers(unregistered())
+	if !strings.HasSuffix(h, auth.ErrTryLater.Error()) {
+		t.Fatalf("FIXTURE: an enrolled member was not locked after five wrong PINs at enrolment: %s", h)
+	}
+	if n != h || u != h {
+		t.Fatalf("TELLS — five wrong PINs answer differently by who holds the number:\n  enrolled:      %s\n  no PIN yet:    %s\n  nobody:        %s", h, n, u)
+	}
+}
+
+// A request with no PIN is never counted, for anyone, and a holder who gives
+// none is refused with their code untouched.
+func TestRedeem13_ARequestWithNoPinIsNeverCounted(t *testing.T) {
+	s := newSvc(t)
+	holder := s.holder("Member (forgot to type the PIN)")
+	id, code := s.issueTo(holder)
+	before := attemptsOf(t, holder.user)
+	for i := 0; i < 6; i++ {
+		if _, err := s.enrol(holder.number, code, "", ""); !errors.Is(err, auth.ErrRefused) {
+			t.Fatalf("WRONG ANSWER — a holder's right code with no PIN answered %v on try %d; want ErrRefused", err, i+1)
+		}
+	}
+	if n := attemptsOf(t, holder.user) - before; n != 0 {
+		t.Fatalf("COUNTED — six requests with no PIN wrote %d sign-in attempt(s)", n)
+	}
+	wantLive(t, id, 0, "a holder gave no PIN")
+	if _, err := s.enrol(holder.number, code, holder.pin, ""); err != nil {
+		t.Fatalf("LOCKED — after six requests with no PIN, the right PIN and code answered %v", err)
 	}
 }

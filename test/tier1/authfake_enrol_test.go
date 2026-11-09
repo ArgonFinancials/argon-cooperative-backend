@@ -17,6 +17,9 @@
 //	enrol_used_silent          the used slip answers as any wrong code: the member is not told what to do
 //	enrol_device_unbound       the device token handed back is not the device the code trusted
 //	enrol_no_notice            the person's other devices are not told a new device signed in
+//	enrol_unknown_uncounted    an unknown number's wrong PINs are never counted: the lock tells it from an enrolled one
+//	enrol_newcomer_pin_ignored a PIN typed by someone who has none is ignored: never counted, never locked
+//	enrol_empty_pin_counted    a holder's request with no PIN counts as a wrong PIN
 package tier1
 
 import (
@@ -40,12 +43,39 @@ func (f *fakeService) Enrol(ctx context.Context, req auth.EnrolRequest) (auth.Re
 		cands = append(cands, c)
 	}
 	rows.Close()
+	// WHETHER A REQUEST COUNTS DEPENDS ON THE REQUEST, NEVER ON THE ACCOUNT:
+	// carrying a PIN, it meets a lock and is counted, whoever the number
+	// names; carrying none, it is never counted. Otherwise the lock would
+	// tell an enrolled number from an unknown one.
+	pinGiven := req.PIN != ""
 	if len(cands) != 1 {
 		verifyPHC(dummyPHC(), req.PIN)
+		if !pinGiven || f.brk == "enrol_unknown_uncounted" {
+			return auth.Result{}, auth.ErrRefused
+		}
+		ck := sha("cred:" + req.Credential)
+		if f.recentFailures(ctx, ck, false, false) >= 5 {
+			return auth.Result{}, auth.ErrTryLater
+		}
+		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (credential_digest, succeeded) VALUES ($1, false)`, ck)
 		return auth.Result{}, auth.ErrRefused
 	}
 	user, phc := cands[0].user, cands[0].phc
 	key := sha("user:" + user)
+	if phc == "" && pinGiven && f.brk != "enrol_newcomer_pin_ignored" {
+		// Someone with no PIN who types one: a wrong PIN, counted, as for anyone.
+		verifyPHC(dummyPHC(), req.PIN)
+		if f.recentFailures(ctx, key, false, false) >= 5 {
+			return auth.Result{}, auth.ErrTryLater
+		}
+		f.d.DB.Exec(ctx, `INSERT INTO sign_in_attempts (user_id, credential_digest, succeeded) VALUES ($1, $2, false)`, user, key)
+		return auth.Result{}, auth.ErrRefused
+	}
+	if phc != "" && !pinGiven && f.brk != "enrol_empty_pin_counted" {
+		// A holder who gives no PIN: refused, never counted, the code untouched.
+		verifyPHC(dummyPHC(), req.PIN)
+		return auth.Result{}, auth.ErrRefused
+	}
 	codeDigest := f.codeDigest(req.Code)
 	devTok, sessTok := token(), token()
 

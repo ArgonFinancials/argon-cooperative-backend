@@ -25,4 +25,7 @@ declare -gA SVC_TARGET_OF=(
   [enrol_used_silent]='TestRedeem10_TheUsedSlipTellsItsHolderWhatToDo'
   [enrol_device_unbound]='TestRedeem01_AFirstEnrolmentSetsThePinAndTrustsTheDevice|TestRedeem11_TheEnrolledDeviceSignsInWithThePinAlone'
   [enrol_no_notice]='TestRedeem04_AHolderEnrolsWithTheirPinAndIsTold'
+  [enrol_unknown_uncounted]='TestRedeem12_AWrongPinLocksEveryNumberAlike'
+  [enrol_newcomer_pin_ignored]='TestRedeem12_AWrongPinLocksEveryNumberAlike'
+  [enrol_empty_pin_counted]='TestRedeem13_ARequestWithNoPinIsNeverCounted'
 )

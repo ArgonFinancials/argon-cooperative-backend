@@ -16,9 +16,12 @@ import (
 // ONE proof for them, scoped to act (the kind bound here, at mint), good for
 // five minutes; the act that uses it spends it. A wrong PIN mints nothing.
 //
-// One counter, shared with sign-in: every step-up attempt is a sign_in_attempts
-// row for the account, so lock_state sees step-up and sign-in failures as one
-// run, and a right PIN here ends that run exactly as a sign-in success does.
+// One counter with sign-in on the same device: every step-up attempt is a
+// sign_in_attempts row naming the session's device, so step-up and sign-in
+// failures there are one run, and a right PIN here ends that run exactly as a
+// sign-in success does. The lock read is the one those rows reach (0022):
+// the member's own-phone lock for a session on a trusted device, the
+// other-device lock for a session with none.
 //
 // In production this service's pool is argon_auth: the only role that can
 // mint a proof or record an attempt. The API's handlers, which spend proofs,
@@ -46,7 +49,11 @@ func (s *service) ProvePIN(ctx context.Context, sessionToken, pin string, act Ac
 	if err := s.d.DB.QueryRow(ctx, `SELECT coalesce((SELECT pin_hash FROM auth_credentials WHERE user_id = $1), '')`, user).Scan(&phc); err != nil {
 		return Proof{}, err
 	}
-	locked, err := s.locked(ctx, `SELECT locked_until, needs_officer FROM lock_state($1)`, user)
+	lock := `SELECT locked_until, needs_officer FROM lock_state($1)`
+	if device == nil {
+		lock = `SELECT locked_until, needs_officer FROM lock_state_unknown_device($1)`
+	}
+	locked, err := s.locked(ctx, lock, user)
 	if err != nil {
 		return Proof{}, err
 	}

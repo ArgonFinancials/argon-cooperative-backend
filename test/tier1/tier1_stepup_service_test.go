@@ -193,3 +193,19 @@ func TestStepUpS9_RightPinAtSignInEndsAStepUpRun(t *testing.T) {
 		t.Fatalf("UNCLEARED — a sign-in success did not end the step-up's run: after 4 + 4 failures, the step-up answered %v", err)
 	}
 }
+
+// The lock a step-up reads is the lock its failures are written to (0022). A
+// session with no device writes to the other-device lock, so it must read
+// that one, or its wrong PINs would never lock anything.
+func TestStepUpS10_ASessionWithNoDeviceMeetsTheLockItsFailuresReach(t *testing.T) {
+	s := newSvc(t)
+	m := s.member("Secretary")
+	tok := randHex()
+	fixture(t, one(`INSERT INTO auth_sessions (user_id, token_digest) VALUES ($1, $2)`, m.user, auth.TokenDigest(tok)), "a session with no device")
+	for i := 0; i < 5; i++ {
+		s.svc.ProvePIN(bg(), tok, "0000", auth.ActLedgerBatch)
+	}
+	if _, err := s.svc.ProvePIN(bg(), tok, m.pin, auth.ActLedgerBatch); !errors.Is(err, auth.ErrTryLater) {
+		t.Fatalf("ORACLE — five wrong PINs at step-up from a session with no device, then the right one answered %v; want ErrTryLater", err)
+	}
+}

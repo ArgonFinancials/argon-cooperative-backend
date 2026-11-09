@@ -24,4 +24,5 @@ declare -gA SVC_TARGET_OF=(
   [stepup_expiry_wrong]='TestStepUpS1_RightPinMintsOneProofForTheHolderAndTheAct'
   [stepup_success_silent]='TestStepUpS8_RightPinAtStepUpEndsTheRun'
   [stepup_ignores_success]='TestStepUpS9_RightPinAtSignInEndsAStepUpRun'
+  [stepup_wrong_ladder]='TestStepUpS10_ASessionWithNoDeviceMeetsTheLockItsFailuresReach'
 )

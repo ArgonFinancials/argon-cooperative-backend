@@ -215,8 +215,10 @@ func TestAuthS2_LockoutLooksTheSameForUnknownNumbers(t *testing.T) {
 	m := s.member("Member")
 	var real, fake []string
 	nobody := unregistered()
+	// An attacker holds no device token: the registered number is compared
+	// from a device that is not the member's, the lock an attacker meets (0022).
 	for i := 0; i < 6; i++ {
-		_, e := s.signIn(m.phone, "0000", m.deviceToken)
+		_, e := s.signIn(m.phone, "0000", "")
 		real = append(real, fmt.Sprint(e))
 		_, e = s.signIn(nobody, "0000", "")
 		fake = append(fake, fmt.Sprint(e))
