@@ -104,21 +104,28 @@ func (s *service) codeDigest(code string) string {
 
 type candidate struct{ user, pinHash string }
 
+// candidates: every PERSON a credential (a member number or a phone) names,
+// with their PIN hash, "" when they have never had one. D-21: exactly one, or
+// nobody is signed in. Shared by SignIn and Enrol.
+func (s *service) candidates(ctx context.Context, cred string) ([]candidate, error) {
+	rows, err := s.d.DB.Query(ctx, `SELECT DISTINCT m.user_id::text, coalesce(c.pin_hash, '')
+		FROM members m LEFT JOIN auth_credentials c ON c.user_id = m.user_id
+		WHERE m.user_id IS NOT NULL AND (m.member_number = $1 OR m.phone = $1)`, cred)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (candidate, error) {
+		var c candidate
+		return c, r.Scan(&c.user, &c.pinHash)
+	})
+}
+
 func (s *service) SignIn(ctx context.Context, req SignInRequest) (Result, error) {
 	cred := strings.TrimSpace(req.Credential)
 	credDigest := TokenDigest("cred:" + cred)
 
 	// D-21: the credential resolves to exactly one PERSON, or nobody is signed in.
-	rows, err := s.d.DB.Query(ctx, `SELECT DISTINCT m.user_id::text, coalesce(c.pin_hash, '')
-		FROM members m LEFT JOIN auth_credentials c ON c.user_id = m.user_id
-		WHERE m.user_id IS NOT NULL AND (m.member_number = $1 OR m.phone = $1)`, cred)
-	if err != nil {
-		return Result{}, err
-	}
-	cands, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (candidate, error) {
-		var c candidate
-		return c, r.Scan(&c.user, &c.pinHash)
-	})
+	cands, err := s.candidates(ctx, cred)
 	if err != nil {
 		return Result{}, err
 	}
