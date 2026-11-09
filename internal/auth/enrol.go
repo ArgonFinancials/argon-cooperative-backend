@@ -77,7 +77,7 @@ func (s *service) Enrol(ctx context.Context, req EnrolRequest) (Result, error) {
 		var codeID, deviceID *string
 		var used *bool
 		if err := tx.QueryRow(ctx, `SELECT code_id::text, device_id::text, already_used FROM enrolment_redeem($1, $2, $3)`,
-			c.user, s.codeDigest(req.Code), TokenDigest(devTok)).Scan(&codeID, &deviceID, &used); err != nil {
+			c.user, s.enrolmentDigest(req.Code), TokenDigest(devTok)).Scan(&codeID, &deviceID, &used); err != nil {
 			return err
 		}
 		if codeID == nil {

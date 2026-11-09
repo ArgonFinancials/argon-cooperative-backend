@@ -20,11 +20,16 @@
 //	enrol_unknown_uncounted    an unknown number's wrong PINs are never counted: the lock tells it from an enrolled one
 //	enrol_newcomer_pin_ignored a PIN typed by someone who has none is ignored: never counted, never locked
 //	enrol_empty_pin_counted    a holder's request with no PIN counts as a wrong PIN
+//	enrol_short_code           a code is 12 characters, 30 bits a half
+//	enrol_order_matters        the halves redeem only in the order they were issued
+//	enrol_typing_strict        case and spaces must match the slip exactly
 package tier1
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -76,7 +81,7 @@ func (f *fakeService) Enrol(ctx context.Context, req auth.EnrolRequest) (auth.Re
 		verifyPHC(dummyPHC(), req.PIN)
 		return auth.Result{}, auth.ErrRefused
 	}
-	codeDigest := f.codeDigest(req.Code)
+	codeDigest := f.enrolDigest(req.Code)
 	devTok, sessTok := token(), token()
 
 	redeem := func(x pgx.Tx) (string, string, bool, error) {
@@ -199,4 +204,57 @@ func (f *fakeService) Enrol(ctx context.Context, req auth.EnrolRequest) (auth.Re
 		f.d.Notify.NewDeviceSignedIn(ctx, user, time.Now())
 	}
 	return res, nil
+}
+
+// ---- the code itself: the reference, breakable ----------------------------------
+
+const fakeCrockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+func (f *fakeService) halfLen() int {
+	if f.brk == "enrol_short_code" {
+		return 6
+	}
+	return 8
+}
+
+func (f *fakeService) drawHalf() string {
+	b := make([]byte, f.halfLen())
+	rand.Read(b)
+	for i := range b {
+		b[i] = fakeCrockford[b[i]&31]
+	}
+	return string(b)
+}
+
+func (f *fakeService) halfDigest(h string) string { return f.codeDigest("enrolment-half:" + h) }
+
+func (f *fakeService) assemble(a, b string) string {
+	if b < a && f.brk != "enrol_order_matters" {
+		a, b = b, a
+	}
+	return sha(a + b)
+}
+
+func (f *fakeService) NewEnrolmentCode() (string, string) {
+	a, b := f.drawHalf(), f.drawHalf()
+	g := func(h string) string { return h[:4] + "-" + h[4:] }
+	return g(a) + "-" + g(b), f.assemble(f.halfDigest(a), f.halfDigest(b))
+}
+
+func (f *fakeService) NewEnrolmentHalf() (string, string) {
+	h := f.drawHalf()
+	return h[:4] + "-" + h[4:], f.halfDigest(h)
+}
+
+func (f *fakeService) enrolDigest(typed string) string {
+	n := typed
+	if f.brk != "enrol_typing_strict" {
+		n = strings.NewReplacer(" ", "", "-", "", "I", "1", "L", "1", "O", "0").Replace(strings.ToUpper(typed))
+	} else {
+		n = strings.ReplaceAll(typed, "-", "")
+	}
+	if len(n) != 2*f.halfLen() {
+		return sha("not a code: " + typed)
+	}
+	return f.assemble(f.halfDigest(n[:f.halfLen()]), f.halfDigest(n[f.halfLen():]))
 }

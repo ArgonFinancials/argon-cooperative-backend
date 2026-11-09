@@ -28,11 +28,9 @@
 package tier1
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -45,13 +43,6 @@ const (
 	enrolBadPIN = "123456"
 )
 
-// svcCodeDigest: the digest the service stores a code under — HMAC with the
-// test CodeKey (newSvc), as the service's own SMS codes.
-func svcCodeDigest(code string) string {
-	m := hmac.New(sha256.New, []byte("test-code-key-not-a-secret"))
-	m.Write([]byte(code))
-	return hex.EncodeToString(m.Sum(nil))
-}
 
 // enrollee: a person who can be issued a code. pin == "" means they have
 // never had one.
@@ -66,8 +57,8 @@ func (s *svcT) issueTo(e enrollee) (string, string) {
 	officer := s.s.user("Treasurer (issuer)")
 	om := s.s.member(officer)
 	fixture(s.t, s.s.appoint(om, "treasurer", true, "2020-01-01", ""), "the treasurer")
-	code, _ := slip()
-	id, err := issueBy(s.t, issueSpec{actor: officer, actMember: e.member, user: e.user, member: e.member, digest: svcCodeDigest(code)})
+	code, d := s.svc.NewEnrolmentCode() // drawn by the service: the text for the slip, the digest for the row
+	id, err := issueBy(s.t, issueSpec{actor: officer, actMember: e.member, user: e.user, member: e.member, digest: d})
 	fixture(s.t, err, "an officer's code")
 	return id, code
 }
@@ -401,5 +392,63 @@ func TestRedeem13_ARequestWithNoPinIsNeverCounted(t *testing.T) {
 	wantLive(t, id, 0, "a holder gave no PIN")
 	if _, err := s.enrol(holder.number, code, holder.pin, ""); err != nil {
 		t.Fatalf("LOCKED — after six requests with no PIN, the right PIN and code answered %v", err)
+	}
+}
+
+// =============================================================================
+// THE CODE ITSELF (2026-11-10)
+// =============================================================================
+// A slip is 16 Crockford base32 characters in four groups, XXXX-XXXX-XXXX-XXXX:
+// two independent halves of 40 bits each. Halves from two signatories (0026)
+// are two slips of eight characters. Typing is forgiving where it cannot
+// cost anything: case, spaces and dashes are ignored, I and L are read as 1,
+// O as 0, and the two halves may be typed in either order.
+
+var slipShape = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$`)
+var halfShape = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$`)
+
+// 80 bits on the slip, 40 in each half, every draw fresh.
+func TestRedeem14_ACodeIsSixteenCharactersInTwoIndependentHalves(t *testing.T) {
+	s := newSvc(t)
+	seen := map[string]bool{}
+	for i := 0; i < 20; i++ {
+		code, d := s.svc.NewEnrolmentCode()
+		half, hd := s.svc.NewEnrolmentHalf()
+		switch {
+		case !slipShape.MatchString(code):
+			t.Fatalf("SHAPE — a code reads %q; want 16 Crockford base32 characters, XXXX-XXXX-XXXX-XXXX", code)
+		case !halfShape.MatchString(half):
+			t.Fatalf("SHAPE — a half reads %q; want 8 Crockford base32 characters, XXXX-XXXX", half)
+		case len(d) != 64 || len(hd) != 64:
+			t.Fatalf("NOT A DIGEST — digests %q, %q", d, hd)
+		case seen[code[:9]] || seen[code[10:]] || code[:9] == code[10:]:
+			t.Fatalf("REPEATED — a half came back twice in 20 draws: %q", code)
+		}
+		seen[code[:9]], seen[code[10:]] = true, true
+	}
+}
+
+// Two signatories' slips, typed in the other order, in lower case with a
+// space for each dash and O for a zero: the member enrols.
+func TestRedeem15_TheHalvesTypedAnyWayRedeem(t *testing.T) {
+	s := newSvc(t)
+	e := s.newcomer("Branch officer (enrolling by halves)")
+	fixture(t, s.s.appoint(e.member, "branch_officer", true, "2020-01-01", ""), "a signing post")
+	chair := s.s.user("Chairman")
+	s.s.signatory(chair, "chairman")
+	treas := s.s.user("Treasurer")
+	s.s.signatory(treas, "treasurer")
+	h1, d1 := s.svc.NewEnrolmentHalf()
+	h2, d2 := s.svc.NewEnrolmentHalf()
+	w := &hworld{eworld: &eworld{s: s.s}, target: e.user, targetMem: e.member}
+	id, err := w.firstHalf(t, chair, d1)
+	fixture(t, err, "the chairman's half")
+	fixture(t, w.secondHalf(t, treas, e.member, id, d2, false), "the treasurer's half")
+	typed := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(h2+" "+h1, "-", " "), "0", "O"))
+	if _, err := s.enrol(e.number, typed, "", enrolNewPIN); err != nil {
+		t.Fatalf("REFUSED — the two halves typed %q (other order, lower case, spaces, O for 0) answered %v", typed, err)
+	}
+	if !codeState(t, id).used {
+		t.Fatalf("SLIP LIVE — the halved code enrolled and is still unused")
 	}
 }

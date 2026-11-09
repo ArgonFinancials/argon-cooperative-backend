@@ -117,6 +117,15 @@ type Service interface {
 	// ErrTryLater, ErrNeedsNewPIN, ErrPINNotAllowed, ErrPINAlreadySet,
 	// ErrSlipUsed. Returns the session and the new device's token.
 	Enrol(ctx context.Context, req EnrolRequest) (Result, error)
+	// NewEnrolmentCode draws a whole code for one issuer: the text for the
+	// slip (16 Crockford base32 characters, XXXX-XXXX-XXXX-XXXX, two
+	// independent 40-bit halves) and the digest the code is stored under.
+	// The text is shown once, to its issuer, and never stored or logged.
+	NewEnrolmentCode() (text, digest string)
+	// NewEnrolmentHalf draws one half of a signatory's code (0026): the text
+	// for that signatory's slip (XXXX-XXXX) and its half digest. Each half is
+	// drawn alone, so neither says anything about the other.
+	NewEnrolmentHalf() (text, digest string)
 }
 
 // ActKind names the attributable act a PIN proof is minted FOR. The kind is
