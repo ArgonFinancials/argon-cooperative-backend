@@ -119,6 +119,13 @@ jobs:
       - name: Operator script (46-create-society.sh), every rule sabotaged
         if: matrix.suite == '0023'
         run: bash test/ops/sabotage_create_society.sh
+      # And 0027's: the founding officers, and the slip printed once.
+      - name: Operator script (47-founding-officer.sh)
+        if: matrix.suite == '0027'
+        run: bash test/ops/founding_officer_test.sh
+      - name: Operator script (47-founding-officer.sh), every rule sabotaged
+        if: matrix.suite == '0027'
+        run: bash test/ops/sabotage_founding_officer.sh
 
   # The client install's FAILURE PATH, made to fire on every push (a failure
   # path is proven by making it fire, finding 47). apt is pointed at a proxy
