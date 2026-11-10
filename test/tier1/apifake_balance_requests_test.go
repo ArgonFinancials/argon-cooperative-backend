@@ -25,6 +25,7 @@
 //	hold_refusal_bare                a refused hold says only that it does not fit
 //	hold_cause_wrong                 every refusal blamed on the withdrawable falling
 //	hold_uses_quote                  the hold applies the quoted charge, so the quote binds
+//	approved_as_waiting              a request with quorum is still told it is waiting for approval
 package tier1
 
 import (
@@ -38,6 +39,7 @@ import (
 )
 
 const requestedNote = "Requested, waiting for approval. Not taken from what you can withdraw until it is approved."
+const approvedNote = "Approved, waiting to be paid. Not yet taken from what you can withdraw."
 
 var (
 	quotesOnce sync.Once
@@ -102,7 +104,7 @@ func (f *fakeAPI) requestedOf(ctx context.Context, member string) ([]api.Request
 		held = `AND NOT EXISTS (SELECT 1 FROM withdrawal_holds h WHERE h.request_id = r.id)`
 	}
 	rows, err := f.db.Query(ctx, `SELECT r.id::text, r.amount_kobo, coalesce(r.quoted_partner_fee_kobo, 0), coalesce(r.quoted_vat_kobo, 0),
-		coalesce(r.quoted_statutory_levy_kobo, 0), coalesce(r.quoted_argon_margin_kobo, 0), r.raised_at
+		coalesce(r.quoted_statutory_levy_kobo, 0), coalesce(r.quoted_argon_margin_kobo, 0), r.raised_at, approval_status(r.id)::text
 		FROM approval_requests r WHERE r.member_id = $1 AND r.kind = 'withdrawal_out'
 		  AND approval_status(r.id) IN ('awaiting', 'approved') `+held+` ORDER BY r.raised_at, r.id`, member)
 	if err != nil {
@@ -115,11 +117,18 @@ func (f *fakeAPI) requestedOf(ctx context.Context, member string) ([]api.Request
 		var amount int64
 		var c chg
 		var at time.Time
-		if err := rows.Scan(&id, &amount, &c.fee, &c.vat, &c.levy, &c.margin, &at); err != nil {
+		var status string
+		if err := rows.Scan(&id, &amount, &c.fee, &c.vat, &c.levy, &c.margin, &at, &status); err != nil {
 			return nil, 0, err
 		}
-		out = append(out, api.RequestedWithdrawal{RequestId: uuidOf(id), AmountKobo: magOf(amount), QuotedCharges: *c.wire(),
-			TotalKobo: magOf(amount + c.total()), RaisedAt: at, Note: requestedNote})
+		note := requestedNote
+		if status == "approved" && f.brk != "approved_as_waiting" {
+			note = approvedNote
+		} else {
+			status = "awaiting"
+		}
+		out = append(out, api.RequestedWithdrawal{RequestId: uuidOf(id), Status: api.RequestedWithdrawalStatus(status), AmountKobo: magOf(amount), QuotedCharges: *c.wire(),
+			TotalKobo: magOf(amount + c.total()), RaisedAt: at, Note: note})
 		sum += amount + c.total()
 	}
 	return out, sum, rows.Err()

@@ -263,7 +263,7 @@ func (f *fakeAPI) sessionLayer(next http.Handler) http.Handler {
 		}
 
 		// CSRF: a cookie session's state change carries its own token.
-		public := fakePublic[r.URL.Path]
+		public := fakePublic[r.URL.Path] && !(f.brk == "enrol_not_public" && r.URL.Path == "/auth/enrol")
 		needsCSRF := !public && ((viaCookie && (r.Method == http.MethodPost || f.brk == "csrf_on_get")) ||
 			(hasBearer && f.brk == "bearer_needs_csrf" && r.Method == http.MethodPost))
 		if needsCSRF && f.brk == "signout_without_csrf" && r.URL.Path == "/auth/sign-out" {
@@ -286,7 +286,7 @@ func (f *fakeAPI) sessionLayer(next http.Handler) http.Handler {
 		}
 
 		switch {
-		case (r.URL.Path == "/auth/sign-in" || r.URL.Path == "/auth/codes/verify") && r.Method == http.MethodPost:
+		case (r.URL.Path == "/auth/sign-in" || r.URL.Path == "/auth/codes/verify" || (r.URL.Path == "/auth/enrol" && f.brk != "enrol_browser_no_cookies")) && r.Method == http.MethodPost:
 			f.signInLayer(w, r, next, origin)
 			return
 		case r.URL.Path == "/auth/sign-out" && viaCookie:

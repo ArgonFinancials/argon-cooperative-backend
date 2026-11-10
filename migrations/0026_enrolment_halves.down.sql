@@ -99,7 +99,7 @@ END $$ LANGUAGE plpgsql VOLATILE;
 REVOKE EXECUTE ON FUNCTION enrolment_redeem(UUID, TEXT, TEXT) FROM PUBLIC;
 DROP INDEX enrolment_code_one_per_second_act;
 ALTER TABLE enrolment_codes DROP CONSTRAINT enrolment_code_one_shape,
-  DROP COLUMN second_by_act, DROP COLUMN second_half_digest, DROP COLUMN first_half_digest;
+  DROP COLUMN pending, DROP COLUMN second_by_act, DROP COLUMN second_half_digest, DROP COLUMN first_half_digest;
 ALTER TABLE enrolment_codes ALTER COLUMN code_digest SET NOT NULL;
 DROP FUNCTION enrolment_assembled(TEXT, TEXT);
 COMMIT;

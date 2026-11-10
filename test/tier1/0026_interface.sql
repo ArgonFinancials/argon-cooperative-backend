@@ -7,7 +7,8 @@
 BEGIN;
 ALTER TABLE enrolment_codes ALTER COLUMN code_digest DROP NOT NULL;
 ALTER TABLE enrolment_codes ADD COLUMN first_half_digest TEXT, ADD COLUMN second_half_digest TEXT,
-  ADD COLUMN second_by_act UUID REFERENCES credential_acts(id);
+  ADD COLUMN second_by_act UUID REFERENCES credential_acts(id),
+  ADD COLUMN pending BOOLEAN GENERATED ALWAYS AS (code_digest IS NULL) STORED;
 CREATE FUNCTION enrolment_code_assemble() RETURNS trigger AS $$
 BEGIN
   IF NEW.second_half_digest IS NOT NULL AND NEW.first_half_digest IS NOT NULL THEN

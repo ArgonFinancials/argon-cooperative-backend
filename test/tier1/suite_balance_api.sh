@@ -46,6 +46,7 @@ declare -gA SVC_TARGET_OF=(
   [largest_off_by_one]='TestApiBalance07_TheFigureShownIsTheFigureEnforced'
   [largest_when_unavailable]='TestApiBalance04_AnUnsetFloorShowsSavingsAndWhyNotTheRest'
   [quote_recomputed]='TestApiBalance10_TheQuotedChargeBesideTheChargeApplied'
+  [approved_as_waiting]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'
   [requested_deducted]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'
   [requested_hidden]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'
   [requested_kept_after_authorised]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'

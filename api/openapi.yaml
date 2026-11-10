@@ -1017,9 +1017,18 @@ components:
 
     RequestedWithdrawal:
       type: object
-      required: [requestId, amountKobo, quotedCharges, totalKobo, raisedAt, note]
+      required: [requestId, status, amountKobo, quotedCharges, totalKobo, raisedAt, note]
       properties:
         requestId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [awaiting, approved]
+          description: |
+            awaiting: signatures still to come. approved: the quorum has
+            signed and the payout is not yet authorised (2026-11-10: a request
+            with quorum was told it was "waiting for approval", which was
+            untrue). Neither is taken from the withdrawable figure.
+
         amountKobo: { $ref: '#/components/schemas/Magnitude' }
         quotedCharges:
           description: The charge the request was quoted when raised, as kept (0017); never recomputed.
@@ -1030,7 +1039,7 @@ components:
         raisedAt: { type: string, format: date-time }
         note:
           type: string
-          description: 'To show as written: "Requested, waiting for approval. Not taken from what you can withdraw until it is approved."'
+          description: 'To show as written. awaiting: "Requested, waiting for approval. Not taken from what you can withdraw until it is approved." approved: "Approved, waiting to be paid. Not yet taken from what you can withdraw."'
 
     WithdrawalQuote:
       type: object
@@ -1186,6 +1195,92 @@ components:
           format: uuid
           description: The officer's own proof, minted for lock_release.
 
+    EnrolRequest:
+      type: object
+      required: [credential, code]
+      properties:
+        credential:
+          type: string
+          description: A member number or a phone number, as at sign-in.
+        code:
+          type: string
+          description: |
+            What is on the slip: 16 characters, XXXX-XXXX-XXXX-XXXX. Case,
+            spaces and dashes are ignored, I and L read as 1 and O as 0. A
+            signatory's two half-slips may be typed in either order.
+        pin:
+          type: string
+          description: Someone who already has a PIN gives it. The code never stands in for it (D-15).
+        newPin:
+          type: string
+          description: Someone who has never had a PIN chooses one here (six digits, CheckNewPIN). Refused for anyone who has one.
+    IssueEnrolmentCode:
+      type: object
+      required: [pinProofId]
+      properties:
+        pinProofId:
+          type: string
+          format: uuid
+          description: The issuer's own proof, minted for enrolment_issue.
+    EnrolmentSlip:
+      type: object
+      required: [codeId, kind, slip, expiresAt, complete]
+      properties:
+        codeId: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [whole, first_half, second_half]
+          description: |
+            whole: the code, for one issuer to hand over. first_half: a
+            signatory's code (0026); this signatory's half, and a second,
+            different current signatory issues the other. second_half: that
+            other half; the code is now complete.
+        slip:
+          type: string
+          description: |
+            SHOWN ONCE, to its issuer, and never again by any endpoint: the
+            server keeps only digests. whole: XXXX-XXXX-XXXX-XXXX. A half:
+            XXXX-XXXX. Hand it over in person.
+        expiresAt: { type: string, format: date-time }
+        complete:
+          type: boolean
+          description: True when the member can redeem it (whole, or both halves issued).
+    EnrolmentCodeRecord:
+      type: object
+      required: [codeId, issuedAt, expiresAt, issuedBy, issuedByOperator, state, expired, wrongTries]
+      properties:
+        codeId: { type: string, format: uuid }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        issuedBy:
+          type: string
+          description: The issuing officer's name, or the operator's name for a founding officer's code.
+        issuedByOperator: { type: boolean }
+        secondHalfBy:
+          type: string
+          description: The second signatory's name, for a code issued in halves.
+        state:
+          type: string
+          enum: [waiting_for_second_half, live, used, voided]
+        voidReason:
+          type: string
+          enum: [reissued, wrong_tries]
+        expired: { type: boolean, description: "Live but past its 30 days: it redeems nothing." }
+        wrongTries: { type: integer }
+        usedAt: { type: string, format: date-time }
+        usedDeviceId:
+          type: string
+          format: uuid
+          description: The device the code trusted (0025). With usedAt, what an officer needs when a member says "I never used my slip".
+        replaces: { type: string, format: uuid }
+    EnrolmentCodeHistory:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          description: Newest first. Never a code or a digest.
+          items: { $ref: '#/components/schemas/EnrolmentCodeRecord' }
     LockReleased:
       type: object
       required: [memberId, releasedAt, releasedBy]
@@ -1491,6 +1586,65 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '503':
           description: "sign_in_unavailable — DELIBERATE, not a defect: this server runs without an auth service (pending the argon_auth connection). Nobody is signed in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/enrol:
+    post:
+      operationId: postEnrol
+      x-argon-built: true
+      summary: Trust a first device with an enrolment code, and sign in on it (public)
+      description: |
+        The slip an officer (or, for a founding officer, the operator) handed
+        over in person. Someone who has never had a PIN chooses one with it;
+        anyone who has one gives it, and it is checked FIRST. The code never
+        stands in for a PIN reset (D-15).
+
+        One answer for an unknown number, a wrong PIN and a wrong code
+        (refused). A wrong PIN counts against the lockout and never touches
+        the code; a wrong code costs one of the code's five tries and never
+        counts against the lockout. A refused or missing new PIN leaves the
+        code live. A browser's session and new device come back in cookies,
+        as at sign-in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnrolRequest' }
+      responses:
+        '200':
+          description: signed_in, on the device this code just trusted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignInResult' }
+        '400':
+          description: Malformed body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: refused — the ONE answer to an unknown number, a wrong PIN and a wrong code.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "slip_used: the code typed is this person's own, and it was already used. The message is for the member as written: This code has already been used. Speak to your secretary."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "needs_new_pin (choose a PIN to finish); pin_not_allowed (that PIN is too easy to guess); pin_already_set (you have a PIN: enter it, not a new one). The code is still live."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: try_later — locked, for every number alike.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "sign_in_unavailable — this server runs without an auth service."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -2243,6 +2397,97 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "reason_required (more than ten characters: what happened, and how the member was identified)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/enrolment-codes:
+    post:
+      operationId: issueEnrolmentCode
+      x-argon-built: true
+      summary: An officer issues a member's enrolment code, on their own step-up; a signatory's comes in two halves
+      description: |
+        For a member who holds no signing post: one current officer of the
+        society (never the internal auditor) issues a WHOLE code. For someone
+        who holds a signing post (0026): two other current signatories each
+        issue a HALF; the first call returns first_half, and a second,
+        different signatory's call returns second_half and completes it.
+        Nobody issues their own. A new code voids the member's live one
+        (including one waiting for its second half), and the record says so.
+
+        The slip is SHOWN ONCE, in this response, to its issuer. Neither
+        signatory ever sees the other's half: the server keeps only digests.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueEnrolmentCode' }
+      responses:
+        '201':
+          description: Issued. Hand the slip over in person.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrolmentSlip' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for enrolment_issue, the caller's own, unspent); not_permitted (the internal auditor; or an officer who does not sign, for a signatory's code); conflict_of_interest (the caller's own code)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "second_signatory_needed: this signatory issued the first half; a different signatory issues the other."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "enrolment_unavailable — this server runs without an auth service, which draws the codes."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: getEnrolmentCodes
+      x-argon-built: true
+      summary: A member's enrolment codes, for an officer of the society — who issued each, when, and the device it trusted
+      description: |
+        The accepted residual (a slip is a bearer credential, LEDGER_CONTRACT
+        12) is recoverable because of this: an officer sees who issued each
+        code, when, whether it was used, when, and the device it trusted.
+        Never a code or a digest.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The member's codes, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrolmentCodeHistory' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

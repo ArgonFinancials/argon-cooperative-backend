@@ -47,7 +47,7 @@ type bDeduction struct {
 }
 
 type bRequested struct {
-	RequestId, AmountKobo, TotalKobo, RaisedAt, Note string
+	RequestId, Status, AmountKobo, TotalKobo, RaisedAt, Note string
 	QuotedCharges                                    mCharges
 }
 
@@ -411,10 +411,23 @@ func TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised(t *testing.
 	if p.LargestRequestableKobo == nil || *p.LargestRequestableKobo != k(borrowerWithdrawable-1075) {
 		t.Fatalf("TAKEN — the largest requestable moved to %s with an open request; want %s", orNone(p.LargestRequestableKobo), k(borrowerWithdrawable-1075))
 	}
+	if p.Requested[0].Status != "awaiting" {
+		t.Fatalf("WRONG STATUS — a request with no signatures reads %q; want awaiting", p.Requested[0].Status)
+	}
 	for _, s := range []string{w.s2, w.secretary} {
 		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
 			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
 		}
+	}
+	// Quorum, no hold yet (2026-11-10, the frontend's finding): still listed,
+	// still not taken, and told the truth.
+	p = w.position(t, w.borrower, w.bMem)
+	if len(p.Requested) != 1 || p.Requested[0].Status != "approved" ||
+		p.Requested[0].Note != "Approved, waiting to be paid. Not yet taken from what you can withdraw." {
+		t.Fatalf("UNTRUE — a request with quorum reads %+v; want status approved and \"Approved, waiting to be paid. Not yet taken from what you can withdraw.\"", p.Requested)
+	}
+	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) {
+		t.Fatalf("TAKEN — an approved request with no hold reduced the figure to %s", orNone(p.WithdrawableKobo))
 	}
 	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
 		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)

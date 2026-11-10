@@ -180,7 +180,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'enrolment_codes' AND column_name = 'first_half_digest') THEN
       GRANT INSERT (first_half_digest) ON enrolment_codes TO argon_app;
       GRANT UPDATE (second_half_digest, second_by_act) ON enrolment_codes TO argon_app;
-      GRANT SELECT (second_by_act) ON enrolment_codes TO argon_app;
+      GRANT SELECT (second_by_act, pending) ON enrolment_codes TO argon_app;
     END IF;
   END IF;
 END $$;

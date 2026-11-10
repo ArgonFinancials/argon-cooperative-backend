@@ -37,6 +37,8 @@ var (
 const (
 	quoteNote     = "This quote is indicative: the charge is fixed when the payout is authorised, from your society's charges that day, and you will be shown it then."
 	requestedNote = "Requested, waiting for approval. Not taken from what you can withdraw until it is approved."
+	// Quorum signed, no hold yet (2026-11-10): told the truth, not "waiting for approval".
+	approvedNote = "Approved, waiting to be paid. Not yet taken from what you can withdraw."
 )
 
 // balanceReader: the member's society, when the caller may read their figure.
@@ -135,7 +137,7 @@ func (s *server) GetMemberWithdrawable(ctx context.Context, req GetMemberWithdra
 		       coalesce(r.quoted_partner_fee_kobo, 0), coalesce(r.quoted_vat_kobo, 0), coalesce(r.quoted_statutory_levy_kobo, 0), coalesce(r.quoted_argon_margin_kobo, 0),
 		       coalesce(r.quoted_partner_fee_kobo, 0) + coalesce(r.quoted_vat_kobo, 0) + coalesce(r.quoted_statutory_levy_kobo, 0) + coalesce(r.quoted_argon_margin_kobo, 0),
 		       r.amount_kobo + coalesce(r.quoted_partner_fee_kobo, 0) + coalesce(r.quoted_vat_kobo, 0) + coalesce(r.quoted_statutory_levy_kobo, 0) + coalesce(r.quoted_argon_margin_kobo, 0),
-		       r.raised_at
+		       r.raised_at, approval_status(r.id)::text
 		  FROM approval_requests r
 		 WHERE r.member_id = $1 AND r.kind = 'withdrawal_out' AND approval_status(r.id) IN ('awaiting', 'approved')
 		   AND NOT EXISTS (SELECT 1 FROM withdrawal_holds h WHERE h.request_id = r.id
@@ -149,11 +151,16 @@ func (s *server) GetMemberWithdrawable(ctx context.Context, req GetMemberWithdra
 		var id string
 		var amount, fee, vat, levy, margin, charge, total int64
 		var at time.Time
-		if err := rq.Scan(&id, &amount, &fee, &vat, &levy, &margin, &charge, &total, &at); err != nil {
+		var status string
+		if err := rq.Scan(&id, &amount, &fee, &vat, &levy, &margin, &charge, &total, &at, &status); err != nil {
 			return nil, err
 		}
-		out.Requested = append(out.Requested, RequestedWithdrawal{RequestId: uuidOf(id), AmountKobo: magnitudeOf(amount),
-			QuotedCharges: chargesOf(fee, vat, levy, margin, charge), TotalKobo: magnitudeOf(total), RaisedAt: at, Note: requestedNote})
+		st, note := RequestedWithdrawalStatusAwaiting, requestedNote
+		if status == "approved" {
+			st, note = RequestedWithdrawalStatusApproved, approvedNote
+		}
+		out.Requested = append(out.Requested, RequestedWithdrawal{RequestId: uuidOf(id), Status: st, AmountKobo: magnitudeOf(amount),
+			QuotedCharges: chargesOf(fee, vat, levy, margin, charge), TotalKobo: magnitudeOf(total), RaisedAt: at, Note: note})
 	}
 	if err := rq.Err(); err != nil {
 		return nil, err

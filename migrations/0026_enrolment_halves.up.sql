@@ -36,6 +36,8 @@ ALTER TABLE enrolment_codes
   ADD COLUMN first_half_digest  TEXT CONSTRAINT enrolment_first_half_is_digest CHECK (first_half_digest ~ '^[0-9a-f]{64}$'),
   ADD COLUMN second_half_digest TEXT CONSTRAINT enrolment_second_half_is_digest CHECK (second_half_digest ~ '^[0-9a-f]{64}$'),
   ADD COLUMN second_by_act      UUID REFERENCES credential_acts(id),
+  -- Readable by the app, which reads no digest: is this code waiting for its second half?
+  ADD COLUMN pending            BOOLEAN GENERATED ALWAYS AS (code_digest IS NULL) STORED,
   ADD CONSTRAINT enrolment_code_one_shape CHECK (
        (first_half_digest IS NULL     AND second_half_digest IS NULL     AND second_by_act IS NULL     AND code_digest IS NOT NULL)
     OR (first_half_digest IS NOT NULL AND second_half_digest IS NULL     AND second_by_act IS NULL     AND code_digest IS NULL)

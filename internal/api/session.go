@@ -139,7 +139,7 @@ func (s *server) gate(next http.Handler) http.Handler {
 // session and device leave in cookies instead of the body.
 func (s *server) browserSignIn(f StrictHandlerFunc, operationID string) StrictHandlerFunc {
 	switch operationID {
-	case "PostSignIn", "PostVerifyCode", "PostSignOut":
+	case "PostSignIn", "PostVerifyCode", "PostSignOut", "PostEnrol":
 	default:
 		return f
 	}
@@ -184,6 +184,10 @@ func (s *server) browserSignIn(f StrictHandlerFunc, operationID string) StrictHa
 			r := SignInResult(out)
 			s.toCookies(w, &r, dev)
 			return PostVerifyCode200JSONResponse(r), nil
+		case PostEnrol200JSONResponse: // a device this slip trusted: its cookie replaces any the browser held
+			r := SignInResult(out)
+			s.toCookies(w, &r, dev)
+			return PostEnrol200JSONResponse(r), nil
 		}
 		return res, nil
 	}

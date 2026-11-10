@@ -67,7 +67,7 @@ func NewServer(d Deps) (http.Handler, error) {
 }
 
 // Paths that need no session.
-var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true}
+var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true}
 
 func callerOf(ctx context.Context) string {
 	u, _ := ctx.Value(callerKey{}).(string)

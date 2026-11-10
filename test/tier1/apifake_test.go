@@ -75,7 +75,7 @@ type fakeAPI struct {
 }
 
 // The paths that need no session, as in the real server.
-var fakePublic = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true}
+var fakePublic = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true}
 
 func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 	return newFakeAPIWith(&fakeAPI{db: pool, brk: brk})
@@ -99,7 +99,7 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		if !ok {
 			user, ok = f.deviceCaller(r) // device_cookie_authenticates only
 		}
-		if fakePublic[r.URL.Path] || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") || (f.brk == "me_public" && r.URL.Path == "/me" && r.Header.Get("Authorization") == "") {
+		if (fakePublic[r.URL.Path] && !(f.brk == "enrol_not_public" && r.URL.Path == "/auth/enrol")) || (f.brk == "no_token_reaches" && r.Header.Get("Authorization") == "") || (f.brk == "me_public" && r.URL.Path == "/me" && r.Header.Get("Authorization") == "") {
 			ok = true // no_token_reaches: a request with no token reaches the handlers as nobody
 		}
 		if !ok {
