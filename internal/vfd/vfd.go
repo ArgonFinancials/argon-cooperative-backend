@@ -63,9 +63,9 @@ const (
 type State string
 
 const (
-	Succeeded State = "succeeded"
-	NotFound  State = "not_found"
-	Pending   State = "pending"
+	Succeeded    State = "succeeded"
+	NotFound     State = "not_found"
+	Pending      State = "pending"
 	StateUnknown State = "unknown"
 )
 
@@ -143,8 +143,3 @@ type Client interface {
 	OpenAnother(ctx context.Context, previousAccountNo string) (Opened, error)
 	Statement(ctx context.Context, accountNo string, from, to time.Time) error
 }
-
-var errNotBuilt = errors.New("vfd: the client is not built yet")
-
-// New returns the VFD client, or refuses a configuration it cannot call with.
-func New(cfg Config) (Client, error) { return nil, errNotBuilt }

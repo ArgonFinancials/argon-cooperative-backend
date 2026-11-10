@@ -126,7 +126,11 @@ func vfdAnswerMode(w http.ResponseWriter, mode string) {
 	}
 }
 
-func (f *fakeVFD) all() []vfdCall { f.mu.Lock(); defer f.mu.Unlock(); return append([]vfdCall(nil), f.calls...) }
+func (f *fakeVFD) all() []vfdCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]vfdCall(nil), f.calls...)
+}
 
 // vfdClientFor: the client under test: the real one, or under
 // ARGON_TEST_VFD_FAKE the reference (vfdfake_client_test.go) with its break.
