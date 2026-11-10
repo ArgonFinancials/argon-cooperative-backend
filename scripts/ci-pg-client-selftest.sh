@@ -58,7 +58,10 @@ c2() {
 c3() {
   purge || fail "psql 18 still there before C3" || return 1
   local start=$(date +%s)
-  CI_APT_ATTEMPT_SECONDS=45 bash "$1" > "$WORK/c3.log" 2>&1; local rc=$?
+  # No cache: cleared, not merely unset here (the workflow passes CI_PG_DEB_CACHE
+  # to this whole script, and C3 inherited it on 2026-11-10: it installed from
+  # the cache and "passed" as an install that should have failed).
+  CI_PG_DEB_CACHE= CI_APT_ATTEMPT_SECONDS=45 bash "$1" > "$WORK/c3.log" 2>&1; local rc=$?
   local took=$(( $(date +%s) - start ))
   tail -5 "$WORK/c3.log" | sed 's/^/    /'
   ((rc == 1)) || fail "the install did not fail against a mirror that never answers (exit $rc)" || return 1
