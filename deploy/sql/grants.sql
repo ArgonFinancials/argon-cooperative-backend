@@ -240,5 +240,19 @@ BEGIN
   END IF;
 END $$;
 
+-- 0031: THE REGISTER. register_member is the ONE way the app adds a member:
+-- it rests on the society's secretary's own act and checks the record. The
+-- app's INSERT on members (above) is taken back once it exists (P70); UPDATE
+-- (relinking) stays. A register batch is recorded by the app, never its time.
+DO $$
+BEGIN
+  IF to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid)') IS NOT NULL THEN
+    REVOKE INSERT ON members FROM argon_app;
+    GRANT EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID) TO argon_app;
+    GRANT SELECT ON member_register_batches TO argon_app;
+    GRANT INSERT (id, society_id, reference, act_id, row_count) ON member_register_batches TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

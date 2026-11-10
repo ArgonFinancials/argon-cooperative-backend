@@ -63,6 +63,7 @@ R2=$(U 62) SP5=$(U 115) SA5=$(U 125) SP1=$(U 111) SP2=$(U 112) SP3=$(U 113) SP4=
 # signing posts; M2 is auditor. Adapts to a schema before 0005 (a restored
 # older copy), where a batch names no act.
 info "seeding fixtures in $db as argon_app"
+OWNER_SEED=argon_migrator   # fixtures the app has no path to write (0031: members)
 pg_as argon_app "$db" -q -c "INSERT INTO users (id, full_name) VALUES
   ($ACTOR, 'Probe Actor'), ($U1, 'Probe Treasurer'), ($U2, 'Probe Auditor'), ($U3, 'Probe Chairman');" </dev/null >/dev/null
 has_acts=$(pg_as argon_app "$db" -At -c "SELECT count(*) FROM information_schema.columns
@@ -207,13 +208,20 @@ SQL
 $(sign_on_sql "$R3" "$SP7" "$SA7" "$U1" "$M1" treasurer)
 $(sign_on_sql "$R3" "$SP8" "$SA8" "$U3" "$M3" chairman)"
 fi
-pg_as argon_app "$db" -q <<SQL >/dev/null
+# The branch and members: written as the OWNER, the world the app finds. From
+# 0031 the app adds a member only through register_member, on the
+# secretary's act (P70); these are the probe's fixtures, not an app act.
+pg_as $OWNER_SEED "$db" -q <<SQL >/dev/null
 BEGIN;
 INSERT INTO branches (id, society_id, code, name) VALUES ($B, $S, 'HQ', 'Head office');
 INSERT INTO members (id, society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id) VALUES
   ($M1, $S, $B, 'P-001', 'Probe Treasurer', '+2340000000001', 'payroll', '2020-01-01', $U1),
   ($M2, $S, $B, 'P-002', 'Probe Auditor',   '+2340000000002', 'payroll', '2020-01-01', $U2),
   ($M3, $S, $B, 'P-003', 'Probe Chairman',  '+2340000000003', 'cash',    '2020-01-01', $U3);
+COMMIT;
+SQL
+pg_as argon_app "$db" -q <<SQL >/dev/null
+BEGIN;
 INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from) VALUES
   ($S, $M1, 'treasurer', true, '2020-01-01'),
   ($S, $M3, 'chairman',  true, '2020-01-01');
@@ -603,6 +611,10 @@ fi
 # 0030: whether a slip is someone's spent slip is the auth service's question.
 if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('enrolment_slip_used(uuid,text)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
 probe req P69 argon_app '42501.*permission denied for function enrolment_slip_used' "app asks whether a code is a member's spent slip"   "SELECT enrolment_slip_used($U1, repeat('a', 64));"
+fi
+# 0031: a member is added only through register_member, on the secretary's act.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P70 argon_app '42501.*permission denied for table members' "app adds a member directly, around the secretary's act"   "INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on) VALUES ($S, $B, 'APP-1', 'App', '+2348000000009', 'cash', $TODAY);"
 fi
 # 0027: appointing a founding officer is the operator's function alone.
 if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regproc('operator_appoint_founding_officer') IS NOT NULL)::int" </dev/null) == 1 ]]; then
