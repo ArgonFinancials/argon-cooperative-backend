@@ -7,7 +7,9 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -25,6 +27,21 @@ import (
 )
 
 func main() {
+	// The operator's one-shot (deploy/47-founding-officer.sh): a fresh
+	// enrolment code and its digest under the server's AUTH_CODE_KEY, the
+	// slip's text and the digest on one line. Nothing is stored or logged
+	// here; the script stores the digest and shows the text once.
+	if len(os.Args) == 2 && os.Args[1] == "enrolment-code" {
+		key, err := hex.DecodeString(os.Getenv("AUTH_CODE_KEY"))
+		if err != nil || len(key) < 32 {
+			fmt.Fprintln(os.Stderr, "enrolment-code: AUTH_CODE_KEY must be set, at least 32 bytes as hex")
+			os.Exit(2)
+		}
+		text, digest := auth.DrawEnrolmentCode(key)
+		fmt.Println(text, digest)
+		return
+	}
+
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	cfg, err := config.Load()

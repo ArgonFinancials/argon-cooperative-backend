@@ -593,6 +593,11 @@ probe req P57 argon_app '42501.*permission denied for table enrolment_codes' "ap
 probe req P58 argon_app '42501.*permission denied for table enrolment_codes' "app reads a half's digest" \
   "SELECT first_half_digest, second_half_digest FROM enrolment_codes LIMIT 1;"
 fi
+# 0027: appointing a founding officer is the operator's function alone.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regproc('operator_appoint_founding_officer') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P59 argon_app '42501.*permission denied for function operator_appoint_founding_officer' "app appoints an officer through the operator's function" \
+  "SELECT operator_appoint_founding_officer($S, 'App', '+2348000000000', 'APP-1', current_date, 'chairman', true, 'app', 'app', 'app', current_date, 'app');"
+fi
 # (No P56, "the auth service issues a code": with the INSERT wrongly granted it
 # was still refused, by the code's own rule, because argon_auth can write no
 # act. A neighbour covered it, so it could not show the grant; the act half is

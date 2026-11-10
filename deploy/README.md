@@ -20,6 +20,7 @@ server with `ARGON_HOST=1`), or `host` (a native server install).
 | `50-backup.sh` | all | pg_dump + same-snapshot manifest → `BACKUP_STORE`, read back and checksummed. |
 | `60-restore.sh` | all | `--drill`: restore to scratch, compare manifest, run Tier 1 probe, drop. `--into DB --confirm`: real recovery. |
 | `46-create-society.sh` | server | Founds a society on its founding resolution (0023): the three quorums, the standard chart, a head office. Refuses while `BACKUP_STORE` is not `s3://` or the newest passing drill is over 8 days old. |
+| `47-founding-officer.sh` | server | Appoints a founding officer on the founding resolution (0027) while the society is a prospect, draws their enrolment code with the API image, and prints the slip once. A rerun never reprints; `--reissue` voids and replaces. |
 | `70-verify-tier1.sh` | all | Tries to break the Tier 1 constraints in a scratch DB; exit 1 if any holds only on paper. |
 | `65-check-freshness.sh` | server | Newest dump, newest passing drill, timers enabled: raises an alert if any is stale. Daily via `argon-freshness.timer`. |
 | `alert.sh` | server | Raise / list / acknowledge alerts: journal, SSH login banner, and `ALERT_CHANNEL`. |
@@ -216,6 +217,7 @@ Why not a plain append: run twice, it leaves two keys; the later one wins, and e
 | 67 | **The env file's own line would have refused going live** (2026-11-06, found diagnosing 66). The guard (75) derived its public ports from `ARGON_API_DOMAIN` only when `PUBLIC_PORTS` was EMPTY; `ec2.env.example` set `PUBLIC_PORTS=22`, the instance's file was copied from it, and so with the API's name set the guard still allowed 22 alone. 85's "except ports: 22" was that line speaking. Had 86's listener come up, its own last step would have refused nginx on 80 and 443: its own work. **No fixture had the line; the real file did, and the example file we shipped put it there.** Finding 64's cause for the third time in a week: a fixture written from what the file was expected to say. | The public ports are derived, never set: 22, and 80 and 443 once the API has a name. A `PUBLIC_PORTS` line is reported ("is not read … delete the line") and ignored; the example no longer has one. L12 is the instance's line verbatim beside a public name (sabotages `loopback_env_wins`, the old rule; `loopback_env_silent`, ignored without a word); L13: listing 8080 there opens nothing. Open, as its own pass: every other line of the real `deploy.env` that has never appeared in a fixture. |
 | 68 | **86 checked its work on the one address where its work never answers** (2026-11-06, reasoned while diagnosing 66, then PROVEN before anything changed: E02 on CI, 152b6f5). nginx chooses a server by the address a request arrives on before it reads the name. 85's site listens on 127.0.0.1:80; the public site on 0.0.0.0:80. 86's final checks curled 127.0.0.1, so 85's site answered them all: "plain-HTTP sign-in is refused 403" passed on 85's refusal, not the public site's, and "a GET is redirected to HTTPS" would have failed, 85's site proxying /healthz instead. Had 66 not stopped it first, 86 would have died at its last step on a public site that worked. | 86's checks go to the instance's private address (from the metadata service), where only the public site answers, and the sign-in refusal must carry the public site's own text (`HTTPS only."}`; 85's names /healthz). E02 is the evidence, both ways: 85's text on 127.0.0.1, the public site's on another local address. The step-5 change itself runs only on the instance (it needs the metadata service): its first run there is its proof. |
 | 69 | **A missing `--db` chose another database, and the failure looked like the tests failing** (2026-11-06, the first run of `test/ops/create_society_test.sh`). The test's runner never passed `--db`, so `46-create-society.sh` fell back to the env file's `ARGON_DB`: the developer's own `argon_dev`. That database was at an older schema with no founding function, so every call failed, and the failures read as the script or the tests being wrong, not the target. Nothing was written there (checked: no founding function, no test society). Had `argon_dev` been current, the tests would have founded societies in it, and on the server the same fallback is the live database. | `46-create-society.sh` has no default database: without `--db` it refuses, naming `--db` (S07, red first; sabotage `db_defaults`). The test's runner always passes the scratch database, and S07's env file names a database that does not exist, so even a script that still fell back would reach nothing real. **Rule: a default that silently picks a different target is worse than no default; refuse rather than choose.** `45-society-settings.sh` had the same fallback, and was fixed the same way on the reviewer's ruling (2026-11-06, its own commit; S25, sabotage `db_defaults`): operators passing `--db` is a smaller cost than a society's governance settings written somewhere nobody was looking. |
+| 70 | **The probe failed once across midnight** (2026-11-10, a full run of suite 0024 started on 2026-11-09). P34 succeeded where it must be refused, and G6 reported a gap. A rerun minutes later passed, and nothing in 0024 touches holds or the ledger. The probe writes rows dated `current_date` in separate statements, so a run that crosses midnight puts related rows on two dates. That is a flake in the probe, not a rule failing. | Recorded, not yet fixed: a run that starts before midnight should be re-run before its result is believed. The fix is to pin the probe's date once at the start, from the server, and use it in every row. It goes into the probe when it is next touched for a rule. |
 
 **Rule: when a hand-written list becomes a derived one, the derivation must select the same things the list did, or the difference is explained** (2026-10-22, finding 52). Compare the two entry by entry before the list is deleted. Deriving the restore drill from each suite's plain run pattern would have silently lost suite 0003's ten service tests; the comparison against the 26 lines being replaced caught it before it was written.
 
@@ -518,6 +520,36 @@ drill at most 8 days old. The 8 days are the script's, not the env file's.
 **The gate is the script's alone, deliberately:** the database could only know
 through a row someone writes, and the owner can write that row by hand, so a
 database half would be a check satisfied by asserting the thing it checks.
+
+## Its founding officers and their slips: the operator (`47-founding-officer.sh`)
+
+Once per founding officer named in the resolution, while the society is still
+a prospect (0027: after that, officers are the society's to appoint). It
+appoints them (the person, their member record at the head office, the post
+held from the resolution's date, logged as an operator act), draws their
+enrolment code with the API image, and prints the slip ONCE. The API image
+must be built at this release (`30-install-api.sh`): the code is drawn by it,
+with `ARGON_CODE_KEY` passed in its environment.
+
+```bash
+E=ARGON_ENV=/etc/argon/deploy.env
+DB=$(sudo grep -oP '^ARGON_DB=\K.*' /etc/argon/deploy.env)
+sudo $E bash deploy/47-founding-officer.sh --society LAG001 \
+  --name "Ngozi Eze" --phone "+2348031234567" --member-number 0001 --joined-on 2019-03-01 \
+  --post chairman --signatory yes \
+  --operator "Your Name" --reason "Founding officers, on the founding resolution" \
+  --resolution "Founding resolution, inaugural meeting, item 4" --resolution-date 2026-09-30 --db "$DB"
+# shows the officer; add --confirm to appoint them and print their slip.
+```
+
+**The slip is shown once, and never again by anyone:** the server keeps only
+its digest. Write it on the paper slip as it is printed, and hand it over in
+person. Run it again for the same officer and it says a code exists and stops
+(exit 4); if the slip is lost, add `--reissue`: a new code, which voids the
+old one, on your name and reason. The officer then signs in with their member
+number, the slip, and a PIN they choose (`POST /auth/enrol`). From then on,
+officers issue everyone else's codes; a signatory's comes in two halves from
+two other signatories (0026).
 
 ## A society's rules: the operator (`45-society-settings.sh`)
 

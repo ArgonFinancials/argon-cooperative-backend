@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,7 +34,22 @@ func drawHalf() string {
 
 func group(half string) string { return half[:4] + "-" + half[4:] }
 
-func (s *service) halfDigest(half string) string { return s.codeDigest("enrolment-half:" + half) }
+func (s *service) halfDigest(half string) string { return halfDigestWith(s.d.CodeKey, half) }
+
+func halfDigestWith(key []byte, half string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("enrolment-half:" + half))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// DrawEnrolmentCode: a whole code and its digest under key, exactly as the
+// service draws one. For the operator's script (the API image's
+// enrolment-code command), which issues the founding officers' codes on the
+// server without a running service; key is the server's AUTH_CODE_KEY.
+func DrawEnrolmentCode(key []byte) (text, digest string) {
+	a, b := drawHalf(), drawHalf()
+	return group(a) + "-" + group(b), assembled(halfDigestWith(key, a), halfDigestWith(key, b))
+}
 
 // assembled: the code's digest from its halves' digests, in either order.
 func assembled(a, b string) string {
@@ -44,10 +60,7 @@ func assembled(a, b string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *service) NewEnrolmentCode() (string, string) {
-	a, b := drawHalf(), drawHalf()
-	return group(a) + "-" + group(b), assembled(s.halfDigest(a), s.halfDigest(b))
-}
+func (s *service) NewEnrolmentCode() (string, string) { return DrawEnrolmentCode(s.d.CodeKey) }
 
 func (s *service) NewEnrolmentHalf() (string, string) {
 	h := drawHalf()
