@@ -44,6 +44,12 @@ func main() {
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+	// The wallet worker (stage 3): its own process, as argon_wallet. Sends the
+	// transfers the last signature authorised and asks VFD what happened.
+	if len(os.Args) == 2 && os.Args[1] == "wallet-worker" {
+		os.Exit(runWallet(log))
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Error("configuration", "err", err)
@@ -62,7 +68,9 @@ func main() {
 
 	// Every route comes from api/openapi.yaml through the generated router; a
 	// path that is not in the spec does not exist.
-	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins), CSRFKey: cfg.CSRFKey}
+	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins), CSRFKey: cfg.CSRFKey,
+		VFDWebhook: api.Webhook{Mode: cfg.VFDWebhook, Secret: cfg.VFDWebhookSecret}}
+	log.Info("VFD's notifications", "mode", cfg.VFDWebhook)
 	if len(deps.AllowedOrigins) == 0 {
 		log.Info("no browser origin may call this API (ARGON_ALLOWED_ORIGINS is empty: closed by default)")
 	} else {

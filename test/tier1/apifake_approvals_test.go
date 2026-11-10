@@ -32,6 +32,12 @@
 //	appr_note_refusal_as_500      looks_wrong with no note answers 500, not 422 note_required
 //	appr_signed_reject_as_closed  a signer rejecting reads as "closed", not signed_cannot_reject
 //
+// Breaks — the last approval pays (§13, stage 3):
+//
+//	appr_last_signature_no_hold   the signature that reaches quorum places no hold (an officer must still authorise)
+//	appr_refused_hold_signs       the hold is refused and the signature is recorded anyway (approved, and cannot be paid)
+//	appr_hold_refusal_as_500      the refused last signature answers 500, not 422 with what changed
+//
 // Shared: money_as_numbers.
 package tier1
 
@@ -270,12 +276,30 @@ func (f *fakeAPI) SignApproval(ctx context.Context, req api.SignApprovalRequestO
 	f.db.QueryRow(ctx, `SELECT m.id::text, a.post::text FROM members m JOIN appointments a ON a.member_id = m.id
 		WHERE m.user_id = $1 AND a.society_id = $2 AND (a.held_until IS NULL OR a.held_until >= current_date)
 		ORDER BY a.is_signatory DESC LIMIT 1`, caller, r.society).Scan(&member, &post)
+	withHold := true
 	write := func(x pgx.Tx, act *string) error {
-		_, err := x.Exec(ctx, `INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($1, $2, $3, $4)`,
-			r.id, member, post, act)
+		if _, err := x.Exec(ctx, `INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($1, $2, $3, $4)`,
+			r.id, member, post, act); err != nil {
+			return err
+		}
+		// The last approval pays (§13): the quorum's signature places the hold.
+		if !withHold || r.kind != "withdrawal_out" || r.member == nil || f.brk == "appr_last_signature_no_hold" {
+			return nil
+		}
+		var approved bool
+		if err := x.QueryRow(ctx, `SELECT approval_status($1) = 'approved'`, r.id).Scan(&approved); err != nil || !approved {
+			return err
+		}
+		_, err := x.Exec(ctx, `INSERT INTO withdrawal_holds (request_id, society_id, member_id, amount_kobo, partner_fee_kobo, vat_kobo,
+			  statutory_levy_kobo, argon_margin_kobo, actor_user_id, act_id) VALUES ($1, $2, $3, $4, 0, 0, 0, 0, $5, $6)`,
+			r.id, r.society, *r.member, r.amount, caller, act)
 		return err
 	}
 	err = f.actThen(ctx, caller, "approval_signature", proof, f.brk == "appr_sign_without_step_up", write)
+	if err != nil && f.brk == "appr_refused_hold_signs" && (pgConstraint(err) == "withdrawal_within_withdrawable" || notConfigured[pgConstraint(err)]) {
+		withHold = false
+		err = f.actThen(ctx, caller, "approval_signature", proof, false, write)
+	}
 	if err != nil && stepUpRefusals[pgConstraint(err)] && f.brk == "appr_failed_step_up_signs" {
 		err = f.actThen(ctx, caller, "", "", true, write)
 	}
@@ -311,6 +335,23 @@ func (f *fakeAPI) SignApproval(ctx context.Context, req api.SignApprovalRequestO
 				code = "request_closed"
 			}
 			return api.SignApproval409JSONResponse(api.Problem{Code: code, Message: "you have already signed this request"}), nil
+		case c == "withdrawal_within_withdrawable" && f.brk != "appr_hold_refusal_as_500":
+			member := ""
+			if r.member != nil {
+				member = *r.member
+			}
+			why, _, werr := f.holdRefusal(ctx, r.id, r.society, member, r.amount)
+			if werr != nil {
+				return nil, werr
+			}
+			if why.Causes == nil {
+				why.Message = dbMessage(err)
+			} else {
+				why.Message += " (" + dbMessage(err) + ")"
+			}
+			return api.SignApproval422JSONResponse(why), nil
+		case notConfigured[c] && f.brk != "appr_hold_refusal_as_500":
+			return api.SignApproval422JSONResponse{Code: "not_configured", Message: dbMessage(err)}, nil
 		}
 		return nil, err
 	}

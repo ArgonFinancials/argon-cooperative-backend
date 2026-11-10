@@ -200,7 +200,8 @@ func (e errNoAccount) Error() string { return "this society's chart has no " + e
 // written, never what was asked.
 func (s *server) movementOf(ctx context.Context, id string) (MoneyMovement, error) {
 	var m MoneyMovement
-	var kind, society, actor, post, member string
+	var kind, society, post, member string
+	var actor *string // null: the system, on VFD's confirmation (0028)
 	var date time.Time
 	var hold, ref *string
 	var amount int64
@@ -233,7 +234,7 @@ func (s *server) movementOf(ctx context.Context, id string) (MoneyMovement, erro
 	}
 	m.MemberAmountKobo = magnitudeOf(moved)
 	p := PostedByPost(post)
-	m.PostedBy = PostedBy{UserId: uuidOf(actor), Post: &p, PostLabel: postLabels[post]}
+	m.PostedBy = PostedBy{UserId: uuidPtr(actor), Post: &p, PostLabel: postLabels[post]}
 	m.Flags = []Discrepancy{}
 	rows, err := s.db.Query(ctx, `SELECT kind, expected, observed FROM ledger_discrepancies WHERE entry_id = $1 ORDER BY kind, raised_at`, id)
 	if err != nil {

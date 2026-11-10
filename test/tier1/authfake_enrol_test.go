@@ -20,6 +20,7 @@
 //	enrol_unknown_uncounted    an unknown number's wrong PINs are never counted: the lock tells it from an enrolled one
 //	enrol_newcomer_pin_ignored a PIN typed by someone who has none is ignored: never counted, never locked
 //	enrol_empty_pin_counted    a holder's request with no PIN counts as a wrong PIN
+//	enrol_robbed_member_untold the member whose slip was taken, typing it with a new PIN, is refused like a typo, never told it was used
 //	enrol_short_code           a code is 12 characters, 30 bits a half
 //	enrol_order_matters        the halves redeem only in the order they were issued
 //	enrol_typing_strict        case and spaces must match the slip exactly
@@ -79,6 +80,15 @@ func (f *fakeService) Enrol(ctx context.Context, req auth.EnrolRequest) (auth.Re
 	if phc != "" && !pinGiven && f.brk != "enrol_empty_pin_counted" {
 		// A holder who gives no PIN: refused, never counted, the code untouched.
 		verifyPHC(dummyPHC(), req.PIN)
+		// Unless they say they never had one, and the code is their own spent
+		// slip: the member whose slip was taken is told (§12, 0030).
+		if req.NewPIN != "" && f.brk != "enrol_robbed_member_untold" {
+			var used bool
+			f.d.DB.QueryRow(ctx, `SELECT enrolment_slip_used($1, $2)`, user, f.enrolDigest(req.Code)).Scan(&used)
+			if used {
+				return auth.Result{}, auth.ErrSlipUsed
+			}
+		}
 		return auth.Result{}, auth.ErrRefused
 	}
 	codeDigest := f.enrolDigest(req.Code)

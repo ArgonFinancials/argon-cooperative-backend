@@ -64,6 +64,19 @@ func (s *service) Enrol(ctx context.Context, req EnrolRequest) (Result, error) {
 		}
 	case hasPIN:
 		s.verify(s.dummy, req.PIN)
+		// "I have never had a PIN", for an account that has one: the member
+		// whose slip was taken (the taker chose the PIN). Told the slip was
+		// used, if it is THEIR OWN spent slip (§12; 0030 asks without
+		// spending or counting anything). Otherwise refused, never counted.
+		if req.NewPIN != "" {
+			var used bool
+			if err := s.d.DB.QueryRow(ctx, `SELECT enrolment_slip_used($1, $2)`, c.user, s.enrolmentDigest(req.Code)).Scan(&used); err != nil {
+				return Result{}, err
+			}
+			if used {
+				return Result{}, ErrSlipUsed
+			}
+		}
 		return Result{}, ErrRefused // a holder must give their PIN; not a guess, so not counted
 	default:
 		s.verify(s.dummy, req.PIN) // the same cost whether or not the person has a PIN

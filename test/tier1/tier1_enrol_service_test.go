@@ -43,7 +43,6 @@ const (
 	enrolBadPIN = "123456"
 )
 
-
 // enrollee: a person who can be issued a code. pin == "" means they have
 // never had one.
 type enrollee struct {
@@ -456,5 +455,30 @@ func TestRedeem15_TheHalvesTypedAnyWayRedeem(t *testing.T) {
 	}
 	if !codeState(t, id).used {
 		t.Fatalf("SLIP LIVE — the halved code enrolled and is still unused")
+	}
+}
+
+// THE MEMBER WHOSE SLIP WAS TAKEN IS TOLD IT WAS USED (§12; found by the
+// frontend on argon_dev, 2026-11-10). They have never had a PIN: whoever took
+// the slip chose it. So they type the slip and a new PIN, and must be told
+// "already used, speak to your secretary", not refused like a typo. Only for
+// their own spent slip: any other code is still refused, and never counted.
+func TestRedeem16_TheMemberWhoseSlipWasTakenIsToldItWasUsed(t *testing.T) {
+	s := newSvc(t)
+	robbed := s.newcomer("Member (slip taken)")
+	_, code := s.issueTo(robbed)
+	if _, err := s.enrol(robbed.number, code, "", "583920"); err != nil {
+		t.Fatalf("FIXTURE: whoever took the slip redeemed it: %v", err)
+	}
+	before := attemptsOf(t, robbed.user)
+	if _, err := s.enrol(robbed.number, code, "", "740193"); !errors.Is(err, auth.ErrSlipUsed) {
+		t.Fatalf("UNTOLD — the member types their own slip and a new PIN, and is answered %v; want ErrSlipUsed: the message §12 promises them reaches only whoever knows the thief's PIN", err)
+	}
+	wrong := strings.Repeat("7", 16)
+	if _, err := s.enrol(robbed.number, wrong, "", "740193"); !errors.Is(err, auth.ErrRefused) {
+		t.Fatalf("WRONG — a code that is not their slip, with a new PIN, answered %v; want ErrRefused", err)
+	}
+	if n := attemptsOf(t, robbed.user) - before; n != 0 {
+		t.Fatalf("COUNTED — asking with no PIN wrote %d sign-in attempt(s)", n)
 	}
 }

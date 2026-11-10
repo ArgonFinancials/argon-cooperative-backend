@@ -48,7 +48,7 @@ type bDeduction struct {
 
 type bRequested struct {
 	RequestId, Status, AmountKobo, TotalKobo, RaisedAt, Note string
-	QuotedCharges                                    mCharges
+	QuotedCharges                                            mCharges
 }
 
 type bWithdrawable struct {
@@ -324,10 +324,8 @@ func TestApiBalance09_AQuoteSaysItIsIndicative(t *testing.T) {
 func TestApiBalance10_TheQuotedChargeBesideTheChargeApplied(t *testing.T) {
 	w := newMoneyAPI(t)
 	v := w.raisedVia(t, payKobo)
-	for _, s := range []string{w.s2, w.secretary} {
-		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
-			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
-		}
+	if r := w.signVia(t, w.s2, v.RequestId); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the first signature: %d %s", r.status, r.body)
 	}
 	c := memberRequestOf(t, w, v.RequestId)
 	if c.QuotedCharges == nil || c.QuotedCharges.TotalKobo != "1075" || c.AuthorisedCharges != nil || c.ChargeChanged != nil {
@@ -336,8 +334,9 @@ func TestApiBalance10_TheQuotedChargeBesideTheChargeApplied(t *testing.T) {
 	// From today, the society's fee is ₦25 flat (its VAT 7.5%: ₦1.88): ₦26.88.
 	_, err := chargeSeries(w.c.s.id, "withdrawal_out", feeComponent(), time.Now().Format("2006-01-02"), "TEST DATA ONLY: a fee changed today", band{from: 0, flat: 2500})
 	fixture(t, err, "today's new fee series")
-	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
-		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
+	// The last signature places the hold (§13), at today's charges.
+	if r := w.signVia(t, w.secretary, v.RequestId); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the last signature, with its hold: %d %s", r.status, r.body)
 	}
 	c = memberRequestOf(t, w, v.RequestId)
 	if c.QuotedCharges == nil || c.QuotedCharges.TotalKobo != "1075" {
@@ -414,23 +413,12 @@ func TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised(t *testing.
 	if p.Requested[0].Status != "awaiting" {
 		t.Fatalf("WRONG STATUS — a request with no signatures reads %q; want awaiting", p.Requested[0].Status)
 	}
+	// The last signature places the hold (LEDGER_CONTRACT §13): from that
+	// moment the money is committed, and listed as such, once.
 	for _, s := range []string{w.s2, w.secretary} {
 		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
 			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
 		}
-	}
-	// Quorum, no hold yet (2026-11-10, the frontend's finding): still listed,
-	// still not taken, and told the truth.
-	p = w.position(t, w.borrower, w.bMem)
-	if len(p.Requested) != 1 || p.Requested[0].Status != "approved" ||
-		p.Requested[0].Note != "Approved, waiting to be paid. Not yet taken from what you can withdraw." {
-		t.Fatalf("UNTRUE — a request with quorum reads %+v; want status approved and \"Approved, waiting to be paid. Not yet taken from what you can withdraw.\"", p.Requested)
-	}
-	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) {
-		t.Fatalf("TAKEN — an approved request with no hold reduced the figure to %s", orNone(p.WithdrawableKobo))
-	}
-	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
-		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
 	}
 	p = w.position(t, w.borrower, w.bMem)
 	if len(p.Requested) != 0 {
@@ -450,13 +438,10 @@ func TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised(t *testing.
 func TestApiBalance13_NoChangeNoSentence(t *testing.T) {
 	w := newMoneyAPI(t)
 	v := w.raisedVia(t, payKobo)
-	for _, s := range []string{w.s2, w.secretary} {
+	for _, s := range []string{w.s2, w.secretary} { // the last places the hold (§13)
 		if r := w.signVia(t, s, v.RequestId); r.status != http.StatusCreated {
 			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
 		}
-	}
-	if r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation")); r.status != http.StatusCreated {
-		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
 	}
 	c := memberRequestOf(t, w, v.RequestId)
 	if c.QuotedCharges == nil || c.AuthorisedCharges == nil || c.QuotedCharges.TotalKobo != "1075" || c.AuthorisedCharges.TotalKobo != "1075" {
@@ -548,18 +533,20 @@ func TestApiBalance16_AReleasedHoldPutsTheRequestBackInTheList(t *testing.T) {
 			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
 		}
 	}
-	r := w.authorise(t, w.s2, v.RequestId, stepUp(t, w.s2, "withdrawal_authorisation"))
-	if r.status != http.StatusCreated {
-		t.Fatalf("FIXTURE: the hold: %d %s", r.status, r.body)
-	}
+	// The last signature placed the hold (§13); nothing was sent (no VFD
+	// accounts here), so an officer may still release it.
 	var h mHold
-	fixture(t, json.Unmarshal(r.body, &h), "the hold")
+	fixture(t, db.QueryRow(bg(), `SELECT id::text FROM withdrawal_holds WHERE request_id = $1`, v.RequestId).Scan(&h.HoldId), "the last signature's hold")
 	if rr := w.releaseVia(t, w.s2, h.HoldId, "The member's bank account details were wrong"); rr.status != http.StatusCreated {
 		t.Fatalf("FIXTURE: the release: %d %s", rr.status, rr.body)
 	}
 	p := w.position(t, w.borrower, w.bMem)
 	if len(p.Requested) != 1 || p.Requested[0].RequestId != v.RequestId {
 		t.Fatalf("VANISHED — after its hold was released the request is not listed: %+v; want it open again", p.Requested)
+	}
+	// Approved, and nothing held: told the truth (2026-11-10, the frontend's finding).
+	if p.Requested[0].Status != "approved" || p.Requested[0].Note != "Approved, waiting to be paid. Not yet taken from what you can withdraw." {
+		t.Fatalf("UNTRUE — an approved request whose hold was released reads %+v; want status approved and \"Approved, waiting to be paid. Not yet taken from what you can withdraw.\"", p.Requested[0])
 	}
 	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) || len(deductionsOf(p, "authorised_payout")) != 0 {
 		t.Fatalf("NOT RETURNED — figure %s, deductions %+v; want %s, the released hold taking nothing", orNone(p.WithdrawableKobo), p.Deductions, k(borrowerWithdrawable))

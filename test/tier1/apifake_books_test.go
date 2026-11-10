@@ -386,7 +386,8 @@ func (f *fakeAPI) GetJournal(ctx context.Context, req api.GetJournalRequestObjec
 	var entries []api.JournalEntry
 	for rows.Next() {
 		var e api.JournalEntry
-		var id, kind, actorID, label string
+		var id, kind, label string
+		var actorID *string // null: the system (0028)
 		var vd *time.Time
 		var rev, adj, post *string
 		var reversedBy []string
@@ -396,7 +397,7 @@ func (f *fakeAPI) GetJournal(ctx context.Context, req api.GetJournalRequestObjec
 		}
 		e.EntryId, e.Kind, e.ValueDate = uuidOf(id), api.MovementKind(kind), dateOf(vd)
 		e.ReversesEntryId, e.AdjustsEntryId = uuidPtr(rev), uuidPtr(adj)
-		e.PostedBy = api.PostedBy{UserId: uuidOf(actorID), PostLabel: label}
+		e.PostedBy = api.PostedBy{UserId: uuidPtr(actorID), PostLabel: label}
 		if post != nil {
 			pp := api.PostedByPost(*post)
 			e.PostedBy.Post = &pp

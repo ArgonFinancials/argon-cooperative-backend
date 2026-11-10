@@ -362,3 +362,58 @@ func TestApiApprovals20_ADecidedRequestTakesNoMoreSignatures(t *testing.T) {
 		t.Fatalf("COUNTED — %d signatures on a request two approved", n)
 	}
 }
+
+// THE LAST APPROVAL PAYS (LEDGER_CONTRACT §13, stage 3): the signature that
+// reaches quorum on a withdrawal places its hold, in its own transaction, on
+// its own step-up. No second human act.
+func TestApiApprovals21_TheLastSignatureOnAWithdrawalPlacesTheHold(t *testing.T) {
+	w := newApprovalAPI(t)
+	req := w.memberRequest(t, "")
+	if r := w.sign(t, w.treasurer, req, stepUp(t, w.treasurer, "approval_signature")); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the first signature: %d %s", r.status, r.body)
+	}
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM withdrawal_holds WHERE request_id = $1`, req).Scan(&n), "holds")
+	if n != 0 {
+		t.Fatalf("HELD EARLY — a hold after the first of two signatures")
+	}
+	if r := w.sign(t, w.chairman, req, stepUp(t, w.chairman, "approval_signature")); r.status != http.StatusCreated {
+		t.Fatalf("REFUSED — the last signature: %d %s", r.status, r.body)
+	}
+	var kind, actor, signer string
+	err := db.QueryRow(bg(), `SELECT a.kind, h.actor_user_id::text, sa.act_id IS NOT DISTINCT FROM h.act_id
+		FROM withdrawal_holds h JOIN credential_acts a ON a.id = h.act_id
+		JOIN signatory_approvals sa ON sa.request_id = h.request_id AND sa.act_id = h.act_id
+		WHERE h.request_id = $1`, req).Scan(&kind, &actor, &signer)
+	if err != nil {
+		t.Fatalf("NOT HELD — the request is approved and no hold rests on its last signature (%v): an officer would still have to authorise it", err)
+	}
+	if kind != "approval_signature" || actor != w.chairman {
+		t.Fatalf("WRONG AUTHORITY — the hold rests on a %s act by %s; want the last signature's, the chairman's", kind, actor)
+	}
+}
+
+// When the money no longer fits, the last signature is refused with what
+// changed: nothing is signed, and the request stays open (§13).
+func TestApiApprovals22_WhenTheMoneyNoLongerFitsTheLastSignatureIsRefused(t *testing.T) {
+	w := newApprovalAPI(t)
+	req := w.memberRequest(t, "")
+	if r := w.sign(t, w.treasurer, req, stepUp(t, w.treasurer, "approval_signature")); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the first signature: %d %s", r.status, r.body)
+	}
+	// The society raises its floor after the request was raised: it no longer fits.
+	fixture(t, one(`UPDATE societies SET account_floor_kobo = 1000000000 WHERE id = $1`, w.s.id), "a higher floor")
+	r := w.sign(t, w.chairman, req, stepUp(t, w.chairman, "approval_signature"))
+	wantProblem(t, r, http.StatusUnprocessableEntity, "exceeds_withdrawable", "the last signature on a withdrawal that no longer fits")
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM signatory_approvals WHERE request_id = $1`, req).Scan(&n), "signatures")
+	if n != 1 {
+		t.Fatalf("SIGNED ANYWAY — %d signatures: the request reads approved and cannot be paid, a promise the society cannot keep", n)
+	}
+	if v := w.view(t, w.chairman, req); v.Status != "awaiting" {
+		t.Fatalf("CLOSED — the request reads %q; it stays open for someone to act on", v.Status)
+	}
+	fixture(t, one(`UPDATE societies SET account_floor_kobo = NULL WHERE id = $1`, w.s.id), "no floor")
+	wantProblem(t, w.sign(t, w.chairman, req, stepUp(t, w.chairman, "approval_signature")), http.StatusUnprocessableEntity, "not_configured",
+		"the last signature where the society has set no floor")
+}

@@ -1,6 +1,30 @@
 # VFD integration: what we know, and how we build it
 
-**Status:** spec, not built (2026-10-13). Decided: re-implement the VFD boundary in Go, in this repository (LEDGER_CONTRACT.md §11).
+**Status:** spec (2026-10-13); **built in stage 3 (2026-11-10)**, below. Decided: re-implement the VFD boundary in Go, in this repository (LEDGER_CONTRACT.md §11).
+
+**Built (stage 3, 2026-11-10), each requirement of §2 to its code and its proof:**
+
+| # | Requirement | Where | Proof |
+|---|---|---|---|
+| 1 | A timeout on every call, every status checked | `internal/vfd` (15 s default; four outcomes; requery states) | suite vfd: 20 tests, 26 breaks |
+| 2 | Signed webhooks, no unsigned path | `POST /webhooks/vfd`; `ARGON_VFD_WEBHOOK` is hmac, unsigned or off, no default | suite webhook_api |
+| 3 | De-duplicate by VFD's reference, under a unique constraint | `vfd_inflows` (`vfd_inflow_once`) | suites 0029, wallet |
+| 4 | Record raw, then process, then acknowledge | `vfd_notifications`, kept before the 200; processing in the worker | suites webhook_api, 0029 |
+| 5 | Reprocess failures; unmatched is an item for a person | every attempt recorded; `wallet_exceptions` | suites 0029, wallet |
+| 6 | Pull statements for missed notifications | the worker asks daily; **no statement endpoint is known**, so each run is recorded as could_not_run and shown as an exception | suites 0029, wallet |
+| 7 | Refund only on a definitive failure, idempotently | 0028: failed only on a refused or unreached send, or "not found" 2 hours after it (PROVISIONAL); the release is the outcome's own, once | suites 0028, wallet |
+| 8 | Never invent an account number | `internal/vfd` (ten digits as a string, or no account; no fallback endpoint); `vfd_accounts` (shape, once, client id) | suites vfd, 0028 |
+| 9 | Deterministic references | `vfd_transfer_reference(hold)`, enforced by 0028 | suite 0028 |
+| 10 | Hold before paying; record the outcome | the last signature places the hold (§13); the system posts what VFD paid, flagged if different | suites 0028, approvals_api, wallet |
+| 12 | Credentials from the environment only | `ARGON_VFD`, `VFD_BASE_URL` (https), `VFD_ACCESS_TOKEN`; the token, a BVN and a birth date in no log line | suite vfd |
+
+**How each UNVERIFIED fact is handled until VFD confirms it** (whoever holds the VFD relationship):
+- *VFD does not sign inflow notifications* (the wallet's own code says so, and checks a header only when present): `unsigned` mode keeps them marked unsigned; `hmac` mode refuses any without a valid `X-VFD-Signature`. **In neither mode is a notification believed**: the worker asks VFD about the reference and records VFD's account and amount.
+- *VFD's failure statuses*: none is known, so none is mapped. A transfer fails only on a refused or unreached send, or "not found" after the window; anything else waits, and is an exception at 30 minutes.
+- *`99` as success*: pending.
+- *A requery of an inflow's reference* (`/transactions?reference=`) is assumed to answer as for a transfer, as the wallet's `VFD_VERIFY_INFLOWS` does.
+- *Statements*: no endpoint; reconciliation says it could not run.
+- *Account opening's answer*: `data.accountNo` or `account_number`, a ten-digit string; anything else is no account.
 
 **Provenance:** a read-only review of Argon's running wallet platform (`wallet-service-backend`), which has integrated VFD in production since 2025. Nothing there was changed or run. Its credentials were not opened. What follows is the knowledge it holds, and the defects it found the hard way, written as requirements.
 

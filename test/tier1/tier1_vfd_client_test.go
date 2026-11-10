@@ -85,6 +85,11 @@ func newFakeVFD(t *testing.T, modes map[string]string) *fakeVFD {
 }
 
 func vfdAnswerMode(w http.ResponseWriter, mode string) {
+	// requery_inflow:<account>: money arriving, ₦6,000, into <account> (the wallet's inflow tests).
+	if acct, ok := strings.CutPrefix(mode, "requery_inflow:"); ok {
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-IN","amount":"6000.00","accountNo":"` + acct + `","transactionStatus":"00","transactionDate":"2026-11-10 10:00:00","sessionId":"SESS-IN"}}`))
+		return
+	}
 	switch mode {
 	case "transfer_ok":
 		w.Write([]byte(`{"status":"00","message":"Successful Transfer","data":{"txnId":"TXN-77","sessionId":"SESS-77","reference":"ignored"}}`))
@@ -100,6 +105,8 @@ func vfdAnswerMode(w http.ResponseWriter, mode string) {
 		w.Write([]byte(`<html>502 Bad Gateway</html>`))
 	case "requery_ok":
 		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-77","amount":"4.35","accountNo":"` + memberAcct + `","fromAccountNo":"` + societyAcct + `","transactionStatus":"00","transactionDate":"2026-11-10 09:01:02","sessionId":"SESS-77"}}`))
+	case "requery_ok_payout": // the wallet's payout of ₦6,000, succeeded
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-77","amount":"6000.00","transactionStatus":"00","transactionDate":"2026-11-10 09:01:02"}}`))
 	case "requery_99":
 		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-77","amount":"4.35","accountNo":"` + memberAcct + `","transactionStatus":"99"}}`))
 	case "requery_108":

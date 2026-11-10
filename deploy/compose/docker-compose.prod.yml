@@ -44,6 +44,20 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  # The wallet worker (stage 3): the API's image, another command, its own
+  # connection as argon_wallet and VFD's credentials, in their own file. No
+  # port: it serves nothing. Started deliberately, once VFD's credentials are
+  # in deploy.env (deploy/README.md, the wallet).
+  wallet:
+    profiles: ["wallet"]
+    image: argon-api:${ARGON_RELEASE:-local}
+    command: ["wallet-worker"]
+    restart: unless-stopped
+    env_file: [/etc/argon/wallet.env]
+    networks: [argon]
+    depends_on:
+      postgres: { condition: service_healthy }
+
 networks:
   argon:
     name: argon

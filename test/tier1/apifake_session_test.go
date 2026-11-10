@@ -143,6 +143,22 @@ func loadConfig() (config.Config, error) {
 		return c, errors.New("ARGON_CSRF_KEY must be at least 32 bytes as hex (openssl rand -hex 32)")
 	}
 	c.CSRFKey = b
+	// VFD's notifications (stage 3): said, never defaulted.
+	c.VFDWebhook = os.Getenv("ARGON_VFD_WEBHOOK")
+	if c.VFDWebhook == "" && brk == "webhook_mode_defaulted" {
+		c.VFDWebhook = "unsigned" // forgetting the line quietly takes every notification
+	}
+	switch c.VFDWebhook {
+	case "off", "unsigned":
+	case "hmac":
+		if s := os.Getenv("VFD_WEBHOOK_SECRET"); len(s) < 32 {
+			return c, errors.New("ARGON_VFD_WEBHOOK=hmac: VFD_WEBHOOK_SECRET must be set, at least 32 characters")
+		} else {
+			c.VFDWebhookSecret = []byte(s)
+		}
+	default:
+		return c, errors.New("ARGON_VFD_WEBHOOK must be set to hmac, unsigned or off")
+	}
 	// The SMS sender, with an auth service (2026-10-28).
 	if os.Getenv("AUTH_DATABASE_URL") == "" {
 		return c, nil

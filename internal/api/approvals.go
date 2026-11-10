@@ -274,8 +274,23 @@ func (s *server) SignApproval(ctx context.Context, req SignApprovalRequestObject
 		return nil, err
 	}
 	err = s.onStepUp(ctx, "approval_signature", req.Body.PinProofId.String(), func(x pgx.Tx, act string) error {
-		_, err := x.Exec(ctx, `INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($1, $2, $3, $4)`,
-			r.id, member, post, act)
+		if _, err := x.Exec(ctx, `INSERT INTO signatory_approvals (request_id, member_id, post_at_signing, act_id) VALUES ($1, $2, $3, $4)`,
+			r.id, member, post, act); err != nil {
+			return err
+		}
+		// THE LAST APPROVAL PAYS (§13): the signature that reaches quorum on a
+		// withdrawal places its hold, in its own transaction, on its own
+		// step-up. When the money no longer fits, the hold is refused and so
+		// is the signature: nothing signed, the request still open.
+		if r.kind != "withdrawal_out" || r.member == nil {
+			return nil
+		}
+		var approved bool
+		if err := x.QueryRow(ctx, `SELECT approval_status($1) = 'approved'`, r.id).Scan(&approved); err != nil || !approved {
+			return err
+		}
+		_, err := x.Exec(ctx, `INSERT INTO withdrawal_holds (request_id, society_id, member_id, amount_kobo, actor_user_id, act_id)
+			VALUES ($1, $2, $3, $4, $5, $6)`, r.id, r.society, *r.member, r.amount, callerOf(ctx), act)
 		return err
 	})
 	if err != nil {
@@ -296,6 +311,14 @@ func (s *server) SignApproval(ctx context.Context, req SignApprovalRequestObject
 			return SignApproval409JSONResponse(Problem{Code: "request_closed", Message: "this request has expired or been rejected"}), nil
 		case c == "signatory_approvals_one_per_user":
 			return SignApproval409JSONResponse(Problem{Code: "already_signed", Message: "you have already signed this request"}), nil
+		case c == "withdrawal_within_withdrawable": // the last signature's hold (§13)
+			why, werr := s.holdRefusal(ctx, r.id, dbMessage(err))
+			if werr != nil {
+				return nil, werr
+			}
+			return SignApproval422JSONResponse(why), nil
+		case notConfigured[c]:
+			return SignApproval422JSONResponse{Code: "not_configured", Message: dbMessage(err)}, nil
 		}
 		return nil, err
 	}

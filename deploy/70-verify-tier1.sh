@@ -600,6 +600,10 @@ probe req P57 argon_app '42501.*permission denied for table enrolment_codes' "ap
 probe req P58 argon_app '42501.*permission denied for table enrolment_codes' "app reads a half's digest" \
   "SELECT first_half_digest, second_half_digest FROM enrolment_codes LIMIT 1;"
 fi
+# 0030: whether a slip is someone's spent slip is the auth service's question.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('enrolment_slip_used(uuid,text)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P69 argon_app '42501.*permission denied for function enrolment_slip_used' "app asks whether a code is a member's spent slip"   "SELECT enrolment_slip_used($U1, repeat('a', 64));"
+fi
 # 0027: appointing a founding officer is the operator's function alone.
 if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regproc('operator_appoint_founding_officer') IS NOT NULL)::int" </dev/null) == 1 ]]; then
 probe req P59 argon_app '42501.*permission denied for function operator_appoint_founding_officer' "app appoints an officer through the operator's function" \
@@ -626,6 +630,14 @@ probe ctl K60 argon_wallet '' "control: the wallet records a member's VFD accoun
 probe ctl K61 argon_app '' "control: the app reads the wallet (a request's payment)"   "SELECT count(*) FROM vfd_transfers; SELECT count(*) FROM vfd_transfer_outcomes;"
 else
   info "schema before 0028: no wallet to probe (P60–P65 not run)"
+fi
+# 0029: the app keeps a notification and believes nothing; the wallet confirms.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.vfd_notifications') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P66 argon_app '42501.*permission denied for table vfd_inflows' "app records an inflow (believes a notification)"   "INSERT INTO vfd_inflows (vfd_reference, society_id, account_number, amount_kobo) VALUES ('APP-1', $S, '1000000001', 100);"
+probe req P67 argon_app '42501.*permission denied for table vfd_notification_attempts' "app marks a notification confirmed"   "INSERT INTO vfd_notification_attempts (notification_id, result) VALUES ($U1, 'confirmed');"
+probe req P68 argon_app '42501.*permission denied for table vfd_notifications' "app backdates a notification"   "INSERT INTO vfd_notifications (kind, raw, signed, received_at) VALUES ('inflow', '{}', false, $TODAY - 1);"
+probe ctl K62 argon_app '' "control: the webhook keeps a notification (rolled back)"   "BEGIN; INSERT INTO vfd_notifications (kind, raw, signed, reference) VALUES ('inflow', '{}', false, 'K62'); ROLLBACK;"
+probe ctl K63 argon_wallet '' "control: the wallet records a reconciliation run (rolled back)"   "BEGIN; INSERT INTO vfd_reconciliation_runs (account_number, period_from, period_to, outcome, detail) VALUES ('1000000001', now() - interval '1 day', now(), 'could_not_run', 'K63'); ROLLBACK;"
 fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"

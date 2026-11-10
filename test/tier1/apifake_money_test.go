@@ -255,7 +255,7 @@ func (f *fakeAPI) movement(ctx context.Context, caller, post, entry, kind, socie
 		post = "treasurer"
 	}
 	p := api.PostedByPost(post)
-	m.PostedBy = api.PostedBy{UserId: uuidOf(caller), Post: &p, PostLabel: postLabels[post]}
+	m.PostedBy = api.PostedBy{UserId: uuidPtr(&caller), Post: &p, PostLabel: postLabels[post]}
 	if determined {
 		m.Charges = c.wire()
 	} else if f.brk == "money_undetermined_as_zero" {

@@ -182,6 +182,11 @@ BEGIN
     -- 0026: a signatory's code in two halves. The app writes half one with
     -- the first act, and half two with the second; never a code's digest
     -- (the server assembles it), and it reads no half (probes P57, P58).
+    -- 0030: the auth service asks whether a code is the person's own spent
+    -- slip, to tell the member whose slip was taken (§12). Only it (P69).
+    IF to_regprocedure('enrolment_slip_used(uuid,text)') IS NOT NULL THEN
+      GRANT EXECUTE ON FUNCTION enrolment_slip_used(UUID, TEXT) TO argon_auth;
+    END IF;
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'enrolment_codes' AND column_name = 'first_half_digest') THEN
       GRANT INSERT (first_half_digest) ON enrolment_codes TO argon_app;
       GRANT UPDATE (second_half_digest, second_by_act) ON enrolment_codes TO argon_app;
@@ -211,6 +216,26 @@ BEGIN
       GRANT INSERT (id, hold_id, reference, from_account, to_account, amount_kobo) ON vfd_transfers TO argon_wallet;
       GRANT INSERT (id, transfer_id, kind, result, code, txn_status, txn_id, session_id, amount_kobo, vfd_time) ON vfd_transfer_events TO argon_wallet;
       GRANT INSERT (id, transfer_id, result, evidence_id) ON vfd_transfer_outcomes TO argon_wallet;
+    END IF;
+  END IF;
+END $$;
+
+-- 0029: MONEY ARRIVING. The webhook (the app) KEEPS a notification, the
+-- columns VFD sent only, never its received time; it writes no attempt, no
+-- inflow and no reconciliation (P66-P68). The wallet confirms: it reads the
+-- notifications and writes the attempts, the inflows (VFD's word) and the
+-- reconciliation runs, never their server times.
+DO $$
+BEGIN
+  IF to_regclass('public.vfd_notifications') IS NOT NULL THEN
+    GRANT SELECT ON vfd_notifications, vfd_notification_attempts, vfd_inflows, vfd_reconciliation_runs, wallet_exceptions TO argon_app;
+    GRANT INSERT (id, kind, raw, signed, reference, account_number) ON vfd_notifications TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT SELECT ON vfd_notifications, vfd_notification_attempts, vfd_inflows, vfd_reconciliation_runs TO argon_wallet;
+      GRANT INSERT (id, notification_id, result, detail) ON vfd_notification_attempts TO argon_wallet;
+      GRANT INSERT (id, vfd_reference, society_id, account_number, amount_kobo, session_id, originator_name, originator_account,
+                    originator_bank, narration, vfd_time, notification_id) ON vfd_inflows TO argon_wallet;
+      GRANT INSERT (id, account_number, period_from, period_to, outcome, detail) ON vfd_reconciliation_runs TO argon_wallet;
     END IF;
   END IF;
 END $$;

@@ -25,6 +25,9 @@ type Deps struct {
 	// CSRFKey: the server-held key a cookie session's CSRF token is derived
 	// under (LEDGER_CONTRACT.md §12, 2026-10-24); required.
 	CSRFKey []byte
+	// VFDWebhook: how VFD's notifications are taken (webhook.go). The zero
+	// value is off: refused.
+	VFDWebhook Webhook
 }
 
 type server struct {
@@ -32,6 +35,7 @@ type server struct {
 	log     *slog.Logger
 	auth    auth.Service
 	csrfKey []byte
+	webhook Webhook
 }
 
 type (
@@ -51,7 +55,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	if len(d.CSRFKey) == 0 {
 		return nil, errors.New("api: Deps.CSRFKey is required")
 	}
-	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey}
+	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey, webhook: d.VFDWebhook}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
@@ -63,11 +67,11 @@ func NewServer(d Deps) (http.Handler, error) {
 	}), ChiServerOptions{ErrorHandlerFunc: RequestError})
 	// CORS OUTSIDE authentication: a preflight carries no credentials (cors.go).
 	// Inside it, before anything else, a body must be JSON (json.go).
-	return CORS(d.AllowedOrigins, requireJSON(s.gate(h))), nil
+	return CORS(d.AllowedOrigins, requireJSON(KeepRawBody(s.gate(h)))), nil
 }
 
 // Paths that need no session.
-var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true}
+var public = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true, WebhookPath: true}
 
 func callerOf(ctx context.Context) string {
 	u, _ := ctx.Value(callerKey{}).(string)

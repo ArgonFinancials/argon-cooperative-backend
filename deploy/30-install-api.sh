@@ -49,6 +49,16 @@ info "building the API image argon-api:$ARGON_RELEASE"
 dc build api || die "image build failed"
 
 umask 077
+# VFD's notifications: said, never inherited (deploy/README.md, the wallet).
+case ${ARGON_VFD_WEBHOOK:-} in
+  off|unsigned) hook_env="ARGON_VFD_WEBHOOK=${ARGON_VFD_WEBHOOK}" ;;
+  hmac)
+    require_env VFD_WEBHOOK_SECRET
+    ((${#VFD_WEBHOOK_SECRET} >= 32)) || die "VFD_WEBHOOK_SECRET must be at least 32 characters"
+    hook_env="ARGON_VFD_WEBHOOK=hmac
+VFD_WEBHOOK_SECRET=${VFD_WEBHOOK_SECRET}" ;;
+  *) die "ARGON_VFD_WEBHOOK must be hmac, unsigned or off: add ARGON_VFD_WEBHOOK=off to $ARGON_ENV (deploy/README.md, the wallet)" ;;
+esac
 cat > /etc/argon/argon.env <<EOF
 DATABASE_URL=postgres://argon_app:${ARGON_APP_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
 AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
@@ -58,7 +68,27 @@ PORT=8080
 ENV=production
 ARGON_ALLOWED_ORIGINS=${ARGON_ALLOWED_ORIGINS:-}
 ${sms_env}
+${hook_env}
 EOF
-chmod 0600 /etc/argon/argon.env "$ARGON_ENV"
+# The wallet worker (stage 3): its own file, its own role (argon_wallet, the
+# only one that writes what VFD said). ARGON_VFD is said, never inherited:
+# off until VFD's credentials are in deploy.env, and the worker then refuses
+# to start, saying so.
+require_env ARGON_WALLET_PASSWORD
+case ${ARGON_VFD:-} in
+  off) vfd_env="ARGON_VFD=off" ;;
+  vfd)
+    require_env VFD_BASE_URL VFD_ACCESS_TOKEN
+    [[ $VFD_BASE_URL == https://* ]] || die "VFD_BASE_URL must be https: the token travels in a header"
+    vfd_env="ARGON_VFD=vfd
+VFD_BASE_URL=${VFD_BASE_URL}
+VFD_ACCESS_TOKEN=${VFD_ACCESS_TOKEN}" ;;
+  *) die "ARGON_VFD must be vfd or off: add ARGON_VFD=off to $ARGON_ENV until VFD's credentials are there (deploy/README.md, the wallet)" ;;
+esac
+cat > /etc/argon/wallet.env <<EOF
+WALLET_DATABASE_URL=postgres://argon_wallet:${ARGON_WALLET_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
+${vfd_env}
+EOF
+chmod 0600 /etc/argon/argon.env /etc/argon/wallet.env "$ARGON_ENV"
 ok "image argon-api:$ARGON_RELEASE and /opt/argon/bin/tier1.test ready; the API is NOT started"
 info "start it deliberately:  cd /opt/argon/src && sudo docker compose --env-file $ARGON_ENV -f $COMPOSE_FILE --profile api up -d api"

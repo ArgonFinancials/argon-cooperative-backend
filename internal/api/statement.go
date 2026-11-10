@@ -75,7 +75,8 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 	from, to := req.Params.From, req.Params.To
 	for rows.Next() {
 		var (
-			id, kind, actor, label           string
+			id, kind, label                  string
+			actor                            *string // null: the system, on VFD's confirmation (0028)
 			postedAt                         time.Time
 			valueDate, ref, rev, adj, reason *string
 			post                             *string
@@ -155,7 +156,7 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 			}
 		}
 		if projection == MemberStatementProjectionOfficer {
-			pb := PostedBy{PostLabel: label, UserId: uuidOf(actor)}
+			pb := PostedBy{PostLabel: label, UserId: uuidPtr(actor)}
 			if post != nil {
 				p := PostedByPost(*post)
 				pb.Post = &p

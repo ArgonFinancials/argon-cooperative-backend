@@ -72,10 +72,12 @@ type fakeAPI struct {
 	// unless the test sets its own. A fake built by newFakeServer with none
 	// refuses to start, as the real server must.
 	csrfKey []byte
+	// webhook: how VFD's notifications are taken (apifake_webhook_test.go).
+	webhook api.Webhook
 }
 
 // The paths that need no session, as in the real server.
-var fakePublic = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true}
+var fakePublic = map[string]bool{"/healthz": true, "/auth/sign-in": true, "/auth/codes/verify": true, "/auth/enrol": true, api.WebhookPath: true}
 
 func newFakeAPI(pool *pgxpool.Pool, brk string) http.Handler {
 	return newFakeAPIWith(&fakeAPI{db: pool, brk: brk})
@@ -94,7 +96,7 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 	}
 	h := api.HandlerWithOptions(api.NewStrictHandlerWithOptions(f, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: api.RequestError, ResponseErrorHandlerFunc: api.ResponseError}), opts)
-	return f.sessionLayer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return f.keepRawBody(f.sessionLayer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := f.caller(r)
 		if !ok {
 			user, ok = f.deviceCaller(r) // device_cookie_authenticates only
@@ -140,7 +142,7 @@ func newFakeAPIWith(f *fakeAPI) http.Handler {
 		}
 		w.WriteHeader(rec.status)
 		w.Write(body)
-	}))
+	})))
 }
 
 type recorder struct {
@@ -272,7 +274,8 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			id, kind                               string
 			postedAt                               time.Time
 			valueDate, ref, rev, adj, reason, post *string
-			actor, label                           string
+			label                                  string
+			actor                                  *string // null: the system (0028)
 			sav, pc, am, vt, lv                    int64
 			bankOut                                bool
 		)
@@ -382,7 +385,7 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 			attributed = false
 		}
 		if attributed {
-			pb := api.PostedBy{PostLabel: label, UserId: uuidOf(actor)}
+			pb := api.PostedBy{PostLabel: label, UserId: uuidPtr(actor)}
 			if post != nil {
 				p := api.PostedByPost(*post)
 				pb.Post = &p

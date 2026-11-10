@@ -30,6 +30,10 @@ import (
 
 var appDB, authDB *pgxpool.Pool
 
+// walletDB: the wallet worker's connection, as argon_wallet (0028), when
+// ARGON_TEST_WALLET_URL is set with the grants; nil otherwise.
+var walletDB *pgxpool.Pool
+
 // openRolePools: with ARGON_TEST_APP_URL and ARGON_TEST_AUTH_URL set, and the
 // database carrying the real grants (ARGON_TEST_GRANTS applied here, or a
 // restored copy), opens the two connections. Otherwise leaves them nil.
@@ -39,7 +43,11 @@ func openRolePools(ctx context.Context, ac *pgx.Conn, name string, restored bool
 		return 0
 	}
 	if !restored {
-		if _, err := ac.Exec(ctx, `GRANT CONNECT ON DATABASE `+name+` TO argon_app, argon_auth`); err != nil {
+		to := "argon_app, argon_auth"
+		if os.Getenv("ARGON_TEST_WALLET_URL") != "" {
+			to += ", argon_wallet"
+		}
+		if _, err := ac.Exec(ctx, `GRANT CONNECT ON DATABASE `+name+` TO `+to); err != nil {
 			fmt.Fprintln(os.Stderr, "tier1: grant connect:", err)
 			return 2
 		}
@@ -69,7 +77,10 @@ func openRolePools(ctx context.Context, ac *pgx.Conn, name string, restored bool
 		url  string
 		role string
 		into **pgxpool.Pool
-	}{{appURL, "argon_app", &appDB}, {authURL, "argon_auth", &authDB}} {
+	}{{appURL, "argon_app", &appDB}, {authURL, "argon_auth", &authDB}, {os.Getenv("ARGON_TEST_WALLET_URL"), "argon_wallet", &walletDB}} {
+		if p.url == "" {
+			continue // the wallet's connection is optional: only the wallet suite needs it
+		}
 		cfg, err := pgxpool.ParseConfig(p.url)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tier1: %s url: %v\n", p.role, err)
@@ -93,7 +104,7 @@ func openRolePools(ctx context.Context, ac *pgx.Conn, name string, restored bool
 }
 
 func closeRolePools() {
-	for _, p := range []*pgxpool.Pool{appDB, authDB} {
+	for _, p := range []*pgxpool.Pool{appDB, authDB, walletDB} {
 		if p != nil {
 			p.Close()
 		}

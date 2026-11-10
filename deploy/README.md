@@ -70,7 +70,7 @@ live".
 # 2. The secrets, generated ON THE INSTANCE straight into the file (never typed or pasted):
 sudo install -d -m 0750 /etc/argon
 sudo install -m 0600 ~/argon-src/deploy/env/ec2.env.example /etc/argon/deploy.env
-for v in POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD; do
+for v in POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD ARGON_WALLET_PASSWORD; do
   sudo sed -i "s|^$v=.*|$v=$(openssl rand -base64 24 | tr -d '/+=')|" /etc/argon/deploy.env
 done
 sudo sed -i "s|^ARGON_CODE_KEY=.*|ARGON_CODE_KEY=$(openssl rand -hex 32)|" /etc/argon/deploy.env
@@ -150,6 +150,16 @@ sudo grep -qE '^ARGON_SMS=(termii|refusing)$' "$F" || { sudo sed -i '/^ARGON_SMS
 sudo grep '^ARGON_SMS=' "$F"   # must print one line
 ```
 
+`ARGON_WALLET_PASSWORD` and `ARGON_VFD` (2026-11-10, the wallet, stage 3) are the third and fourth. The password is for `argon_wallet`, the only role that writes what VFD said; `20-roles.sh` refuses to run without it. `ARGON_VFD` is a decision: `off` until VFD's credentials are there (the worker then refuses to start, saying so, and the holds the last signature places wait).
+
+```bash
+F=/etc/argon/deploy.env
+sudo grep -qE '^ARGON_WALLET_PASSWORD=[A-Za-z0-9._~-]{16,}$' "$F" || { sudo sed -i '/^ARGON_WALLET_PASSWORD=/d' "$F"; echo "ARGON_WALLET_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')" | sudo tee -a "$F" >/dev/null; }
+sudo grep -qE '^ARGON_VFD=(vfd|off)$' "$F" || { sudo sed -i '/^ARGON_VFD=/d' "$F"; echo "ARGON_VFD=off" | sudo tee -a "$F" >/dev/null; }
+sudo grep -qE '^ARGON_VFD_WEBHOOK=(hmac|unsigned|off)$' "$F" || { sudo sed -i '/^ARGON_VFD_WEBHOOK=/d' "$F"; echo "ARGON_VFD_WEBHOOK=off" | sudo tee -a "$F" >/dev/null; }
+sudo grep -c '^ARGON_WALLET_PASSWORD=' "$F"; sudo grep '^ARGON_VFD=\|^ARGON_VFD_WEBHOOK=' "$F"   # 1, and two lines
+```
+
 Why not a plain append: run twice, it leaves two keys; the later one wins, and every open page's CSRF token is refused until it reloads, which would look like the cookie work was broken rather than the install. Why not the first-install `sed s|^…=.*|…|` alone: on a file without the line it changes nothing and says nothing.
 
 ### Findings from the first runs (2026-10-02/03)
@@ -217,7 +227,9 @@ Why not a plain append: run twice, it leaves two keys; the later one wins, and e
 | 67 | **The env file's own line would have refused going live** (2026-11-06, found diagnosing 66). The guard (75) derived its public ports from `ARGON_API_DOMAIN` only when `PUBLIC_PORTS` was EMPTY; `ec2.env.example` set `PUBLIC_PORTS=22`, the instance's file was copied from it, and so with the API's name set the guard still allowed 22 alone. 85's "except ports: 22" was that line speaking. Had 86's listener come up, its own last step would have refused nginx on 80 and 443: its own work. **No fixture had the line; the real file did, and the example file we shipped put it there.** Finding 64's cause for the third time in a week: a fixture written from what the file was expected to say. | The public ports are derived, never set: 22, and 80 and 443 once the API has a name. A `PUBLIC_PORTS` line is reported ("is not read … delete the line") and ignored; the example no longer has one. L12 is the instance's line verbatim beside a public name (sabotages `loopback_env_wins`, the old rule; `loopback_env_silent`, ignored without a word); L13: listing 8080 there opens nothing. Open, as its own pass: every other line of the real `deploy.env` that has never appeared in a fixture. |
 | 68 | **86 checked its work on the one address where its work never answers** (2026-11-06, reasoned while diagnosing 66, then PROVEN before anything changed: E02 on CI, 152b6f5). nginx chooses a server by the address a request arrives on before it reads the name. 85's site listens on 127.0.0.1:80; the public site on 0.0.0.0:80. 86's final checks curled 127.0.0.1, so 85's site answered them all: "plain-HTTP sign-in is refused 403" passed on 85's refusal, not the public site's, and "a GET is redirected to HTTPS" would have failed, 85's site proxying /healthz instead. Had 66 not stopped it first, 86 would have died at its last step on a public site that worked. | 86's checks go to the instance's private address (from the metadata service), where only the public site answers, and the sign-in refusal must carry the public site's own text (`HTTPS only."}`; 85's names /healthz). E02 is the evidence, both ways: 85's text on 127.0.0.1, the public site's on another local address. The step-5 change itself runs only on the instance (it needs the metadata service): its first run there is its proof. |
 | 69 | **A missing `--db` chose another database, and the failure looked like the tests failing** (2026-11-06, the first run of `test/ops/create_society_test.sh`). The test's runner never passed `--db`, so `46-create-society.sh` fell back to the env file's `ARGON_DB`: the developer's own `argon_dev`. That database was at an older schema with no founding function, so every call failed, and the failures read as the script or the tests being wrong, not the target. Nothing was written there (checked: no founding function, no test society). Had `argon_dev` been current, the tests would have founded societies in it, and on the server the same fallback is the live database. | `46-create-society.sh` has no default database: without `--db` it refuses, naming `--db` (S07, red first; sabotage `db_defaults`). The test's runner always passes the scratch database, and S07's env file names a database that does not exist, so even a script that still fell back would reach nothing real. **Rule: a default that silently picks a different target is worse than no default; refuse rather than choose.** `45-society-settings.sh` had the same fallback, and was fixed the same way on the reviewer's ruling (2026-11-06, its own commit; S25, sabotage `db_defaults`): operators passing `--db` is a smaller cost than a society's governance settings written somewhere nobody was looking. |
-| 70 | **The probe failed once across midnight** (2026-11-10, a full run of suite 0024 started on 2026-11-09). P34 succeeded where it must be refused, and G6 reported a gap. A rerun minutes later passed, and nothing in 0024 touches holds or the ledger. The probe writes rows dated `current_date` in separate statements, so a run that crosses midnight puts related rows on two dates. That is a flake in the probe, not a rule failing. | Recorded, not yet fixed: a run that starts before midnight should be re-run before its result is believed. The fix is to pin the probe's date once at the start, from the server, and use it in every row. It goes into the probe when it is next touched for a rule. |
+| 70 | **The probe failed once across midnight** (2026-11-10, a full run of suite 0024 started on 2026-11-09). P34 succeeded where it must be refused, and G6 reported a gap. A rerun minutes later passed, and nothing in 0024 touches holds or the ledger. The probe writes rows dated `current_date` in separate statements, so a run that crosses midnight puts related rows on two dates. That is a flake in the probe, not a rule failing. | **Fixed 2026-11-10** (stage 3, when the probe was next touched, for the wallet's grants): the probe reads the server's date once (`TODAY`) and dates every row it writes with it. The one comparison left on `current_date` (K47) compares against a date the server computes in the same statement. |
+| 71 | **The member whose slip was taken was never told it was used** (2026-11-10, found by the frontend on argon_dev). §12 rules that the holder of a used slip is told "This code has already been used. Speak to your secretary." The server said so only to someone who gave the account's PIN, and the PIN was the taker's: the robbed member had never had one, typed the slip with a new PIN, and was refused like a typo. Tests covered the message, never the person it was for. | 0030 (`enrolment_slip_used`, a question that spends and counts nothing; only argon_auth may ask, P69). `Enrol`: "I never had a PIN" (newPin) for an account that has one answers slip_used for the person's OWN spent slip, refused and uncounted for anything else. TestRedeem16, break `enrol_robbed_member_untold`; suite 0030. |
+| 72 | **Editing mutate.sh while a run of it was going killed the run** (2026-11-10, stage 3). Bash reads a script as it executes; five bytes inserted near the top shifted the rest, and the background approvals_api run died at "line 211: syntax error". It looked like the suite's failure. | Re-run, and a working rule: never edit a script a run is executing; queue the edit for the run's end. |
 
 **Rule: when a hand-written list becomes a derived one, the derivation must select the same things the list did, or the difference is explained** (2026-10-22, finding 52). Compare the two entry by entry before the list is deleted. Deriving the restore drill from each suite's plain run pattern would have silently lost suite 0003's ten service tests; the comparison against the 26 lines being replaced caught it before it was written.
 
@@ -550,6 +562,29 @@ old one, on your name and reason. The officer then signs in with their member
 number, the slip, and a PIN they choose (`POST /auth/enrol`). From then on,
 officers issue everyone else's codes; a signatory's comes in two halves from
 two other signatories (0026).
+
+## The wallet: the system that pays (stage 3)
+
+The last signature on a withdrawal places its hold (LEDGER_CONTRACT §13). The **wallet worker** (`argon-api wallet-worker`, the `wallet` compose profile) sends that hold's transfer from the society's VFD account to the member's own, asks VFD what happened, and records VFD's answer; the database then releases the hold on a definitive failure or posts the payout on VFD's success, in the same transaction, attributed to VFD's outcome and to no user (0028).
+
+It runs as `argon_wallet`, the only role that writes VFD's evidence (probes P60–P65). It never sends a transfer twice, never releases on a timeout, and pays only holds the last signature placed.
+
+**Before it can run:** a society's own VFD account recorded by the operator (`operator_record_society_vfd_account`, from VFD's name enquiry), the member's own VFD account, and VFD's credentials in `deploy.env`:
+
+```bash
+# On the instance, set by hand from whoever holds the VFD relationship; never pasted into a chat or a ticket.
+ARGON_VFD=vfd
+VFD_BASE_URL=https://...       # VFD's API base, as VFD gives it
+VFD_ACCESS_TOKEN=...
+```
+
+Then `30-install-api.sh` writes `/etc/argon/wallet.env`, and the worker is started deliberately:
+
+```bash
+cd /opt/argon/src && sudo docker compose --env-file /etc/argon/deploy.env -f deploy/compose/docker-compose.prod.yml --profile wallet up -d wallet
+```
+
+**Unverified, and how each is handled until VFD confirms it** (docs/VFD_INTEGRATION.md): VFD's failure statuses are not known, so none is mapped (a transfer fails only on a refused send, a connection never made, or "not found" two hours after the send, `vfd_settlement_window`, PROVISIONAL); `transactionStatus 99` is pending, not success; there is no known statement endpoint, so reconciliation records that it could not run rather than reporting nothing missed.
 
 ## A society's rules: the operator (`45-society-settings.sh`)
 

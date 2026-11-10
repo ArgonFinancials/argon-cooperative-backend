@@ -244,7 +244,8 @@ func (s *server) GetJournal(ctx context.Context, req GetJournalRequestObject) (G
 	entries := []JournalEntry{}
 	for rows.Next() {
 		var e JournalEntry
-		var id, kind, actorID, label string
+		var id, kind, label string
+		var actorID *string // null: the system, on VFD's confirmation (0028)
 		var vd *time.Time
 		var rev, adj, post *string
 		var reversedBy []string
@@ -254,7 +255,7 @@ func (s *server) GetJournal(ctx context.Context, req GetJournalRequestObject) (G
 		}
 		e.EntryId, e.Kind, e.ValueDate = uuidOf(id), MovementKind(kind), dateOf(vd)
 		e.ReversesEntryId, e.AdjustsEntryId = uuidPtr(rev), uuidPtr(adj)
-		e.PostedBy = PostedBy{UserId: uuidOf(actorID), PostLabel: label}
+		e.PostedBy = PostedBy{UserId: uuidPtr(actorID), PostLabel: label}
 		if post != nil {
 			pp := PostedByPost(*post)
 			e.PostedBy.Post = &pp

@@ -352,9 +352,12 @@ components:
       required: [userId, post, postLabel]
       description: |
         Who posted the entry, in what post, FROZEN AT POSTING (§4). Present only
-        in the officer projection.
+        in the officer projection. userId is NULL when no person did: a payout
+        the system recorded on VFD's confirmation (LEDGER_CONTRACT §13, 0028),
+        where postLabel says so ("Argon system, on VFD's confirmation") and no
+        user stands in for it.
       properties:
-        userId: { type: string, format: uuid }
+        userId: { type: string, format: uuid, nullable: true }
         post:
           type: string
           nullable: true
@@ -1366,6 +1369,12 @@ components:
         signatory: { type: boolean }
         heldFrom: { type: string, format: date }
 
+    NotificationKept:
+      type: object
+      required: [kept]
+      properties:
+        kept: { type: boolean, description: "Always true: the notification is durable. It is not believed." }
+
     HoldRefusal:
       type: object
       required: [code, message]
@@ -1586,6 +1595,52 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '503':
           description: "sign_in_unavailable — DELIBERATE, not a defect: this server runs without an auth service (pending the argon_auth connection). Nobody is signed in."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /webhooks/vfd:
+    post:
+      operationId: receiveVfdNotification
+      x-argon-built: true
+      summary: VFD's notification of money arriving, kept as received, never believed
+      description: |
+        VFD calls this; no session. The notification is KEPT EXACTLY AS
+        RECEIVED (every delivery: a retry is evidence too) and the answer is
+        given only after it is durable. It is NEVER BELIEVED: nothing is
+        credited here. The wallet worker asks VFD about its reference and
+        records VFD's answer, VFD's amount and account, once per reference
+        (0029). ARGON_VFD_WEBHOOK says how VFD is trusted at the door: hmac
+        (X-VFD-Signature, hex HMAC-SHA512 of the body, required; a request
+        without one, or with a wrong one, is refused and not kept), unsigned
+        (VFD does not sign inflow notifications: kept, marked unsigned), or
+        off (refused). A body over 64 KiB is refused and not kept.
+      security: []
+      parameters:
+        - { name: X-VFD-Signature, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Kept. Not believed until VFD confirms it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationKept' }
+        '401':
+          description: "signature_required or signature_wrong (hmac mode): not kept."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '413':
+          description: "too_large: over 64 KiB, not kept."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: "webhook_off: this server takes no notifications from VFD (ARGON_VFD_WEBHOOK=off)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -2097,6 +2152,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            THE LAST SIGNATURE ON A WITHDRAWAL CARRIES ITS HOLD (LEDGER_CONTRACT
+            §13: the last approval pays). When the money no longer fits, that
+            signature is refused, nothing is signed, and the request stays open:
+            exceeds_withdrawable, with WHAT CHANGED (HoldRefusal's breakdown and
+            causes); not_configured, a charge component or the account floor is
+            not set (the message says which). A signature that does not reach the
+            quorum is never refused for this.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldRefusal' }
 
   /approvals/{requestId}/rejections:
     post:

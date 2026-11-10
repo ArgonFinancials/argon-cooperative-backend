@@ -21,11 +21,11 @@
 # counting an absent half as a pass.
 source "$(dirname "$0")/../../deploy/lib.sh"
 [[ $TARGET != host ]] || die "the mutation suite runs on a local server (TARGET=docker or local), never the EC2 host"
-require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD
+require_env POSTGRES_PASSWORD ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_AUTH_PASSWORD ARGON_WALLET_PASSWORD
 
 SUITE=0002 ONLY='*' PARTIAL=0 SVC=0
 while (($#)); do case $1 in
-  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|0014|0015|0016|0017|0018|0019|0020|0021|0022|0023|0024|0025|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api|money_api|me_api|requests_api|balance_api|cors_api|spec_api|session_api|sms|sms_api|pin|locks_api|enrol|0026|enrol_api|0027|vfd|0028) SUITE=$1; shift ;;
+  0002|0003|0004|0005|0006|0007|0008|0009|0010|0011|0012|0013|0014|0015|0016|0017|0018|0019|0020|0021|0022|0023|0024|0025|stepup|api|batch|stepup_api|signin_api|books|loans_api|approvals_api|money_api|me_api|requests_api|balance_api|cors_api|spec_api|session_api|sms|sms_api|pin|locks_api|enrol|0026|enrol_api|0027|vfd|0028|wallet|0029|webhook_api|0030) SUITE=$1; shift ;;
   --only) ONLY=$2; shift 2 ;;
   --partial) PARTIAL=1; shift ;;
   --svc) SVC=1; shift ;;
@@ -44,6 +44,8 @@ export ARGON_TEST_MIGRATOR_URL="postgres://argon_migrator:${ARGON_MIGRATOR_PASSW
 # grants are applied: GREEN, below. Exported, never argv: they carry passwords.
 export ARGON_TEST_APP_URL="postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
 export ARGON_TEST_AUTH_URL="postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+# The wallet worker's role (0028): only the wallet suite uses it.
+export ARGON_TEST_WALLET_URL="postgres://argon_wallet:${ARGON_WALLET_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
 
 # shellcheck disable=SC1090
 source "$HERE/suite_$SUITE.sh"

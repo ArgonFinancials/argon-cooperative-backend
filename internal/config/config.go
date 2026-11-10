@@ -24,6 +24,10 @@ type Config struct {
 	// with an auth service; termii's three settings have no defaults.
 	SMS                                     string
 	TermiiURL, TermiiAPIKey, TermiiSenderID string
+	// VFD's notifications (webhook.go in internal/api): ARGON_VFD_WEBHOOK,
+	// hmac, unsigned or off, no default; hmac needs VFD_WEBHOOK_SECRET.
+	VFDWebhook       string
+	VFDWebhookSecret []byte
 }
 
 func Load() (Config, error) {
@@ -62,7 +66,28 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("ARGON_CSRF_KEY must be set, at least 32 bytes as hex (openssl rand -hex 32)")
 	}
 	c.CSRFKey = ck
+	if err := c.loadWebhook(); err != nil {
+		return c, err
+	}
 	return c, c.loadSMS()
+}
+
+// loadWebhook: how VFD's notifications are taken, said and never inherited.
+// No refusal repeats the secret.
+func (c *Config) loadWebhook() error {
+	c.VFDWebhook = os.Getenv("ARGON_VFD_WEBHOOK")
+	switch c.VFDWebhook {
+	case "off", "unsigned":
+		return nil
+	case "hmac":
+		s := os.Getenv("VFD_WEBHOOK_SECRET")
+		if len(s) < 32 {
+			return fmt.Errorf("ARGON_VFD_WEBHOOK=hmac: VFD_WEBHOOK_SECRET must be set, at least 32 characters")
+		}
+		c.VFDWebhookSecret = []byte(s)
+		return nil
+	}
+	return fmt.Errorf("ARGON_VFD_WEBHOOK must be set to hmac, unsigned or off (deploy/README.md, the wallet)")
 }
 
 func envOr(key, fallback string) string {

@@ -690,6 +690,7 @@ func TestApiSession32_TheConfigurationRequiresTheCsrfKey(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
 	t.Setenv("AUTH_DATABASE_URL", "")
 	t.Setenv("AUTH_CODE_KEY", "")
+	t.Setenv("ARGON_VFD_WEBHOOK", "off")
 	for _, c := range []struct{ what, value string }{
 		{"unset", ""},
 		{"not hex", "this-is-not-hex-at-all-and-is-long-enough-0123456789abcdef"},
