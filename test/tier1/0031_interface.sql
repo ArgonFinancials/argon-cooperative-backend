@@ -9,6 +9,7 @@ ALTER TABLE members ADD COLUMN next_of_kin_phone TEXT;
 ALTER TABLE members ADD COLUMN next_of_kin_relationship TEXT;
 ALTER TABLE members ADD COLUMN registered_by_act UUID REFERENCES credential_acts(id);
 ALTER TABLE members ADD COLUMN register_batch_id UUID;
+ALTER TABLE members ADD COLUMN register_line INT;  -- the file line it came from, so a repeat answers the first commit's map
 
 CREATE TABLE member_register_batches (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -33,7 +34,7 @@ ALTER TABLE auth_proofs ADD CONSTRAINT proof_act_kind_known CHECK (act_kind IS N
   'enrolment_issue', 'member_register'));
 
 CREATE FUNCTION register_member(p_society UUID, p_branch_code TEXT, p_number TEXT, p_name TEXT, p_phone TEXT, p_joined DATE,
-    p_channel collection_channel, p_nok_name TEXT, p_nok_phone TEXT, p_nok_relationship TEXT, p_act UUID, p_batch UUID)
+    p_channel collection_channel, p_nok_name TEXT, p_nok_phone TEXT, p_nok_relationship TEXT, p_act UUID, p_batch UUID, p_line INT)
   RETURNS uuid SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_user UUID; v_member UUID; v_branch UUID;
 BEGIN
@@ -46,6 +47,6 @@ BEGIN
     RETURNING id INTO v_member;
   RETURN v_member;
 END $$ LANGUAGE plpgsql;
-REVOKE EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID, INT) FROM PUBLIC;
 
 COMMIT;

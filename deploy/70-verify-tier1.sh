@@ -613,7 +613,7 @@ if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('enrolment_slip_us
 probe req P69 argon_app '42501.*permission denied for function enrolment_slip_used' "app asks whether a code is a member's spent slip"   "SELECT enrolment_slip_used($U1, repeat('a', 64));"
 fi
 # 0031: a member is added only through register_member, on the secretary's act.
-if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid,integer)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
 probe req P70 argon_app '42501.*permission denied for table members' "app adds a member directly, around the secretary's act"   "INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on) VALUES ($S, $B, 'APP-1', 'App', '+2348000000009', 'cash', $TODAY);"
 fi
 # 0027: appointing a founding officer is the operator's function alone.

@@ -1,8 +1,8 @@
 -- DELIBERATELY WRONG (m_batch_twice). A full copy of 0031 with one rule broken,
 -- applied over 0031_interface.sql, whose objects are removed first.
 BEGIN;
-DROP FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID);
-ALTER TABLE members DROP COLUMN register_batch_id, DROP COLUMN registered_by_act, DROP COLUMN next_of_kin_relationship, DROP COLUMN next_of_kin_phone, DROP COLUMN next_of_kin_name;
+DROP FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID, INT);
+ALTER TABLE members DROP COLUMN register_line, DROP COLUMN register_batch_id, DROP COLUMN registered_by_act, DROP COLUMN next_of_kin_relationship, DROP COLUMN next_of_kin_phone, DROP COLUMN next_of_kin_name;
 DROP TABLE member_register_batches;
 COMMIT;
 -- =============================================================================
@@ -33,6 +33,7 @@ ALTER TABLE members ADD COLUMN next_of_kin_phone TEXT;
 ALTER TABLE members ADD COLUMN next_of_kin_relationship TEXT;
 ALTER TABLE members ADD COLUMN registered_by_act UUID REFERENCES credential_acts(id);
 ALTER TABLE members ADD COLUMN register_batch_id UUID;
+ALTER TABLE members ADD COLUMN register_line INT;  -- the file line it came from, so a repeat answers the first commit's map
 
 CREATE TABLE member_register_batches (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -58,7 +59,7 @@ ALTER TABLE auth_proofs ADD CONSTRAINT proof_act_kind_known CHECK (act_kind IS N
   'enrolment_issue', 'member_register'));
 
 CREATE FUNCTION register_member(p_society UUID, p_branch_code TEXT, p_number TEXT, p_name TEXT, p_phone TEXT, p_joined DATE,
-    p_channel collection_channel, p_nok_name TEXT, p_nok_phone TEXT, p_nok_relationship TEXT, p_act UUID, p_batch UUID)
+    p_channel collection_channel, p_nok_name TEXT, p_nok_phone TEXT, p_nok_relationship TEXT, p_act UUID, p_batch UUID, p_line INT)
   RETURNS uuid SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   a        RECORD;
@@ -104,13 +105,13 @@ BEGIN
   -- HOW: their own person, active, attributed.
   INSERT INTO users (full_name) VALUES (btrim(p_name)) RETURNING id INTO v_user;
   INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id,
-                       next_of_kin_name, next_of_kin_phone, next_of_kin_relationship, registered_by_act, register_batch_id)
+                       next_of_kin_name, next_of_kin_phone, next_of_kin_relationship, registered_by_act, register_batch_id, register_line)
     VALUES (p_society, v_branch, btrim(p_number), btrim(p_name), p_phone, 'active', p_channel, p_joined, v_user,
             nullif(btrim(coalesce(p_nok_name, '')), ''), nullif(btrim(coalesce(p_nok_phone, '')), ''), nullif(btrim(coalesce(p_nok_relationship, '')), ''),
-            p_act, p_batch)
+            p_act, p_batch, p_line)
     RETURNING id INTO v_member;
   RETURN v_member;
 END $$ LANGUAGE plpgsql;
-REVOKE EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID, INT) FROM PUBLIC;
 
 COMMIT;

@@ -75,7 +75,7 @@ func (w *rworld) registerBy(t *testing.T, actor string, m newMember, kind, actID
 				return fmt.Errorf("FIXTURE: the act: %w", err)
 			}
 		}
-		return x.QueryRow(bg(), `SELECT register_member($1, $2, $3, $4, $5, $6::date, $7::collection_channel, $8, $9, $10, $11, NULL)::text`,
+		return x.QueryRow(bg(), `SELECT register_member($1, $2, $3, $4, $5, $6::date, $7::collection_channel, $8, $9, $10, $11, NULL, NULL)::text`,
 			w.s.id, m.branch, m.number, m.name, m.phone, m.joined, m.channel, nz(m.nokName), nz(m.nokPhone), nz(m.nokRel), nz(act)).Scan(&id)
 	})
 	return id, err

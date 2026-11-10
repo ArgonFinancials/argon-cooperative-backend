@@ -31,11 +31,11 @@ import (
 
 const stepPIN = "4827"
 
-// stepWorld: a batch world whose secretary has a real PIN.
+// stepWorld: a batch world whose treasurer (the importer) has a real PIN.
 func stepWorld(t *testing.T, n int) *bworld {
 	t.Helper()
 	w := newBatchWorld(t, n)
-	fixture(t, one(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, w.secretary, hashPIN(stepPIN)), "the secretary's PIN")
+	fixture(t, one(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, w.importer, hashPIN(stepPIN)), "the treasurer's PIN")
 	return w
 }
 
@@ -91,7 +91,7 @@ func spent(t *testing.T, proof string) bool {
 func (w *bworld) withProof(t *testing.T, key string, body bBody, proof *string) resp {
 	t.Helper()
 	body.PinProofId = proof
-	r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, w.secretary), body)
+	r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, w.importer), body)
 	fixture(t, err, "POST batch")
 	return r
 }
@@ -104,12 +104,12 @@ func p(s string) *string { return &s }
 
 func TestApiStepUp01_PinProofIsMintedForTheCallerAndTheAct(t *testing.T) {
 	w := stepWorld(t, 1)
-	id := minted(t, askProof(t, w, signIn(t, w.secretary), stepPIN, "ledger_batch"))
+	id := minted(t, askProof(t, w, signIn(t, w.importer), stepPIN, "ledger_batch"))
 	var user string
 	var kind *string
 	var used bool
 	fixture(t, db.QueryRow(bg(), `SELECT user_id::text, act_kind, consumed_at IS NOT NULL FROM auth_proofs WHERE id = $1`, id).Scan(&user, &kind, &used), "the proof")
-	if user != w.secretary || kind == nil || *kind != "ledger_batch" || used {
+	if user != w.importer || kind == nil || *kind != "ledger_batch" || used {
 		t.Fatalf("WRONG PROOF — user %s, act %s, spent %v; want the caller's, for ledger_batch, unspent", user, str(kind), used)
 	}
 	record(t, w.withProof(t, newKey(), file("2025-12-31", w.members, 10), &id), http.StatusCreated) // and it authorises the import
@@ -118,50 +118,50 @@ func TestApiStepUp01_PinProofIsMintedForTheCallerAndTheAct(t *testing.T) {
 func TestApiStepUp02_WrongPinMintsNothingAndIsCounted(t *testing.T) {
 	w := stepWorld(t, 0)
 	var before int
-	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM sign_in_attempts WHERE user_id = $1 AND NOT succeeded`, w.secretary).Scan(&before), "attempts")
-	r := askProof(t, w, signIn(t, w.secretary), "0000", "ledger_batch")
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM sign_in_attempts WHERE user_id = $1 AND NOT succeeded`, w.importer).Scan(&before), "attempts")
+	r := askProof(t, w, signIn(t, w.importer), "0000", "ledger_batch")
 	if r.status != http.StatusForbidden || !bytes.Contains(r.body, []byte(`"pin_refused"`)) {
 		t.Fatalf("WRONG ANSWER — a wrong PIN answered %d %s; want 403 pin_refused", r.status, r.body)
 	}
 	var after int
-	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM sign_in_attempts WHERE user_id = $1 AND NOT succeeded`, w.secretary).Scan(&after), "attempts")
-	if n := proofCount(t, w.secretary); n != 0 || after != before+1 {
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM sign_in_attempts WHERE user_id = $1 AND NOT succeeded`, w.importer).Scan(&after), "attempts")
+	if n := proofCount(t, w.importer); n != 0 || after != before+1 {
 		t.Fatalf("WRONG STATE — %d proof(s) minted, failures %d→%d; want none, and one more failure", n, before, after)
 	}
 }
 
 func TestApiStepUp03_LockedAccountMintsNothing(t *testing.T) {
 	w := stepWorld(t, 0)
-	tok := signIn(t, w.secretary)
+	tok := signIn(t, w.importer)
 	for i := 0; i < 5; i++ {
 		askProof(t, w, tok, "0000", "ledger_batch")
 	}
 	r := askProof(t, w, tok, stepPIN, "ledger_batch")
-	if r.status != http.StatusTooManyRequests || proofCount(t, w.secretary) != 0 {
-		t.Fatalf("ORACLE — after five wrong PINs the right one answered %d %s (%d proofs); want 429, nothing minted", r.status, r.body, proofCount(t, w.secretary))
+	if r.status != http.StatusTooManyRequests || proofCount(t, w.importer) != 0 {
+		t.Fatalf("ORACLE — after five wrong PINs the right one answered %d %s (%d proofs); want 429, nothing minted", r.status, r.body, proofCount(t, w.importer))
 	}
 }
 
 func TestApiStepUp04_NoValidSessionMintsNothing(t *testing.T) {
 	w := stepWorld(t, 0)
-	tok := signIn(t, w.secretary)
+	tok := signIn(t, w.importer)
 	fixture(t, one(`UPDATE auth_sessions SET ended_at = auth_now(), ended_by_session = id WHERE token_digest = $1`, auth.TokenDigest(tok)), "end session")
 	for what, token := range map[string]string{"no token": "", "an ended session": tok} {
 		if r := askProof(t, w, token, stepPIN, "ledger_batch"); r.status != http.StatusUnauthorized {
 			t.Fatalf("ACCEPTED — %s got %d, want 401", what, r.status)
 		}
 	}
-	if n := proofCount(t, w.secretary); n != 0 {
+	if n := proofCount(t, w.importer); n != 0 {
 		t.Fatalf("MINTED — %d proof(s) without a session", n)
 	}
 }
 
 func TestApiStepUp05_UnknownActMintsNothing(t *testing.T) {
 	w := stepWorld(t, 0)
-	if r := askProof(t, w, signIn(t, w.secretary), stepPIN, "anything"); r.status != http.StatusBadRequest {
+	if r := askProof(t, w, signIn(t, w.importer), stepPIN, "anything"); r.status != http.StatusBadRequest {
 		t.Fatalf("ACCEPTED — a proof for no real act answered %d %s; want 400", r.status, r.body)
 	}
-	if n := proofCount(t, w.secretary); n != 0 {
+	if n := proofCount(t, w.importer); n != 0 {
 		t.Fatalf("MINTED — %d proof(s) for no real act", n)
 	}
 }
@@ -185,7 +185,7 @@ func TestApiStepUp06_BatchWithoutAProofWritesNothingAndMintsNothing(t *testing.T
 	before := stateOf(t, w.s.id)
 	stepRefused(t, w.withProof(t, key, body, nil), "a batch with no proof")
 	nothingWritten(t, w.s.id, before, "no proof was given")
-	if n := proofCount(t, w.secretary); n != 0 {
+	if n := proofCount(t, w.importer); n != 0 {
 		t.Fatalf("SELF-MINTED — the batch path created %d proof(s) for itself: the step-up is decorative", n)
 	}
 	record(t, w.withProof(t, key, body, w.proof(t)), http.StatusCreated) // the refusal did not claim the key
@@ -193,7 +193,7 @@ func TestApiStepUp06_BatchWithoutAProofWritesNothingAndMintsNothing(t *testing.T
 
 func TestApiStepUp07_ProofForAnotherActIsRefused(t *testing.T) {
 	w := stepWorld(t, 1)
-	other := minted(t, askProof(t, w, signIn(t, w.secretary), stepPIN, "pin_change"))
+	other := minted(t, askProof(t, w, signIn(t, w.importer), stepPIN, "pin_change"))
 	before := stateOf(t, w.s.id)
 	stepRefused(t, w.withProof(t, newKey(), file("2025-12-31", w.members, 10), &other), "a proof minted for a PIN change")
 	nothingWritten(t, w.s.id, before, "the proof was for another act")
@@ -283,7 +283,7 @@ func TestApiStepUp14_CommittedBatchSpendsItsProofThroughItsOwnAct(t *testing.T) 
 		JOIN credential_acts a ON a.id = b.authorised_by WHERE b.society_id = $1 AND b.reference = $2`, w.s.id, key).Scan(&kind, &actor, &used); err != nil {
 		t.Fatalf("UNLINKED — the batch names no authorising act: %v", err)
 	}
-	if kind != "ledger_batch" || actor != w.secretary || used != *proof {
+	if kind != "ledger_batch" || actor != w.importer || used != *proof {
 		t.Fatalf("WRONG ACT — the batch is authorised by a %s act of %s spending %s; want ledger_batch, the secretary, this proof", kind, actor, used)
 	}
 }
@@ -306,11 +306,11 @@ func TestApiStepUp15_UnconfiguredServerSaysSoAndMintsNothing(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	w.srv = srv
-	r := askProof(t, w, signIn(t, w.secretary), stepPIN, "ledger_batch")
+	r := askProof(t, w, signIn(t, w.importer), stepPIN, "ledger_batch")
 	if r.status != http.StatusServiceUnavailable || !bytes.Contains(r.body, []byte(`"step_up_unavailable"`)) {
 		t.Fatalf("UNEXPLAINED — with no auth service the step-up answered %d %s; want 503 step_up_unavailable, saying why", r.status, r.body)
 	}
-	if n := proofCount(t, w.secretary); n != 0 {
+	if n := proofCount(t, w.importer); n != 0 {
 		t.Fatalf("MINTED — %d proof(s) on a server with no auth service", n)
 	}
 	si := postJSON(t, srv, "/auth/sign-in", "", map[string]string{"credential": "+2348000000000", "pin": stepPIN})

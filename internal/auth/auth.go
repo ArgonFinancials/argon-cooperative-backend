@@ -151,6 +151,7 @@ const (
 	ActWithdrawalAuthorise   ActKind = "withdrawal_authorisation" // 0012: authorising one to execute
 	ActWithdrawalRequest     ActKind = "withdrawal_request"       // 0016: raising one
 	ActEnrolmentIssue        ActKind = "enrolment_issue"          // 0024: issuing an enrolment code
+	ActMemberRegister        ActKind = "member_register"          // 0031: the secretary registering members
 )
 
 // ActKinds is every kind a proof can be minted for: credential_acts.kind.
@@ -163,7 +164,7 @@ var ActKinds = []ActKind{ActLedgerBatch, ActPinChange, ActMemberReset, ActPhoneC
 	ActSignatoryResetRequest, ActSignatoryPhoneRequest, ActSignatoryApproval,
 	ActGuarantee, ActGuaranteeWithdrawal, ActApprovalSignature, ActApprovalRejection,
 	ActContributionRecord, ActWithdrawalPayout, ActWithdrawalAuthorise, ActWithdrawalRequest,
-	ActEnrolmentIssue}
+	ActEnrolmentIssue, ActMemberRegister}
 
 // Proof is a minted step-up. Its id is what the act names; it is spent by the
 // act, inside the act's own transaction, and by nothing else.

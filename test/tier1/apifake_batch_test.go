@@ -37,7 +37,9 @@
 //	any_officer_imports         any current officer of the society may import
 //	auditor_imports             the read-only internal auditor may import
 //	outsider_told_forbidden     someone with no post here is told 403, which says the society exists
-//	former_secretary_imports    a post held at any time counts
+//	former_secretary_imports    a post held at any time counts (the treasurer's, since 2026-11-10)
+//	secretary_imports           the secretary still posts opening balances (2026-11-10: the treasurer confirms every figure)
+//	number_any_society          a member number is resolved in every society, and the member it finds trusted as ours: another society's member credited
 //	chart_any_account           with no migration_control account, any equity account is used
 //	key_global                  the reference is looked up across every society
 //
@@ -83,14 +85,16 @@ func (r batchRefused) Error() string { return r.code }
 func (r batchRefused) response() api.PostLedgerBatch422JSONResponse {
 	out := api.PostLedgerBatch422JSONResponse{Code: api.BatchRefusalCode(r.code), Message: r.msg}
 	out.Rows = []struct {
-		Line     int                `json:"line"`
-		MemberId openapi_types.UUID `json:"memberId"`
+		Line         int                 `json:"line"`
+		MemberId     *openapi_types.UUID `json:"memberId,omitempty"`
+		MemberNumber *string             `json:"memberNumber,omitempty"`
 	}{}
 	for _, row := range r.rows {
 		out.Rows = append(out.Rows, struct {
-			Line     int                `json:"line"`
-			MemberId openapi_types.UUID `json:"memberId"`
-		}{row.Line, row.MemberId})
+			Line         int                 `json:"line"`
+			MemberId     *openapi_types.UUID `json:"memberId,omitempty"`
+			MemberNumber *string             `json:"memberNumber,omitempty"`
+		}{row.Line, row.MemberId, row.MemberNumber})
 	}
 	return out
 }
@@ -112,12 +116,14 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 	if f.brk == "former_secretary_imports" {
 		term = ""
 	}
-	posts := `'secretary'`
+	posts := `'treasurer'`
 	switch f.brk {
 	case "any_officer_imports":
 		posts = `'secretary','chairman','treasurer','branch_officer','loan_officer'`
 	case "auditor_imports":
-		posts = `'secretary','internal_auditor'`
+		posts = `'treasurer','internal_auditor'`
+	case "secretary_imports":
+		posts = `'treasurer','secretary'`
 	}
 	var importer, officer, exists bool
 	if err := f.db.QueryRow(ctx, `SELECT
@@ -129,7 +135,7 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 	}
 	if !importer {
 		if officer || (f.brk == "outsider_told_forbidden" && exists) {
-			return api.PostLedgerBatch403JSONResponse{Code: "not_permitted", Message: "importing opening balances is the secretary's"}, nil
+			return api.PostLedgerBatch403JSONResponse{Code: "not_permitted", Message: "posting opening balances is the treasurer's: they confirm every figure"}, nil
 		}
 		return batchNotFound, nil
 	}
@@ -180,7 +186,7 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 			f.db.Exec(ctx, `UPDATE auth_proofs SET consumed_at = auth_now() WHERE id = $1`, b.PinProofId.String())
 		}
 		// 3. Is the body sound?
-		amounts, refusal := f.judge(ctx, x, society, b)
+		amounts, ids, refusal := f.judge(ctx, x, society, b)
 		if refusal != nil {
 			return *refusal
 		}
@@ -229,7 +235,7 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 			asOf = time.Now().Format("2006-01-02")
 		}
 		var batchOf any = batch
-		post, label := any("secretary"), "Secretary"
+		post, label := any("treasurer"), "Treasurer"
 		if f.brk == "unattributed" {
 			post, label = nil, "Officer"
 		}
@@ -249,7 +255,7 @@ func (f *fakeAPI) PostLedgerBatch(ctx context.Context, req api.PostLedgerBatchRe
 				if f.brk == "wrong_side" {
 					dr, cr = savings, migration
 				}
-				drMember, crMember := any(nil), any(row.MemberId.String())
+				drMember, crMember := any(nil), any(ids[i])
 				if f.brk == "wrong_side" {
 					drMember, crMember = crMember, drMember
 				}
@@ -347,9 +353,14 @@ func (f *fakeAPI) chart(ctx context.Context, q querier, society string) (migrati
 }
 
 // judge: every refusal, before anything is written. Returns each row's amount.
-func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.LedgerBatch) ([]int64, *batchRefused) {
+func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.LedgerBatch) ([]int64, []string, *batchRefused) {
 	if len(b.Rows) == 0 && f.brk != "empty_ok" {
-		return nil, &batchRefused{code: "nothing_to_post", msg: "the batch has no rows"}
+		return nil, nil, &batchRefused{code: "nothing_to_post", msg: "the batch has no rows"}
+	}
+	for _, row := range b.Rows {
+		if (row.MemberId != nil) == (row.MemberNumber != nil && *row.MemberNumber != "") {
+			return nil, nil, &batchRefused{code: "__bad_request", msg: fmt.Sprintf("line %d: exactly one of memberId or memberNumber", row.Line)}
+		}
 	}
 	var amounts []int64
 	var total int64
@@ -361,7 +372,7 @@ func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.L
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil || n < 0 || !digitsOnly(s) {
-			return nil, &batchRefused{code: "__bad_request", msg: fmt.Sprintf("line %d: amountKobo must be a non-negative decimal kobo string", row.Line)}
+			return nil, nil, &batchRefused{code: "__bad_request", msg: fmt.Sprintf("line %d: amountKobo must be a non-negative decimal kobo string", row.Line)}
 		}
 		if n == 0 {
 			zero = append(zero, row)
@@ -370,26 +381,41 @@ func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.L
 		total += n
 	}
 	if len(zero) > 0 && f.brk != "zero_written" {
-		return nil, &batchRefused{code: "zero_amount", msg: "a ₦0 opening balance posts nothing; remove the row", rows: zero}
+		return nil, nil, &batchRefused{code: "zero_amount", msg: "a ₦0 opening balance posts nothing; remove the row", rows: zero}
 	}
 	confirmed, err := strconv.ParseInt(string(b.ConfirmedTotalKobo), 10, 64)
 	if err != nil || !digitsOnly(string(b.ConfirmedTotalKobo)) {
-		return nil, &batchRefused{code: "__bad_request", msg: "confirmedTotalKobo must be a non-negative decimal kobo string"}
+		return nil, nil, &batchRefused{code: "__bad_request", msg: "confirmedTotalKobo must be a non-negative decimal kobo string"}
 	}
 	if confirmed != total && f.brk != "total_trusted" {
-		return nil, &batchRefused{code: "total_mismatch", msg: fmt.Sprintf("the rows total %d kobo; %d was confirmed", total, confirmed)}
+		return nil, nil, &batchRefused{code: "total_mismatch", msg: fmt.Sprintf("the rows total %d kobo; %d was confirmed", total, confirmed)}
 	}
 	if b.AsOf != nil && f.brk != "future_ok" {
 		var future bool
 		q.QueryRow(ctx, `SELECT $1::date > auth_today()`, b.AsOf.Time.Format("2006-01-02")).Scan(&future)
 		if future {
-			return nil, &batchRefused{code: "as_of_in_future", msg: "the as-at date is after today"}
+			return nil, nil, &batchRefused{code: "as_of_in_future", msg: "the as-at date is after today"}
 		}
 	}
 	seen := map[string]bool{}
+	ids := make([]string, len(b.Rows))
 	var dup, unknown, has []api.BatchRow
-	for _, row := range b.Rows {
-		id := row.MemberId.String()
+	for i, row := range b.Rows {
+		var id string
+		if row.MemberId != nil {
+			id = row.MemberId.String()
+		} else {
+			scope := `society_id = $1 AND `
+			if f.brk == "number_any_society" {
+				scope = `$1::uuid IS NOT NULL AND `
+			}
+			q.QueryRow(ctx, `SELECT coalesce((SELECT id::text FROM members WHERE `+scope+`member_number = $2 LIMIT 1), '')`, society, *row.MemberNumber).Scan(&id)
+			if id == "" {
+				unknown = append(unknown, row)
+				continue
+			}
+		}
+		ids[i] = id
 		if seen[id] && f.brk != "duplicate_member_ok" {
 			dup = append(dup, row)
 		}
@@ -397,10 +423,12 @@ func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.L
 		var inSociety, elsewhere bool
 		q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND society_id = $2),
 		                        EXISTS (SELECT 1 FROM members WHERE id = $1)`, id, society).Scan(&inSociety, &elsewhere)
-		if !inSociety && !(f.brk == "foreign_member_ok" && elsewhere) {
+		// number_any_society: a member resolved from a number is trusted to be ours.
+		trusted := f.brk == "number_any_society" && row.MemberId == nil
+		if !inSociety && !(f.brk == "foreign_member_ok" && elsewhere) && !trusted {
 			unknown = append(unknown, row)
 			if f.brk == "unknown_member_says_why" && elsewhere {
-				return nil, &batchRefused{code: "unknown_member", msg: "a member of another society", rows: []api.BatchRow{row}}
+				return nil, nil, &batchRefused{code: "unknown_member", msg: "a member of another society", rows: []api.BatchRow{row}}
 			}
 			continue
 		}
@@ -422,13 +450,13 @@ func (f *fakeAPI) judge(ctx context.Context, q querier, society string, b *api.L
 	}
 	switch {
 	case len(dup) > 0:
-		return nil, &batchRefused{code: "duplicate_member", msg: "a member appears more than once in this file", rows: dup}
+		return nil, nil, &batchRefused{code: "duplicate_member", msg: "a member appears more than once in this file", rows: dup}
 	case len(unknown) > 0:
-		return nil, &batchRefused{code: "unknown_member", msg: "no such member in this society", rows: unknown}
+		return nil, nil, &batchRefused{code: "unknown_member", msg: "no such member in this society", rows: unknown}
 	case len(has) > 0:
-		return nil, &batchRefused{code: "member_already_has_balance", msg: "these members already carry an opening balance", rows: has}
+		return nil, nil, &batchRefused{code: "member_already_has_balance", msg: "these members already carry an opening balance", rows: has}
 	}
-	return amounts, nil
+	return amounts, ids, nil
 }
 
 func digitsOnly(s string) bool {

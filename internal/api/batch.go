@@ -31,9 +31,11 @@ import (
 
 var batchNotFound = PostLedgerBatch404JSONResponse{Code: "not_found", Message: "no such society"}
 
-// The one post that imports (frontend permissions.ts: import_members). The
-// console is a surface, not a role: whoever operates it does what their post allows.
-const importerPost, importerLabel = "secretary", "Secretary"
+// The one post that posts opening balances: the TREASURER (2026-11-10, the
+// reviewer: "the treasurer confirms every figure before it commits"; their
+// step-up is the commit). Members themselves are the secretary's
+// (registerMembers). The console is a surface, not a role.
+const importerPost, importerLabel = "treasurer", "Treasurer"
 
 type batchRefusal struct {
 	status int // 400 or 422
@@ -65,7 +67,7 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 	}
 	if !importer {
 		if officer { // an officer here already knows the society exists
-			return PostLedgerBatch403JSONResponse{Code: "not_permitted", Message: "importing opening balances is the secretary's"}, nil
+			return PostLedgerBatch403JSONResponse{Code: "not_permitted", Message: "posting opening balances is the treasurer's: they confirm every figure"}, nil
 		}
 		return batchNotFound, nil // byte-identical to a society that does not exist
 	}
@@ -82,7 +84,7 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 			out = rec
 			return err
 		}
-		amounts, total, err := judgeBatch(ctx, x, society, b)
+		amounts, ids, total, err := judgeBatch(ctx, x, society, b)
 		if err != nil {
 			return err
 		}
@@ -127,7 +129,7 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 			// D-01: Dr migration control, Cr the member's savings.
 			if _, err := x.Exec(ctx, `INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id)
 				VALUES ($1, $2, $3, 'principal', NULL), ($1, $4, $5, 'principal', $6)`,
-				entry, migration, amounts[i], savings, -amounts[i], row.MemberId.String()); err != nil {
+				entry, migration, amounts[i], savings, -amounts[i], ids[i]); err != nil {
 				return err
 			}
 		}
@@ -172,14 +174,16 @@ func (s *server) PostLedgerBatch(ctx context.Context, req PostLedgerBatchRequest
 func (r *batchRefusal) response() PostLedgerBatch422JSONResponse {
 	out := PostLedgerBatch422JSONResponse{Code: BatchRefusalCode(r.code), Message: r.msg}
 	out.Rows = []struct {
-		Line     int                `json:"line"`
-		MemberId openapi_types.UUID `json:"memberId"`
+		Line         int                 `json:"line"`
+		MemberId     *openapi_types.UUID `json:"memberId,omitempty"`
+		MemberNumber *string             `json:"memberNumber,omitempty"`
 	}{}
-	for _, row := range r.rows {
+	for _, row := range r.rows { // each row as it was sent
 		out.Rows = append(out.Rows, struct {
-			Line     int                `json:"line"`
-			MemberId openapi_types.UUID `json:"memberId"`
-		}{row.Line, row.MemberId})
+			Line         int                 `json:"line"`
+			MemberId     *openapi_types.UUID `json:"memberId,omitempty"`
+			MemberNumber *string             `json:"memberNumber,omitempty"`
+		}{row.Line, row.MemberId, row.MemberNumber})
 	}
 	return out
 }
@@ -201,9 +205,17 @@ func magnitude(s string) (int64, bool) {
 
 // judgeBatch: every refusal, before anything is written. Inside the
 // transaction and under the society's lock, so what it reads stays true.
-func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) ([]int64, int64, error) {
+func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) ([]int64, []string, int64, error) {
 	if len(b.Rows) == 0 {
-		return nil, 0, &batchRefusal{code: "nothing_to_post", msg: "No row in this batch to post."}
+		return nil, nil, 0, &batchRefusal{code: "nothing_to_post", msg: "No row in this batch to post."}
+	}
+	// Each row names its member ONE way (2026-11-10): an id, or the society's
+	// member number, resolved here, under the batch's lock.
+	for _, row := range b.Rows {
+		byNumber := row.MemberNumber != nil && *row.MemberNumber != ""
+		if (row.MemberId != nil) == byNumber {
+			return nil, nil, 0, &batchRefusal{status: 400, msg: fmt.Sprintf("line %d: name the member by exactly one of memberId or memberNumber", row.Line)}
+		}
 	}
 	amounts := make([]int64, len(b.Rows))
 	var total int64
@@ -213,7 +225,7 @@ func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) (
 		if !ok {
 			// A negative is a member who OWES: a loan, not savings. A migration
 			// must not create debt from a spreadsheet column.
-			return nil, 0, &batchRefusal{status: 400, msg: fmt.Sprintf("line %d: amountKobo must be a non-negative decimal kobo string, got %q", row.Line, row.AmountKobo)}
+			return nil, nil, 0, &batchRefusal{status: 400, msg: fmt.Sprintf("line %d: amountKobo must be a non-negative decimal kobo string, got %q", row.Line, row.AmountKobo)}
 		}
 		if n == 0 { // means nothing; more likely a parsing artifact than an intention
 			zero = append(zero, row)
@@ -222,30 +234,42 @@ func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) (
 		total += n
 	}
 	if len(zero) > 0 {
-		return nil, 0, &batchRefusal{code: "zero_amount", msg: "A ₦0 opening balance posts nothing. Remove the row, or correct its amount.", rows: zero}
+		return nil, nil, 0, &batchRefusal{code: "zero_amount", msg: "A ₦0 opening balance posts nothing. Remove the row, or correct its amount.", rows: zero}
 	}
 	confirmed, ok := magnitude(string(b.ConfirmedTotalKobo))
 	if !ok {
-		return nil, 0, &batchRefusal{status: 400, msg: fmt.Sprintf("confirmedTotalKobo must be a non-negative decimal kobo string, got %q", b.ConfirmedTotalKobo)}
+		return nil, nil, 0, &batchRefusal{status: 400, msg: fmt.Sprintf("confirmedTotalKobo must be a non-negative decimal kobo string, got %q", b.ConfirmedTotalKobo)}
 	}
 	if confirmed != total { // otherwise the secretary confirms one figure and another posts
-		return nil, 0, &batchRefusal{code: "total_mismatch",
+		return nil, nil, 0, &batchRefusal{code: "total_mismatch",
 			msg: fmt.Sprintf("The rows total %d kobo but %d was confirmed. Nothing was posted. Preview the import again.", total, confirmed)}
 	}
 	if b.AsOf != nil {
 		var future bool
 		if err := x.QueryRow(ctx, `SELECT $1::date > auth_today()`, b.AsOf.Time.Format("2006-01-02")).Scan(&future); err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 		if future {
-			return nil, 0, &batchRefusal{code: "as_of_in_future", msg: "The as-at date is after today. Balances cannot be accumulated to a date that has not happened."}
+			return nil, nil, 0, &batchRefusal{code: "as_of_in_future", msg: "The as-at date is after today. Balances cannot be accumulated to a date that has not happened."}
 		}
 	}
 
 	seen := map[string]bool{}
+	ids := make([]string, len(b.Rows))
 	var dup, unknown, has []BatchRow
-	for _, row := range b.Rows {
-		id := row.MemberId.String()
+	for i, row := range b.Rows {
+		var id string
+		if row.MemberId != nil {
+			id = row.MemberId.String()
+		} else if err := x.QueryRow(ctx, `SELECT coalesce((SELECT id::text FROM members WHERE society_id = $1 AND member_number = $2), '')`,
+			society, *row.MemberNumber).Scan(&id); err != nil {
+			return nil, nil, 0, err
+		}
+		if id == "" { // no member of this society has that number
+			unknown = append(unknown, row)
+			continue
+		}
+		ids[i] = id
 		if seen[id] {
 			dup = append(dup, row)
 			continue
@@ -258,7 +282,7 @@ func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) (
 			           WHERE e.kind = 'opening_balance' AND e.reverses_id IS NULL AND l.member_id = $1 AND a.role = 'member_savings'
 			             AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reverses_id = e.id))`,
 			id, society).Scan(&inSociety, &carries); err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 		switch {
 		case !inSociety: // one answer for another society's member and for none at all
@@ -269,14 +293,14 @@ func judgeBatch(ctx context.Context, x pgx.Tx, society string, b *LedgerBatch) (
 	}
 	switch {
 	case len(dup) > 0:
-		return nil, 0, &batchRefusal{code: "duplicate_member", msg: "A member appears more than once in this file. Nothing was posted.", rows: dup}
+		return nil, nil, 0, &batchRefusal{code: "duplicate_member", msg: "A member appears more than once in this file. Nothing was posted.", rows: dup}
 	case len(unknown) > 0:
-		return nil, 0, &batchRefusal{code: "unknown_member", msg: "No such member in this society. Nothing was posted.", rows: unknown}
+		return nil, nil, 0, &batchRefusal{code: "unknown_member", msg: "No such member in this society. Nothing was posted.", rows: unknown}
 	case len(has) > 0:
-		return nil, 0, &batchRefusal{code: "member_already_has_balance",
+		return nil, nil, 0, &batchRefusal{code: "member_already_has_balance",
 			msg: "These members already carry an opening balance. Nothing was posted: skipping them would be a partial migration.", rows: has}
 	}
-	return amounts, total, nil
+	return amounts, ids, total, nil
 }
 
 // batchAccounts: by ROLE (0004), and exactly one of each. Guessing which of

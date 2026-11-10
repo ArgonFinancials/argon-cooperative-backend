@@ -46,7 +46,7 @@ type bworld struct {
 	srv                  *httptest.Server
 	s                    *soc
 	migration            string
-	secretary, secMember string
+	importer, impMember string // the TREASURER: posts opening balances (2026-11-10)
 	members              []string
 }
 
@@ -66,9 +66,9 @@ func newBatchWorld(t *testing.T, n int, opts ...worldOpt) *bworld {
 		var id string
 		fixture(t, db.QueryRow(bg(), accountInsert("2010", "Target savings", "liability", "member_savings"), w.s.id).Scan(&id), "second savings account")
 	}
-	fixture(t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Secretary') RETURNING id`).Scan(&w.secretary), "secretary user")
-	w.secMember = w.s.member(w.secretary)
-	fixture(t, w.s.appoint(w.secMember, "secretary", true, "2020-01-01", ""), "secretary appointment")
+	fixture(t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Treasurer') RETURNING id`).Scan(&w.importer), "treasurer user")
+	w.impMember = w.s.member(w.importer)
+	fixture(t, w.s.appoint(w.impMember, "treasurer", true, "2020-01-01", ""), "treasurer appointment")
 	for i := 0; i < n; i++ {
 		w.members = append(w.members, w.s.member(""))
 	}
@@ -129,7 +129,7 @@ func schemaHasProofKinds() bool {
 	return proofHasKind
 }
 
-func (w *bworld) proof(t *testing.T) *string { p := mintProof(t, w.secretary); return &p }
+func (w *bworld) proof(t *testing.T) *string { p := mintProof(t, w.importer); return &p }
 
 // file builds the import of members[i] with amounts[i], file rows from 2 (row
 // 1 is the header), confirming the true total.
@@ -182,13 +182,13 @@ func postBatch(t *testing.T, c *http.Client, srv *httptest.Server, society, key,
 	return resp{r.StatusCode, buf.Bytes()}, nil
 }
 
-// post: as the secretary, with a fresh proof unless the body carries one.
+// post: as the treasurer, with a fresh proof unless the body carries one.
 func (w *bworld) post(t *testing.T, key string, body bBody) resp {
 	t.Helper()
 	if body.PinProofId == nil {
 		body.PinProofId = w.proof(t)
 	}
-	r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, w.secretary), body)
+	r, err := postBatch(t, http.DefaultClient, w.srv, w.s.id, key, signIn(t, w.importer), body)
 	fixture(t, err, "POST batch")
 	return r
 }
@@ -429,8 +429,8 @@ func TestApiBatch01_CommitsEachRowAsABalancedOpeningBalance(t *testing.T) {
 	var total int64
 	fixture(t, db.QueryRow(bg(), `SELECT id::text, actor_user_id::text, row_count, total_kobo FROM ledger_batches
 		WHERE society_id = $1 AND reference = $2`, w.s.id, key).Scan(&batch, &actor, &rows, &total), "the batch row")
-	if actor != w.secretary || rows != 3 || total != 6050099 {
-		t.Fatalf("WRONG BATCH — actor %s, rows %d, total %d; want the secretary, 3, 6050099", actor, rows, total)
+	if actor != w.importer || rows != 3 || total != 6050099 {
+		t.Fatalf("WRONG BATCH — actor %s, rows %d, total %d; want the treasurer, 3, 6050099", actor, rows, total)
 	}
 	for i, m := range w.members {
 		var (
@@ -461,8 +461,8 @@ func TestApiBatch01_CommitsEachRowAsABalancedOpeningBalance(t *testing.T) {
 		case n != 2 || mig != amounts[i] || sav != -amounts[i] || savMember == nil || *savMember != m:
 			t.Fatalf("WRONG ENTRY — row %d: %d lines, migration control %d, member savings %d (member %s); want 2 lines, Dr %d migration control, Cr %d to THIS member's savings (D-01)",
 				i+2, n, mig, sav, str(savMember), amounts[i], amounts[i])
-		case eActor != w.secretary || post == nil || *post != "secretary" || label != "Secretary":
-			t.Fatalf("UNATTRIBUTED — row %d: actor %s, post %s, label %q; want the secretary, snapshotted (§4)", i+2, eActor, str(post), label)
+		case eActor != w.importer || post == nil || *post != "treasurer" || label != "Treasurer":
+			t.Fatalf("UNATTRIBUTED — row %d: actor %s, post %s, label %q; want the treasurer, snapshotted (§4)", i+2, eActor, str(post), label)
 		case valueDate == nil || *valueDate != "2025-12-31":
 			t.Fatalf("WRONG DATE — row %d carries value date %s; want the society's as-at date 2025-12-31", i+2, str(valueDate))
 		case src == nil || *src != i+2:
@@ -587,7 +587,7 @@ func TestApiBatch07_RetryRacingTheOriginalPostsOnce(t *testing.T) {
 	f := inject(t, w.s.id, w.members[2], stall)
 	key, body := newKey(), file("2025-12-31", w.members, 10, 20, 30)
 	body.PinProofId = w.proof(t)
-	tokA, tokB := signIn(t, w.secretary), signIn(t, w.secretary)
+	tokA, tokB := signIn(t, w.importer), signIn(t, w.importer)
 	before := stateOf(t, w.s.id)
 	call := func(tok string) func() resp {
 		return func() resp {
@@ -635,7 +635,7 @@ func TestApiBatch08_ClientTimeoutThenRetryPostsExactlyOnce(t *testing.T) {
 	// fixed time, which a slow moment could spend before the write began.
 	ctx, giveUp := context.WithCancel(bg())
 	go func() { f.whenStalled(); giveUp() }()
-	if r, err := postBatch(t, &http.Client{}, w.srv, w.s.id, key, signIn(t, w.secretary), body, ctx); err == nil {
+	if r, err := postBatch(t, &http.Client{}, w.srv, w.s.id, key, signIn(t, w.importer), body, ctx); err == nil {
 		t.Fatalf("FIXTURE: the client was meant to give up mid-call; it got %d: %s", r.status, r.body)
 	}
 	giveUp()
@@ -668,7 +668,7 @@ func TestApiBatch09_TwoImportsNamingOneMemberCannotBothPost(t *testing.T) {
 	w := newBatchWorld(t, 3)
 	shared := w.members[1]
 	f := inject(t, w.s.id, shared, stall)
-	tokA, tokB := signIn(t, w.secretary), signIn(t, w.secretary)
+	tokA, tokB := signIn(t, w.importer), signIn(t, w.importer)
 	fileA := file("2025-12-31", w.members[0:2], 10, 20)
 	fileB := file("2025-12-31", w.members[1:3], 30, 40)
 	fileA.PinProofId, fileB.PinProofId = w.proof(t), w.proof(t)
@@ -709,7 +709,7 @@ func TestApiBatch09_TwoImportsNamingOneMemberCannotBothPost(t *testing.T) {
 // postOpening posts an opening balance directly, as an earlier import would have.
 func (w *bworld) postOpening(t *testing.T, member string, kobo int64) string {
 	t.Helper()
-	id, err := w.s.postEntry(entry{kind: "opening_balance", unknownDate: true, actor: w.secretary},
+	id, err := w.s.postEntry(entry{kind: "opening_balance", unknownDate: true, actor: w.importer},
 		line{acct: w.migration, kobo: kobo}, line{acct: w.s.savings, kobo: -kobo, member: member})
 	fixture(t, err, "an earlier opening balance")
 	return id
@@ -731,15 +731,15 @@ func TestApiBatch11_ReversedOpeningBalanceDoesNotBlockAReimport(t *testing.T) {
 	w := newBatchWorld(t, 1)
 	m := w.members[0]
 	orig := w.postOpening(t, m, 50000)
-	_, err := w.s.postEntry(entry{kind: "opening_balance", unknownDate: true, actor: w.secretary, reverses: orig, reason: "Imported against the wrong member"},
+	_, err := w.s.postEntry(entry{kind: "opening_balance", unknownDate: true, actor: w.importer, reverses: orig, reason: "Imported against the wrong member"},
 		line{acct: w.s.savings, kobo: 50000, member: m}, line{acct: w.migration, kobo: -50000})
 	fixture(t, err, "the reversal")
 	record(t, w.post(t, newKey(), file("2025-12-31", w.members, 45000)), http.StatusCreated)
 }
 
 // A wrong total on a FIRST call: refused, nothing written. confirmedTotalKobo
-// is the figure the secretary typed against the per-branch subtotals; if the
-// server accepted one that disagrees with the rows, the secretary would
+// is the figure the treasurer typed against the per-branch subtotals; if the
+// server accepted one that disagrees with the rows, the treasurer would
 // confirm one figure and another would post. Then the refusal must not have
 // claimed the key: the corrected retry, same file, same key, commits (201).
 func TestApiBatch12_TotalMismatchRefusesAndDoesNotClaimTheReference(t *testing.T) {
@@ -862,10 +862,11 @@ func TestApiBatch18_AsOfInAClosedPeriodIsRefused(t *testing.T) {
 // WHO MAY POST
 // =============================================================================
 
-// The secretary imports (permissions.ts: import_members). Not the treasurer,
-// not the read-only auditor; to anyone without a current post here, the
-// society does not exist.
-func TestApiBatch19_OnlyTheSecretaryImports(t *testing.T) {
+// The TREASURER posts opening balances (2026-11-10: "the treasurer confirms
+// every figure before it commits"; their step-up is the commit). Not the
+// secretary (who registers the members), not the read-only auditor; to
+// anyone without a current post here, the society does not exist.
+func TestApiBatch19_OnlyTheTreasurerPostsOpeningBalances(t *testing.T) {
 	w := newBatchWorld(t, 1)
 	key, body := newKey(), file("2025-12-31", w.members, 10)
 	elsewhere := newBatchWorld(t, 0)
@@ -873,11 +874,11 @@ func TestApiBatch19_OnlyTheSecretaryImports(t *testing.T) {
 		who, user string
 		status    int
 	}{
-		{"the treasurer", w.person(t, "treasurer", "2020-01-01", ""), http.StatusForbidden},
+		{"the secretary", w.person(t, "secretary", "2020-01-01", ""), http.StatusForbidden},
 		{"the internal auditor", w.person(t, "internal_auditor", "2020-01-01", ""), http.StatusForbidden},
 		{"a member with no post", w.person(t, "", "", ""), http.StatusNotFound},
-		{"a former secretary", w.person(t, "secretary", "2019-01-01", "2019-12-31"), http.StatusNotFound},
-		{"another society's secretary", elsewhere.secretary, http.StatusNotFound},
+		{"a former treasurer", w.person(t, "treasurer", "2019-01-01", "2019-12-31"), http.StatusNotFound},
+		{"another society's treasurer", elsewhere.importer, http.StatusNotFound},
 	}
 	before := stateOf(t, w.s.id)
 	var notFound []byte
@@ -905,19 +906,19 @@ func TestApiBatch19_OnlyTheSecretaryImports(t *testing.T) {
 			notFound = r.body
 		}
 	}
-	r, err := postBatch(t, http.DefaultClient, w.srv, noSuchRow, key, signIn(t, w.secretary), body)
+	r, err := postBatch(t, http.DefaultClient, w.srv, noSuchRow, key, signIn(t, w.importer), body)
 	fixture(t, err, "POST to a nonexistent society")
 	if r.status != http.StatusNotFound || !bytes.Equal(r.body, notFound) {
 		t.Fatalf("DISCLOSED — a society that does not exist answers %d %s; one the caller holds no post in answers %s",
 			r.status, r.body, notFound)
 	}
 	nothingWritten(t, w.s.id, before, "no one entitled had posted")
-	record(t, w.post(t, key, body), http.StatusCreated) // control: the same call, by the secretary
+	record(t, w.post(t, key, body), http.StatusCreated) // control: the same call, by the treasurer
 }
 
 func TestApiBatch20_NoValidSessionGetsUnauthorized(t *testing.T) {
 	w := newBatchWorld(t, 1)
-	tok := signIn(t, w.secretary)
+	tok := signIn(t, w.importer)
 	fixture(t, one(`UPDATE auth_sessions SET ended_at = auth_now(), ended_by_session = id WHERE token_digest = $1`, auth.TokenDigest(tok)), "end session")
 	before := stateOf(t, w.s.id)
 	for what, token := range map[string]string{"no token": "", "an invented token": "not-a-session", "an ended session": tok} {

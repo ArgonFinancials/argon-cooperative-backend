@@ -246,9 +246,9 @@ END $$;
 -- (relinking) stays. A register batch is recorded by the app, never its time.
 DO $$
 BEGIN
-  IF to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid)') IS NOT NULL THEN
+  IF to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid,integer)') IS NOT NULL THEN
     REVOKE INSERT ON members FROM argon_app;
-    GRANT EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID) TO argon_app;
+    GRANT EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID, INT) TO argon_app;
     GRANT SELECT ON member_register_batches TO argon_app;
     GRANT INSERT (id, society_id, reference, act_id, row_count) ON member_register_batches TO argon_app;
   END IF;
