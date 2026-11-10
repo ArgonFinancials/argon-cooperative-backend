@@ -1603,7 +1603,7 @@ paths:
   /societies/{societyId}/members:
     get:
       operationId: findMembers
-      x-argon-built: false
+      x-argon-built: true
       summary: Find a society's members, for an officer (the register; the issuing screen)
       description: |
         Officers of the society only (a current post, the auditor included:
@@ -1630,7 +1630,7 @@ paths:
         '404': { description: "No such society, or one the caller holds no current post in.", content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     post:
       operationId: registerMember
-      x-argon-built: false
+      x-argon-built: true
       summary: The secretary adds one member (whoever joins next month)
       description: |
         The society's secretary (a current post), on their own step-up
@@ -1657,7 +1657,7 @@ paths:
   /societies/{societyId}/members/batches:
     post:
       operationId: registerMembers
-      x-argon-built: false
+      x-argon-built: true
       summary: The register import — a society's members, in ONE transaction
       description: |
         A real society arrives with its register in a ledger book or a
@@ -1701,7 +1701,7 @@ paths:
   /societies/{societyId}/branches:
     get:
       operationId: listBranches
-      x-argon-built: false
+      x-argon-built: true
       summary: The society's branches, so an import's preview catches an unknown branch before any PIN
       security: [{ session: [] }]
       parameters:

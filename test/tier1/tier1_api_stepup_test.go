@@ -222,9 +222,9 @@ func TestApiStepUp09_StaleProofIsRefused(t *testing.T) {
 
 func TestApiStepUp10_AnotherPersonsProofIsRefused(t *testing.T) {
 	w := stepWorld(t, 1)
-	theirs := mintProof(t, w.person(t, "treasurer", "2020-01-01", ""))
+	theirs := mintProof(t, w.person(t, "secretary", "2020-01-01", ""))
 	before := stateOf(t, w.s.id)
-	stepRefused(t, w.withProof(t, newKey(), file("2025-12-31", w.members, 10), &theirs), "the treasurer's proof on the secretary's import")
+	stepRefused(t, w.withProof(t, newKey(), file("2025-12-31", w.members, 10), &theirs), "the secretary's proof on the treasurer's import")
 	nothingWritten(t, w.s.id, before, "the proof was someone else's")
 }
 

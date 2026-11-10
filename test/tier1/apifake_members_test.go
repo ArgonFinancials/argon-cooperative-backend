@@ -60,8 +60,8 @@ func (f *fakeAPI) summary(ctx context.Context, q querier, member string) (api.Me
 	var joined time.Time
 	err := q.QueryRow(ctx, `SELECT m.id::text, m.member_number, m.full_name, m.phone, b.code, m.status::text, m.joined_on,
 		  EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = m.user_id),
-		  EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id),
-		  CASE WHEN EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id) THEN 'enrolled'
+		  EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id AND d.revoked_at IS NULL),
+		  CASE WHEN EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id AND d.revoked_at IS NULL) THEN 'enrolled'
 		       WHEN EXISTS (SELECT 1 FROM enrolment_codes c WHERE c.member_id = m.id AND c.used_at IS NULL AND c.voided_at IS NULL AND c.expires_at > now() AND c.code_digest IS NOT NULL) THEN 'code_live'
 		       WHEN EXISTS (SELECT 1 FROM enrolment_codes c WHERE c.member_id = m.id AND c.used_at IS NULL AND c.voided_at IS NULL AND c.expires_at > now() AND c.code_digest IS NULL) THEN 'code_pending'
 		       ELSE 'none' END,

@@ -614,6 +614,7 @@ probe req P69 argon_app '42501.*permission denied for function enrolment_slip_us
 fi
 # 0031: a member is added only through register_member, on the secretary's act.
 if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('register_member(uuid,text,text,text,text,date,collection_channel,text,text,text,uuid,uuid,integer)') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P71 argon_app '42501.*permission denied for table auth_credentials' "app reads a PIN hash (it may know only that one exists)"   "SELECT pin_hash FROM auth_credentials LIMIT 1;"
 probe req P70 argon_app '42501.*permission denied for table members' "app adds a member directly, around the secretary's act"   "INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on) VALUES ($S, $B, 'APP-1', 'App', '+2348000000009', 'cash', $TODAY);"
 fi
 # 0027: appointing a founding officer is the operator's function alone.

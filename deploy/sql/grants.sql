@@ -250,6 +250,9 @@ BEGIN
     REVOKE INSERT ON members FROM argon_app;
     GRANT EXECUTE ON FUNCTION register_member(UUID, TEXT, TEXT, TEXT, TEXT, DATE, collection_channel, TEXT, TEXT, TEXT, UUID, UUID, INT) TO argon_app;
     GRANT SELECT ON member_register_batches TO argon_app;
+    -- Whether a member HAS a PIN (the register's hasPin), never the hash
+    -- (P71): user_id only.
+    GRANT SELECT (user_id) ON auth_credentials TO argon_app;
     GRANT INSERT (id, society_id, reference, act_id, row_count) ON member_register_batches TO argon_app;
   END IF;
 END $$;
