@@ -36,6 +36,18 @@ for attempt in 1 2; do
   fi
   if ((rc == 124)); then why="cut off after ${ATTEMPT_SECONDS}s"; else why="apt failed, exit $rc"; fi
   echo "attempt $attempt did not finish ($why); apt's own output is above"
+  # A cut-off attempt leaves its apt-get running: timeout ends the bash
+  # wrapper, not the sudo apt-get under it, which keeps the lock. On
+  # 2026-11-10 the second attempt died in a second on that lock ("Could not
+  # get lock ... held by process 3473 (apt-get)"), so the retry never retried.
+  # A CI runner is thrown away after the job: end what is left, repair dpkg,
+  # and only then try again.
+  if ((attempt == 1)); then
+    as_root pkill -9 -x apt-get 2>/dev/null; as_root pkill -9 -f apt.postgresql.org.sh 2>/dev/null; as_root pkill -9 -x dpkg 2>/dev/null
+    sleep 2
+    as_root dpkg --configure -a >/dev/null 2>&1 || true
+    echo "cleared what attempt 1 left running (it held apt's lock)"
+  fi
 done
 
 msg="CI SETUP FAILED, NOT A TEST: the package mirror did not answer while installing the PostgreSQL 18 client (apt-get stalled or timed out, twice). No suite ran and nothing was tested. Re-run the job; if it persists, the runner's Ubuntu or PGDG mirror is down."

@@ -152,6 +152,11 @@ jobs:
           [[ $rc == 1 ]] || { echo "::error::the install did not fail against a mirror that never answers (exit $rc)"; exit 1; }
           grep -q "CI SETUP FAILED, NOT A TEST" out.log || { echo "::error::the failure did not say it was CI setup, not a test"; exit 1; }
           (( took < 240 )) || { echo "::error::it took ${took}s to fail: the cut-off did not fire"; exit 1; }
+          # The retry really retries (2026-11-10): attempt 1's apt-get, left
+          # running by the cut-off, held the lock and attempt 2 died on it in a
+          # second. Attempt 2 must be cut off by the clock too, never the lock.
+          ! grep -q "Could not get lock" out.log || { echo "::error::attempt 2 died on attempt 1's apt lock: the retry did not retry"; exit 1; }
+          grep -q "attempt 2 did not finish (cut off" out.log || { echo "::error::attempt 2 was not a real second attempt"; exit 1; }
           echo "fired as designed: failed in ${took}s, saying it was CI setup, not a test"
 
   # Every suite runs here, or this fails (finding 52): the matrix above is a
