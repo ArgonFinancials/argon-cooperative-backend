@@ -440,6 +440,12 @@ func TestRedeem15_TheHalvesTypedAnyWayRedeem(t *testing.T) {
 	s.s.signatory(treas, "treasurer")
 	h1, d1 := s.svc.NewEnrolmentHalf()
 	h2, d2 := s.svc.NewEnrolmentHalf()
+	// Typed second-half-first, the typed order must differ from the sorted
+	// one, or an assembly in typed order passes by chance (it did, in CI, on
+	// 2026-11-10; TestHalves06 had the same flaw): half two's digest sorts last.
+	if d2 < d1 {
+		h1, d1, h2, d2 = h2, d2, h1, d1
+	}
 	w := &hworld{eworld: &eworld{s: s.s}, target: e.user, targetMem: e.member}
 	id, err := w.firstHalf(t, chair, d1)
 	fixture(t, err, "the chairman's half")
