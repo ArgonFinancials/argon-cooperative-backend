@@ -166,8 +166,9 @@ jobs:
   ci-setup-selftest:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    env:
-      DEBS: ${{ runner.temp }}/pg-client-debs
+    # (No job-level env naming runner.temp: the runner context does not exist
+    # there, and GitHub rejected the whole workflow for it, 2026-11-10. The
+    # steps name the directory from $RUNNER_TEMP themselves.)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Month (the cache key turns over with it)
@@ -180,6 +181,7 @@ jobs:
       - name: Fill the cache while the mirror answers
         timeout-minutes: 10
         run: |
+          DEBS="$RUNNER_TEMP/pg-client-debs"
           CI_PG_DEB_CACHE="$DEBS" bash scripts/ci-pg-client.sh
           n=$(ls "$DEBS"/*.deb 2>/dev/null | wc -l)
           echo "the cache holds $n packages"; ls "$DEBS"
@@ -188,7 +190,7 @@ jobs:
           sudo dpkg --purge postgresql-client-18
           [[ ! -e /usr/lib/postgresql/18/bin/psql ]] || { echo "::error::psql 18 is still there after the purge"; exit 1; }
       - name: The checks, then every cache rule sabotaged
-        run: CI_PG_DEB_CACHE="$DEBS" bash scripts/ci-pg-client-selftest.sh
+        run: CI_PG_DEB_CACHE="$RUNNER_TEMP/pg-client-debs" bash scripts/ci-pg-client-selftest.sh
 
   # Every suite runs here, or this fails (finding 52): the matrix above is a
   # list written by hand, and balance_api reached main without ever running.

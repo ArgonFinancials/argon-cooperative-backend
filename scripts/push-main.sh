@@ -22,6 +22,13 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 bash scripts/check-suite-list.sh || { echo "REFUSED: a suite would not run in CI or in mutate.sh (above)" >&2; exit 1; }
+# The workflow itself must be valid (2026-11-10): GitHub rejected deploy.yml
+# for a job-level env naming runner.temp, so NO job ran, the suites included,
+# and the push was "CI failed" with nothing to read. A lint job in CI cannot
+# catch it: a rejected workflow runs no jobs. So it is checked here, before.
+AL=$(command -v actionlint || echo "$(go env GOPATH 2>/dev/null)/bin/actionlint")
+[[ -x $AL || -x $AL.exe ]] || { echo "REFUSED: actionlint is not installed: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7" >&2; exit 1; }
+"$AL" .github/workflows/*.yml || { echo "REFUSED: the workflow is not valid (above): GitHub would run no job at all" >&2; exit 1; }
 
 dirty=$(git status --porcelain)
 if [[ -n $dirty ]]; then
