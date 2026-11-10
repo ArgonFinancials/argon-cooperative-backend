@@ -37,7 +37,7 @@ if [[ $TARGET == local ]]; then
     [[ $tv =~ ([0-9]+) ]] && tv=${BASH_REMATCH[1]} || tv=""
     [[ $tv == "${v:0:2}" ]] || flag "$tool on PATH is major ${tv:-missing}; the server is ${v:0:2}"
   done
-  ours="'argon_owner','argon_migrator','argon_app','argon_backup','argon_auth'"
+  ours="'argon_owner','argon_migrator','argon_app','argon_backup','argon_auth','argon_wallet'"
   mine=$(q "SELECT string_agg(rolname, ', ' ORDER BY rolname) FROM pg_roles WHERE rolname IN ($ours)")
   others=$(q "SELECT string_agg(rolname, ', ' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'argon\_%' AND rolname NOT IN ($ours)")
   [[ -z $mine ]] && info "none of the five argon roles exist yet" || info "argon roles already present: $mine (20-roles.sh is idempotent and resets THESE passwords from $ARGON_ENV)"

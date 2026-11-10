@@ -13,6 +13,11 @@
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM argon_app;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM argon_auth;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+    REVOKE ALL ON ALL TABLES IN SCHEMA public FROM argon_wallet;
+  END IF;
+END $$;
 
 -- Append-only.
 GRANT SELECT ON
@@ -181,6 +186,31 @@ BEGIN
       GRANT INSERT (first_half_digest) ON enrolment_codes TO argon_app;
       GRANT UPDATE (second_half_digest, second_by_act) ON enrolment_codes TO argon_app;
       GRANT SELECT (second_by_act, pending) ON enrolment_codes TO argon_app;
+    END IF;
+  END IF;
+END $$;
+
+-- 0028: THE WALLET. Only argon_wallet (the wallet worker) writes what VFD
+-- said: accounts, transfers, VFD's answers and their outcomes. The database
+-- cannot know what VFD said, so whoever can write "paid" can debit a member
+-- for money that never left, and an account number decides where money goes.
+-- Never the server's times (recorded_at, created_at, at): no role sets them.
+-- The app READS the wallet (a request's payment, the exceptions), and its
+-- entry and release INSERT lists above do not carry vfd_outcome_id: the
+-- system's records are written only by the outcome's own trigger (P60–P62).
+DO $$
+BEGIN
+  IF to_regclass('public.vfd_accounts') IS NOT NULL THEN
+    GRANT SELECT ON vfd_accounts, vfd_transfers, vfd_transfer_events, vfd_transfer_outcomes TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT SELECT ON vfd_accounts, vfd_transfers, vfd_transfer_events, vfd_transfer_outcomes,
+                      withdrawal_holds, withdrawal_hold_releases TO argon_wallet;
+      GRANT SELECT (id, kind) ON credential_acts TO argon_wallet;
+      GRANT SELECT (id, hold_id) ON ledger_entries TO argon_wallet;
+      GRANT INSERT (id, society_id, member_id, account_number, vfd_client_id, vfd_account_id, account_name, how) ON vfd_accounts TO argon_wallet;
+      GRANT INSERT (id, hold_id, reference, from_account, to_account, amount_kobo) ON vfd_transfers TO argon_wallet;
+      GRANT INSERT (id, transfer_id, kind, result, code, txn_status, txn_id, session_id, amount_kobo, vfd_time) ON vfd_transfer_events TO argon_wallet;
+      GRANT INSERT (id, transfer_id, result, evidence_id) ON vfd_transfer_outcomes TO argon_wallet;
     END IF;
   END IF;
 END $$;

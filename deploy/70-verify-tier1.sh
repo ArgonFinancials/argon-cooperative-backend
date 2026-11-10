@@ -38,6 +38,13 @@ if [[ -z $db ]]; then
   apply_grants "$db"
 fi
 
+# THE PROBE'S DATE, pinned once from the server (finding 70): every row the
+# probe writes is dated with it. A run that crossed midnight wrote related rows
+# on two dates in separate statements, and P34 and G6 failed for it, once.
+TODAY_D=$(pg_as argon_app "$db" -At -c "SELECT current_date" </dev/null | tr -d '\r')
+[[ $TODAY_D =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "could not read the server's date for the probe"
+TODAY="'$TODAY_D'::date"
+
 # ---- fixtures (as argon_app, one transaction) --------------------------------
 U() { printf "'a0000000-0000-4000-8000-%012d'" "$1"; }
 S=$(U 1) B=$(U 2) M1=$(U 11) M2=$(U 12) M3=$(U 13) A1=$(U 21) A2=$(U 22)
@@ -375,11 +382,11 @@ probe req P30 argon_app '42501.*permission denied for table societies' "app lowe
 probe ctl K26 argon_app '' "control: app corrects its society's registered name (a descriptive field)" \
   "UPDATE societies SET registered_name = 'Probe Cooperative Society' WHERE id = $S;"
 probe req P31 argon_app '23514.*rests on its poster' "app records a contribution with no step-up behind it" \
-  "BEGIN; INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label$CR_COL) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer'$(cref P31));
+  "BEGIN; INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label$CR_COL) VALUES ($E2, $S, 'contribution_in', $TODAY, $U1, 'treasurer', 'Treasurer'$(cref P31));
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
 probe ctl K25 argon_app '' "control: app records a ₦10,000 contribution on the poster's own step-up" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA6, 'contribution_record', $U1, $SP6);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id$CR_COL) VALUES ($E2, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA6$(cref K25));
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id$CR_COL) VALUES ($E2, $S, 'contribution_in', $TODAY, $U1, 'treasurer', 'Treasurer', $SA6$(cref K25));
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E2, $A1, 1000000, NULL), ($E2, $A2, -1000000, $M2); COMMIT;"
 if [[ $has_holds == 1 ]]; then
 # 0012: authorise (hold) before the money moves; then record whatever happened.
@@ -394,13 +401,13 @@ if [[ $has_benefit == 1 ]]; then
 probe req P44 argon_app '23514.*releaser_not_beneficiary' "app releases a hold as the member it pays (frees their own withdrawable)"   "INSERT INTO withdrawal_hold_releases (hold_id, actor_user_id, reason) VALUES ($H1, $U2, 'probe: released by its own beneficiary');"
 fi
 probe ctl K27 argon_app '' "control: app records the held ₦5,000 payout, ₦10.75 on top, on its own step-up"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, $H1, 'NIP-PROBE-1');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', $TODAY, $U1, 'treasurer', 'Treasurer', $SA9, $R3, $H1, 'NIP-PROBE-1');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
      ($E3, $A2, 501075, 'principal', $M2), ($E3, $A1, -500000, 'principal', NULL), ($E3, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E3, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
 probe req P32 argon_app '23505.*payout_recorded_once' "app records the same bank transfer a second time"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, $H1, 'NIP-PROBE-1'); COMMIT;"
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', $TODAY, $U1, 'treasurer', 'Treasurer', $SA10, $R3, $H1, 'NIP-PROBE-1'); COMMIT;"
 probe ctl K28 argon_app '' "control: a second, different transfer on the same hold is RECORDED (and flagged), not refused"   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA14, 'withdrawal_payout', $U1, $SP14);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E5, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA14, $R3, $H1, 'NIP-PROBE-2');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E5, $S, 'withdrawal_out', $TODAY, $U1, 'treasurer', 'Treasurer', $SA14, $R3, $H1, 'NIP-PROBE-2');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
      ($E5, $A2, 501075, 'principal', $M2), ($E5, $A1, -500000, 'principal', NULL), ($E5, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E5, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
 probe req P34 argon_app 'P0001.*K28-unflagged' "…and the second transfer was flagged for a person (hold_paid_twice)"   "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM ledger_discrepancies WHERE entry_id = $E5 AND kind = 'hold_paid_twice' AND expected <> '' AND observed <> '')
@@ -409,12 +416,12 @@ probe req P35 argon_app '42501.*permission denied for table ledger_discrepancies
 else
 probe ctl K27 argon_app '' "control: app pays out an approved ₦5,000 withdrawal, ₦10.75 on top, on its own step-up" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA9, 'withdrawal_payout', $U1, $SP9);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA9, $R3, 'NIP-PROBE-1');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E3, $S, 'withdrawal_out', $TODAY, $U1, 'treasurer', 'Treasurer', $SA9, $R3, 'NIP-PROBE-1');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
      ($E3, $A2, 501075, 'principal', $M2), ($E3, $A1, -500000, 'principal', NULL), ($E3, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E3, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
 probe req P32 argon_app '23505.*withdrawal_posted_once' "app pays the same approved request a second time" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA10, 'withdrawal_payout', $U1, $SP10);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', current_date, $U1, 'treasurer', 'Treasurer', $SA10, $R3, 'NIP-PROBE-2'); COMMIT;"
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, payout_reference) VALUES ($E4, $S, 'withdrawal_out', $TODAY, $U1, 'treasurer', 'Treasurer', $SA10, $R3, 'NIP-PROBE-2'); COMMIT;"
 fi
 fi
 
@@ -425,19 +432,19 @@ fi
 if [[ $has_benefit == 1 ]]; then
 probe req P40 argon_app '23514.*contribution_not_recorded_by_beneficiary' "app records money into the recorder's own savings" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA15, 'contribution_record', $U1, $SP15);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E6, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA15, 'PROBE-P40');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E6, $S, 'contribution_in', $TODAY, $U1, 'treasurer', 'Treasurer', $SA15, 'PROBE-P40');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E6, $A1, 100000, NULL), ($E6, $A2, -100000, $M1); COMMIT;"
 probe req P42 argon_app '23514.*contribution_names_client_reference' "app records a contribution with no client reference" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA17, 'contribution_record', $U1, $SP17);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E7, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA17);
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id) VALUES ($E7, $S, 'contribution_in', $TODAY, $U1, 'treasurer', 'Treasurer', $SA17);
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E7, $A1, 100000, NULL), ($E7, $A2, -100000, $M2); COMMIT;"
 probe req P43 argon_app '23505.*contribution_recorded_once' "app records a contribution under a client reference already used (a retry)" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA18, 'contribution_record', $U1, $SP18);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E8, $S, 'contribution_in', current_date, $U1, 'treasurer', 'Treasurer', $SA18, 'PROBE-K25');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, client_reference) VALUES ($E8, $S, 'contribution_in', $TODAY, $U1, 'treasurer', 'Treasurer', $SA18, 'PROBE-K25');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, member_id) VALUES ($E8, $A1, 100000, NULL), ($E8, $A2, -100000, $M2); COMMIT;"
 probe req P41 argon_app '23514.*authoriser_never_records' "app records a payout on the hold its recorder authorised" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SA16, 'withdrawal_payout', $U3, $SP16);
-   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E9, $S, 'withdrawal_out', current_date, $U3, 'chairman', 'Chairman', $SA16, $R3, $H1, 'NIP-PROBE-P41');
+   INSERT INTO ledger_entries (id, society_id, kind, value_date, actor_user_id, actor_post, actor_post_label, act_id, request_id, hold_id, payout_reference) VALUES ($E9, $S, 'withdrawal_out', $TODAY, $U3, 'chairman', 'Chairman', $SA16, $R3, $H1, 'NIP-PROBE-P41');
    INSERT INTO ledger_lines (entry_id, account_id, amount_kobo, charge_role, member_id) VALUES
      ($E9, $A2, 501075, 'principal', $M2), ($E9, $A1, -500000, 'principal', NULL), ($E9, $FEE_ACCT, -1000, '$FEE_ROLE', NULL), ($E9, $A4, -75, '$VAT_ROLE', NULL); COMMIT;"
 else
@@ -463,7 +470,7 @@ probe req P47 argon_app '23514.*request_cannot_reach_quorum' "app raises, as the
      VALUES ($S, 'APR-PROBE-P47', $M2, 'withdrawal_out', 100000, 2, now() + interval '1 day', $U1, $SAW6); COMMIT;" \
   '1 signatories may sign it.*needs 2.*Appoint another signatory'
 probe req P48 argon_app '42501.*permission denied for function operator_set_withdrawal_request_days' "app sets its society's request window through the operator's function" \
-  "SELECT operator_set_withdrawal_request_days($S, 30, 'app', 'app', 'none', current_date, 'app');"
+  "SELECT operator_set_withdrawal_request_days($S, 30, 'app', 'app', 'none', $TODAY, 'app');"
 probe ctl K45 argon_app '' "control: app raises M2's own ₦1,000 request on M2's own step-up (the server sets its expiry)" \
   "BEGIN; $(raised_sql "$RK45" APR-PROBE-K45 100000 "$SPW4" "$SAW4") COMMIT;"
 else
@@ -476,8 +483,8 @@ fi
 # keeps the SERVER's quote, whatever the app sends (₦10.75 on ₦1,000, today).
 if [[ $has_quotes == 1 ]]; then
 probe ctl K46 argon_app '' "control: app asks the largest request from ₦10,000 and gets ₦9,989.25 exactly" \
-  "DO \$\$ BEGIN IF largest_withdrawal($S, 'withdrawal_out', 1000000, current_date) IS DISTINCT FROM 998925 THEN
-     RAISE EXCEPTION 'K46: largest_withdrawal(1000000) answered %, want 998925', largest_withdrawal($S, 'withdrawal_out', 1000000, current_date); END IF; END \$\$;"
+  "DO \$\$ BEGIN IF largest_withdrawal($S, 'withdrawal_out', 1000000, $TODAY) IS DISTINCT FROM 998925 THEN
+     RAISE EXCEPTION 'K46: largest_withdrawal(1000000) answered %, want 998925', largest_withdrawal($S, 'withdrawal_out', 1000000, $TODAY); END IF; END \$\$;"
 probe ctl K47 argon_app '' "control: app raises M2's request sending its own quote; the request keeps the server's" \
   "BEGIN; INSERT INTO credential_acts (id, kind, actor_user_id, proof_id) VALUES ($SAW8, 'withdrawal_request', $U2, $SPW8);
    INSERT INTO approval_requests (id, society_id, reference, member_id, kind, amount_kobo, required, expires_at, raised_by_user_id, act_id,
@@ -498,13 +505,13 @@ fi
 has_operator=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.society_settings_log') IS NOT NULL)::int" </dev/null)
 [[ $has_operator == 1 ]] || info "schema before 0014: no operator functions to probe (P36–P39 not run)"
 if [[ $has_operator == 1 ]]; then
-probe req P36 argon_app '42501.*permission denied for function operator_set_withdrawal_quorum' "app sets its society's withdrawal quorum through the operator's function"   "SELECT operator_set_withdrawal_quorum($S, 2, 'app', 'app', 'none', current_date, 'app');"
-probe req P37 argon_app '42501.*permission denied for function operator_add_charge_series' "app adds a charge series through the operator's function"   "SELECT operator_add_charge_series($S, 'withdrawal_out', 'argon_margin', current_date, 'app', '[]'::jsonb, 'app', 'app', 'app');"
+probe req P36 argon_app '42501.*permission denied for function operator_set_withdrawal_quorum' "app sets its society's withdrawal quorum through the operator's function"   "SELECT operator_set_withdrawal_quorum($S, 2, 'app', 'app', 'none', $TODAY, 'app');"
+probe req P37 argon_app '42501.*permission denied for function operator_add_charge_series' "app adds a charge series through the operator's function"   "SELECT operator_add_charge_series($S, 'withdrawal_out', 'argon_margin', $TODAY, 'app', '[]'::jsonb, 'app', 'app', 'app');"
 probe req P38 argon_app '42501.*permission denied for function operator_set_lifecycle' "app moves its society's lifecycle through the operator's function"   "SELECT operator_set_lifecycle($S, 'active', 'app', 'app', 'app');"
 has_founding=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.standard_chart') IS NOT NULL)::int" </dev/null)
 [[ $has_founding == 1 ]] || info "schema before 0023: no founding function to probe (P51 not run)"
 if [[ $has_founding == 1 ]]; then
-probe req P51 argon_app '42501.*permission denied for function operator_create_society' "app founds a society through the operator's function"   "SELECT operator_create_society('APP', 'App Cooperative', 'X/1', 'Lagos', 2, 2, 2, 'app', 'app', 'none', current_date, 'app');"
+probe req P51 argon_app '42501.*permission denied for function operator_create_society' "app founds a society through the operator's function"   "SELECT operator_create_society('APP', 'App Cooperative', 'X/1', 'Lagos', 2, 2, 2, 'app', 'app', 'none', $TODAY, 'app');"
 fi
 probe req P39 argon_app '42501.*permission denied for table society_settings_log' "app writes into the log of who changed a society's rules"   "INSERT INTO society_settings_log (society_id, setting, new_value) VALUES ($S, 'withdrawal_signatures_required', '1');"
 fi
@@ -596,7 +603,7 @@ fi
 # 0027: appointing a founding officer is the operator's function alone.
 if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regproc('operator_appoint_founding_officer') IS NOT NULL)::int" </dev/null) == 1 ]]; then
 probe req P59 argon_app '42501.*permission denied for function operator_appoint_founding_officer' "app appoints an officer through the operator's function" \
-  "SELECT operator_appoint_founding_officer($S, 'App', '+2348000000000', 'APP-1', current_date, 'chairman', true, 'app', 'app', 'app', current_date, 'app');"
+  "SELECT operator_appoint_founding_officer($S, 'App', '+2348000000000', 'APP-1', $TODAY, 'chairman', true, 'app', 'app', 'app', $TODAY, 'app');"
 fi
 # (No P56, "the auth service issues a code": with the INSERT wrongly granted it
 # was still refused, by the code's own rule, because argon_auth can write no
@@ -604,6 +611,21 @@ fi
 # P11–P14's.)
 else
   info "schema before 0024: no enrolment codes to probe (P52–P55 not run)"
+fi
+# 0028: THE WALLET. Only argon_wallet writes what VFD said; the app reads it
+# and has no path to a system record; the wallet posts nothing itself (the
+# outcome's own trigger does). A control proves each role can do its job.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.vfd_accounts') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P60 argon_app '42501.*permission denied for table vfd_transfer_outcomes' "app records VFD's outcome (\"paid\")"   "INSERT INTO vfd_transfer_outcomes (transfer_id, result, evidence_id) VALUES ($U1, 'paid', $U1);"
+probe req P61 argon_app '42501.*permission denied for table ledger_entries' "app writes a system payout (an entry naming VFD's outcome)"   "INSERT INTO ledger_entries (society_id, kind, value_date, actor_post_label, vfd_outcome_id) VALUES ($S, 'withdrawal_out', $TODAY, 'x', $U1);"
+probe req P62 argon_app '42501.*permission denied for table vfd_accounts' "app records a member's VFD account (where money goes)"   "INSERT INTO vfd_accounts (society_id, member_id, account_number, vfd_client_id, how) VALUES ($S, $M1, '1000000001', 'C', 'opened_here');"
+probe req P63 argon_app '42501.*permission denied for table withdrawal_hold_releases' "app releases a hold as the system"   "INSERT INTO withdrawal_hold_releases (hold_id, reason, vfd_outcome_id) VALUES ($U1, 'x', $U1);"
+probe req P64 argon_wallet '42501.*permission denied for table ledger_entries' "the wallet posts an entry itself"   "INSERT INTO ledger_entries (society_id, kind, value_date, actor_post_label) VALUES ($S, 'withdrawal_out', $TODAY, 'x');"
+probe req P65 argon_wallet '42501.*permission denied for table vfd_transfer_events' "the wallet backdates VFD's answer"   "INSERT INTO vfd_transfer_events (transfer_id, kind, result, at) VALUES ($U1, 'sent', 'refused', $TODAY - 1);"
+probe ctl K60 argon_wallet '' "control: the wallet records a member's VFD account (rolled back)"   "BEGIN; INSERT INTO vfd_accounts (society_id, member_id, account_number, vfd_client_id, how) VALUES ($S, $M1, '1000000001', 'C-1', 'opened_here'); ROLLBACK;"
+probe ctl K61 argon_app '' "control: the app reads the wallet (a request's payment)"   "SELECT count(*) FROM vfd_transfers; SELECT count(*) FROM vfd_transfer_outcomes;"
+else
+  info "schema before 0028: no wallet to probe (P60–P65 not run)"
 fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"

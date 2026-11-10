@@ -14,12 +14,17 @@
 #                   sessions). It writes no act and no ledger row. The API's
 #                   handlers run as argon_app and can do neither: a handler
 #                   that could mint a proof could skip the PIN.
+#   argon_wallet    LOGIN. The wallet worker (0028): the ONLY role that writes
+#                   what VFD said (accounts, transfers, VFD's answers, their
+#                   outcomes). The database records whatever it says VFD said,
+#                   so nothing else may say it: a role that could write "paid"
+#                   could debit a member for money that never left.
 #
 # Passwords are sent on stdin as psql variables, never as argv.
 source "$(dirname "$0")/lib.sh"
-require_env ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD
+require_env ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD ARGON_WALLET_PASSWORD
 
-for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD; do
+for v in ARGON_MIGRATOR_PASSWORD ARGON_APP_PASSWORD ARGON_BACKUP_PASSWORD ARGON_AUTH_PASSWORD ARGON_WALLET_PASSWORD; do
   [[ ${!v} =~ ^[A-Za-z0-9._~-]{16,}$ ]] || die "$v must be >=16 chars of [A-Za-z0-9._~-]"
 done
 
@@ -35,15 +40,15 @@ SQL
 
 info "roles"
 {
-printf "\\set migrator_pw '%s'\n\\set app_pw '%s'\n\\set backup_pw '%s'\n\\set auth_pw '%s'\n" \
-  "$ARGON_MIGRATOR_PASSWORD" "$ARGON_APP_PASSWORD" "$ARGON_BACKUP_PASSWORD" "$ARGON_AUTH_PASSWORD"
+printf "\\set migrator_pw '%s'\n\\set app_pw '%s'\n\\set backup_pw '%s'\n\\set auth_pw '%s'\n\\set wallet_pw '%s'\n" \
+  "$ARGON_MIGRATOR_PASSWORD" "$ARGON_APP_PASSWORD" "$ARGON_BACKUP_PASSWORD" "$ARGON_AUTH_PASSWORD" "$ARGON_WALLET_PASSWORD"
 cat <<'SQL'
 SET password_encryption = 'scram-sha-256';
 SELECT format('CREATE ROLE %I NOLOGIN', r)
   FROM unnest(ARRAY['argon_owner']) r
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
 SELECT format('CREATE ROLE %I LOGIN', r)
-  FROM unnest(ARRAY['argon_migrator','argon_app','argon_backup','argon_auth']) r
+  FROM unnest(ARRAY['argon_migrator','argon_app','argon_backup','argon_auth','argon_wallet']) r
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
 
 ALTER ROLE argon_owner    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
@@ -51,6 +56,7 @@ ALTER ROLE argon_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATIO
 ALTER ROLE argon_app      LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_pw';
 ALTER ROLE argon_backup   LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'backup_pw';
 ALTER ROLE argon_auth     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'auth_pw';
+ALTER ROLE argon_wallet   LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'wallet_pw';
 
 GRANT argon_owner TO argon_migrator;
 GRANT pg_read_all_data TO argon_backup;
@@ -72,14 +78,14 @@ SELECT format('CREATE DATABASE %I OWNER argon_owner ENCODING ''UTF8'' TEMPLATE t
  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
 SELECT format('ALTER DATABASE %I OWNER TO argon_owner', :'db') \gexec
 SELECT format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'db') \gexec
-SELECT format('GRANT CONNECT ON DATABASE %I TO argon_app, argon_migrator, argon_backup, argon_auth', :'db') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO argon_app, argon_migrator, argon_backup, argon_auth, argon_wallet', :'db') \gexec
 SQL
 
 info "schema privileges in $ARGON_DB"
 pg_super -d "$ARGON_DB" <<'SQL'
 ALTER SCHEMA public OWNER TO argon_owner;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO argon_app, argon_backup, argon_auth;
+GRANT USAGE ON SCHEMA public TO argon_app, argon_backup, argon_auth, argon_wallet;
 SQL
 
 ok "roles and database '$ARGON_DB' ready"

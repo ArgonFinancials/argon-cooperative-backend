@@ -72,7 +72,7 @@ else
 SELECT format('DROP DATABASE IF EXISTS %I WITH (FORCE)', :'db') \gexec
 SELECT format('CREATE DATABASE %I OWNER argon_owner ENCODING ''UTF8'' TEMPLATE template0', :'db') \gexec
 SELECT format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'db') \gexec
-SELECT format('GRANT CONNECT ON DATABASE %I TO argon_app, argon_migrator, argon_backup, argon_auth', :'db') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO argon_app, argon_migrator, argon_backup, argon_auth, argon_wallet', :'db') \gexec
 SQL
 fi
 
@@ -80,7 +80,7 @@ fi
 pg_super -d "$target" <<'SQL'
 ALTER SCHEMA public OWNER TO argon_owner;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO argon_app, argon_backup, argon_auth;
+GRANT USAGE ON SCHEMA public TO argon_app, argon_backup, argon_auth, argon_wallet;
 SQL
 
 info "pg_restore into $target"

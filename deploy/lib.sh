@@ -105,6 +105,7 @@ pg_as() {
     argon_migrator) pwvar=ARGON_MIGRATOR_PASSWORD ;;
     argon_backup)   pwvar=ARGON_BACKUP_PASSWORD ;;
     argon_auth)     pwvar=ARGON_AUTH_PASSWORD ;;     # the auth service's role (0005)
+    argon_wallet)   pwvar=ARGON_WALLET_PASSWORD ;;   # the wallet worker's role (0028)
     *) die "pg_as: unknown role $role" ;;
   esac
   pg_tool "$role" "$pwvar" psql -X -v ON_ERROR_STOP=1 -d "$db" "$@"
@@ -131,7 +132,7 @@ create_scratch_db() {
   pg_super -d postgres <<SQL
 CREATE DATABASE "$db" OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0;
 REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
-GRANT CONNECT ON DATABASE "$db" TO argon_app, argon_migrator, argon_backup, argon_auth;
+GRANT CONNECT ON DATABASE "$db" TO argon_app, argon_migrator, argon_backup, argon_auth, argon_wallet;
 SQL
 }
 drop_scratch_db() {
@@ -249,18 +250,21 @@ run_tier1() {
   # grants the restored copy carries.
   local app="postgres://argon_app:${ARGON_APP_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
   local authu="postgres://argon_auth:${ARGON_AUTH_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
+  # The wallet worker's role (0028), when this environment has one.
+  local walletu=""
+  [[ -n ${ARGON_WALLET_PASSWORD:-} ]] && walletu="postgres://argon_wallet:${ARGON_WALLET_PASSWORD}@127.0.0.1:${PGPORT}/postgres?sslmode=disable"
   if [[ $TARGET == docker || $TARGET == local ]]; then
     bin="${TIER1_BIN:-$REPO_DIR/bin/tier1.test$EXE}"
     if [[ -z ${TIER1_BIN:-} ]]; then
       (cd "$REPO_DIR" && GOMAXPROCS=1 go test -p 1 -c -tags tier1 -o "$bin" ./test/tier1/) || die "cannot build the tier1 test binary"
     fi
     ARGON_TEST_ADMIN_URL="$(admin_url)" \
-    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu"     ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
+    ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu" ARGON_TEST_WALLET_URL="$walletu" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?
   else
     bin="${TIER1_BIN:-/opt/argon/bin/tier1.test}"
     [[ -x $bin ]] || die "$bin missing — run 30-install-api.sh"
     sudo -u postgres env ARGON_TEST_ADMIN_URL="postgres://postgres@/postgres?host=/var/run/postgresql" \
-      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu"       ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?   # argv: finding 30
+      ARGON_TEST_MIGRATOR_URL="$mig" ARGON_TEST_APP_URL="$app" ARGON_TEST_AUTH_URL="$authu" ARGON_TEST_WALLET_URL="$walletu" ARGON_TEST_DB="$db" "$bin" "${args[@]}" > "$log" 2>&1 || rc=$?   # argv: finding 30
   fi
   # A test binary prints PASS when its filter matches NOTHING. Count what ran.
   local passed failed
