@@ -257,5 +257,37 @@ BEGIN
   END IF;
 END $$;
 
+-- 0032: A CONTRIBUTION CLAIMED. The app records a member's claim (its columns,
+-- never its time) and reads each claim's state; it writes no posting and no
+-- entry naming an inflow (its ledger_entries INSERT list above does not carry
+-- vfd_inflow_id), and cannot call the posting or the match (P72–P75). The
+-- database posts, in the claim's or the inflow's own transaction. The wallet
+-- runs the rematch on its tick, for what a race missed; it calls nothing else
+-- (P76).
+DO $$
+BEGIN
+  IF to_regclass('public.contribution_claims') IS NOT NULL THEN
+    GRANT SELECT ON contribution_claims, contribution_claim_states TO argon_app;
+    GRANT INSERT (id, society_id, member_id, user_id, session_id, amount_kobo) ON contribution_claims TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT EXECUTE ON FUNCTION contribution_rematch() TO argon_wallet;
+    END IF;
+  END IF;
+END $$;
+
+-- 0033: A PAYMENT RESOLVED BY TWO OFFICERS. The app records an officer's
+-- proposal and the second officer's decision (their columns, never their
+-- times); the database checks both and posts the credit. The app cannot write
+-- what is open (P77), backdate a proposal (P78), or change a decision (P79).
+-- It reads which payments are credited (the unmatched list).
+DO $$
+BEGIN
+  IF to_regclass('public.payment_resolutions') IS NOT NULL THEN
+    GRANT SELECT ON payment_resolutions, payment_resolution_decisions, payment_resolutions_open, vfd_inflow_postings TO argon_app;
+    GRANT INSERT (id, society_id, decision, inflow_id, claim_id, member_id, reason, proposed_by, proposed_act, client_reference) ON payment_resolutions TO argon_app;
+    GRANT INSERT (id, resolution_id, confirmed, decided_by, decided_act, reason) ON payment_resolution_decisions TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

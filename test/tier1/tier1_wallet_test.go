@@ -431,3 +431,22 @@ func TestWalletWorker12_ReconciliationRecordsThatItCouldNotRun(t *testing.T) {
 		t.Fatalf("WRONG — the run reads %s: %q; want could_not_run, saying no statement endpoint is known", outcome, detail)
 	}
 }
+
+// A claim and its inflow committed at the same moment: each transaction saw
+// no sign of the other, so neither matched (0032). The tick matches them.
+func TestWalletWorker13_AClaimARaceMissedIsMatchedOnTheTick(t *testing.T) {
+	w := newClaimWorld(t)
+	s := sessionNew()
+	fixture(t, one(`ALTER TABLE contribution_claims DISABLE TRIGGER contribution_claims_recorded`), "test scaffolding: the race (the claim unseen)")
+	fixture(t, one(`ALTER TABLE vfd_inflows DISABLE TRIGGER vfd_inflows_recorded`), "test scaffolding: the race (the inflow unseen)")
+	_, cerr := claim(w.c.s.id, w.bMem, w.borrower, s, 140000)
+	in, ierr := inflowFrom(w.c.s.id, w.socAcct, s, "", 140000)
+	fixture(t, one(`ALTER TABLE contribution_claims ENABLE TRIGGER contribution_claims_recorded`), "test scaffolding: the claim's trigger back")
+	fixture(t, one(`ALTER TABLE vfd_inflows ENABLE TRIGGER vfd_inflows_recorded`), "test scaffolding: the inflow's trigger back")
+	fixture(t, cerr, "the claim")
+	fixture(t, ierr, "the inflow")
+	wantNotPosted(t, in, "the race, before the tick")
+	f := newSwitchVFD(t, okModes)
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+	wantPosted(t, in, w.bMem, 140000, "a claim and its inflow that a race left unmatched, after the tick")
+}

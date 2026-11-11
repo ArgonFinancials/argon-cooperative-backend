@@ -155,9 +155,9 @@ func (s *server) GetMemberWithdrawable(ctx context.Context, req GetMemberWithdra
 		if err := rq.Scan(&id, &amount, &fee, &vat, &levy, &margin, &charge, &total, &at, &status); err != nil {
 			return nil, err
 		}
-		st, note := RequestedWithdrawalStatusAwaiting, requestedNote
+		st, note := RequestedWithdrawalStatus("awaiting"), requestedNote
 		if status == "approved" {
-			st, note = RequestedWithdrawalStatusApproved, approvedNote
+			st, note = RequestedWithdrawalStatus("approved"), approvedNote
 		}
 		out.Requested = append(out.Requested, RequestedWithdrawal{RequestId: uuidOf(id), Status: st, AmountKobo: magnitudeOf(amount),
 			QuotedCharges: chargesOf(fee, vat, levy, margin, charge), TotalKobo: magnitudeOf(total), RaisedAt: at, Note: note})

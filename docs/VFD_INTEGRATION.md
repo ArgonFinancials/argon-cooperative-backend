@@ -16,6 +16,7 @@
 | 8 | Never invent an account number | `internal/vfd` (ten digits as a string, or no account; no fallback endpoint); `vfd_accounts` (shape, once, client id) | suites vfd, 0028 |
 | 9 | Deterministic references | `vfd_transfer_reference(hold)`, enforced by 0028 | suite 0028 |
 | 10 | Hold before paying; record the outcome | the last signature places the hold (§13); the system posts what VFD paid, flagged if different | suites 0028, approvals_api, wallet |
+| 11 | Money in is credited only on VFD's word, to the member it is certainly from | 0032: a member's claim (session id and exact amount, no other claimant) or the member's own VFD account; 0033: anything else by two officers, at VFD's amount; `contribution_rematch` on the tick for a race | suites 0032, 0033, claims_api, resolutions_api, wallet |
 | 12 | Credentials from the environment only | `ARGON_VFD`, `VFD_BASE_URL` (https), `VFD_ACCESS_TOKEN`; the token, a BVN and a birth date in no log line | suite vfd |
 
 **How each UNVERIFIED fact is handled until VFD confirms it** (whoever holds the VFD relationship):

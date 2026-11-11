@@ -215,12 +215,13 @@ components:
         (finding 36, finding 24 recurring): no client could step up to record or
         authorise money. enrolment_issue (0024): an officer issuing an enrolment
         code; caught by TestApiMoney01 before it shipped. member_register
-        (0031): the secretary registering members.
+        (0031): the secretary registering members. payment_resolution (0033):
+        an officer proposing, confirming or rejecting a payment's resolution.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
-             withdrawal_request, enrolment_issue, member_register]
+             withdrawal_request, enrolment_issue, member_register, payment_resolution]
 
     PinProofRequest:
       type: object
@@ -456,6 +457,158 @@ components:
               memberId: { type: string, format: uuid }
               memberNumber: { type: string }
 
+    ContributionAccount:
+      type: object
+      additionalProperties: false
+      required: [accountNumber, bankName]
+      properties:
+        accountNumber: { type: string, pattern: '^[0-9]{10}$', description: "VFD's ten digits." }
+        accountName: { type: string, nullable: true, description: "As VFD's name enquiry reported it, when recorded." }
+        bankName: { type: string, description: "Always \"VFD Microfinance Bank\"." }
+    ClaimContribution:
+      type: object
+      additionalProperties: false
+      required: [sessionId, amountKobo]
+      properties:
+        sessionId: { type: string, minLength: 1, maxLength: 128, description: "The payment's session id, from the bank's receipt. Spaces are removed, then it must be 10–64 letters and digits (422 bad_session)." }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+    ContributionClaim:
+      type: object
+      additionalProperties: false
+      required: [claimId, memberId, sessionId, amountKobo, claimedAt, state]
+      properties:
+        claimId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        sessionId: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        claimedAt: { type: string, format: date-time }
+        state: { type: string, enum: [posted, waiting, amount_differs, contested, not_credited] }
+        entryId: { type: string, format: uuid, nullable: true, description: "The contribution, when posted." }
+        creditedKobo:
+          type: string
+          pattern: '^[0-9]+$'
+          nullable: true
+          description: "What was credited, when posted: VFD's confirmed amount, which differs from amountKobo when two officers credited a claim whose amount differed."
+        detail: { type: string, nullable: true, description: "When not_credited: the two officers' reason, verbatim. Otherwise null." }
+    ContributionClaimList:
+      type: object
+      additionalProperties: false
+      required: [claims]
+      properties:
+        claims: { type: array, items: { $ref: '#/components/schemas/ContributionClaim' } }
+    WalletException:
+      type: object
+      additionalProperties: false
+      required: [kind, subjectId, since, detail]
+      properties:
+        kind:
+          type: string
+          enum: [inflow_unclaimed, claim_contested, claim_amount_differs, claim_unconfirmed, resolution_awaiting_confirmation,
+                 transfer_stuck, transfer_failed, hold_not_sent, notification_unconfirmed, reconciliation_not_run]
+        subjectId: { type: string, format: uuid }
+        since: { type: string, format: date-time }
+        detail: { type: string }
+    WalletExceptionList:
+      type: object
+      additionalProperties: false
+      required: [exceptions]
+      properties:
+        exceptions: { type: array, items: { $ref: '#/components/schemas/WalletException' } }
+    UnmatchedClaim:
+      type: object
+      additionalProperties: false
+      required: [claimId, memberId, memberName, memberNumber, amountKobo, claimedAt, state]
+      properties:
+        claimId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        memberName: { type: string }
+        memberNumber: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        claimedAt: { type: string, format: date-time }
+        state: { type: string, enum: [posted, waiting, amount_differs, contested, not_credited] }
+    UnmatchedPayment:
+      type: object
+      additionalProperties: false
+      required: [inflowId, amountKobo, confirmedAt, claims]
+      properties:
+        inflowId: { type: string, format: uuid }
+        amountKobo: { $ref: '#/components/schemas/Magnitude' }
+        confirmedAt: { type: string, format: date-time }
+        sessionId: { type: string, nullable: true }
+        senderName: { type: string, nullable: true }
+        senderBank: { type: string, nullable: true }
+        narration: { type: string, nullable: true }
+        claims: { type: array, items: { $ref: '#/components/schemas/UnmatchedClaim' } }
+    UnmatchedPaymentList:
+      type: object
+      additionalProperties: false
+      required: [payments]
+      properties:
+        payments: { type: array, items: { $ref: '#/components/schemas/UnmatchedPayment' } }
+    ProposePaymentResolution:
+      type: object
+      additionalProperties: false
+      required: [decision, reason, pinProofId]
+      properties:
+        decision: { type: string, enum: [credit, decline] }
+        inflowId: { type: string, format: uuid, description: "A credit: the payment." }
+        memberId: { type: string, format: uuid, description: "A credit: the member it is credited to." }
+        claimId: { type: string, format: uuid, description: "A decline: the claim. A credit: optionally, the member's claim it honours." }
+        reason: { type: string, description: "10–500 characters. For a decline, the member reads it verbatim." }
+        pinProofId: { type: string, format: uuid, description: "The proposer's own proof, minted for payment_resolution." }
+    ConfirmPaymentResolution:
+      type: object
+      additionalProperties: false
+      required: [pinProofId]
+      properties:
+        pinProofId: { type: string, format: uuid, description: "The confirming officer's own proof, minted for payment_resolution." }
+    RejectPaymentResolution:
+      type: object
+      additionalProperties: false
+      required: [reason, pinProofId]
+      properties:
+        reason: { type: string, description: "10–500 characters." }
+        pinProofId: { type: string, format: uuid, description: "The rejecting officer's own proof, minted for payment_resolution." }
+    ResolutionOfficer:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        post: { type: string, nullable: true, description: "Their post in the society when they acted." }
+    PaymentResolution:
+      type: object
+      additionalProperties: false
+      required: [resolutionId, decision, reason, proposedBy, proposedAt, state]
+      properties:
+        resolutionId: { type: string, format: uuid }
+        decision: { type: string, enum: [credit, decline] }
+        inflowId: { type: string, format: uuid, nullable: true }
+        claimId: { type: string, format: uuid, nullable: true }
+        memberId: { type: string, format: uuid, nullable: true }
+        memberName: { type: string, nullable: true }
+        amountKobo:
+          type: string
+          pattern: '^[0-9]+$'
+          nullable: true
+          description: "A credit: VFD's confirmed amount, what is credited."
+        reason: { type: string }
+        proposedBy: { $ref: '#/components/schemas/ResolutionOfficer' }
+        proposedAt: { type: string, format: date-time }
+        state: { type: string, enum: [open, confirmed, rejected] }
+        decidedBy:
+          allOf: [{ $ref: '#/components/schemas/ResolutionOfficer' }]
+          nullable: true
+        decidedAt: { type: string, format: date-time, nullable: true }
+        rejectionReason: { type: string, nullable: true }
+        entryId: { type: string, format: uuid, nullable: true, description: "A confirmed credit: the contribution." }
+    PaymentResolutionList:
+      type: object
+      additionalProperties: false
+      required: [resolutions]
+      properties:
+        resolutions: { type: array, items: { $ref: '#/components/schemas/PaymentResolution' } }
     Magnitude:
       type: string
       pattern: '^[0-9]+$'
@@ -1564,6 +1717,7 @@ components:
       properties:
         code: { type: string }
         message: { type: string }
+        resolutionId: { type: string, format: uuid, description: "409 open_resolution only: the proposal waiting for its second officer." }
 
   securitySchemes:
     session:
@@ -2997,6 +3151,395 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
           description: "No such member, or not the caller's own."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/contribution-account:
+    get:
+      operationId: getContributionAccount
+      x-argon-built: true
+      summary: Where the member pays a contribution — their society's own VFD account
+      description: |
+        The account the member transfers into, from their own VFD account or
+        any bank, before claiming the payment (claimContribution). Recorded by
+        the operator from VFD's answer, never typed by an officer. Only the
+        member: anyone else gets 404, identical to a member that does not exist.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The society's VFD account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContributionAccount' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "no_account: the society's VFD account is not recorded yet. Nothing can be paid in until it is; the message says so."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/contribution-claims:
+    post:
+      operationId: claimContribution
+      x-argon-built: true
+      summary: Claim a payment into the society's VFD account as the member's contribution
+      description: |
+        The member names the payment by its SESSION ID (on their bank's receipt)
+        and its AMOUNT (LEDGER_CONTRACT §12, 2026-11-11). A claim moves no money
+        and needs no step-up: it is credited to the member's own savings only
+        when VFD confirms a payment into the society's account with that
+        session id and EXACTLY that amount, and nobody else claims it. Whichever
+        arrives second, the claim or VFD's confirmation, posts it; the
+        contribution names no user ("Argon system, on VFD's confirmation").
+
+        A payment from the member's OWN VFD account needs no claim: it is
+        credited on VFD's confirmation alone. Claiming it as well is harmless.
+
+        Claiming the same session again answers 200 with the FIRST claim and
+        writes nothing (the session id is the claim's natural key). A claim is
+        never changed: a wrong amount waits in amount_differs for two
+        officers. No Idempotency-Key (one sent is ignored); a cookie session's
+        X-CSRF-Token is required, as on every state-changing request.
+
+        state: posted (credited, by VFD's match, the member's own account, or
+        two officers; entryId names the contribution and creditedKobo what was
+        credited, which is VFD's amount and may differ from amountKobo) ·
+        waiting (VFD has confirmed no such payment yet; after a day officers
+        are told) · amount_differs (VFD confirmed this session with a
+        different amount) · contested (another member claims the same
+        payment, or it was credited to someone else) · not_credited (two
+        officers declined it; detail is their reason, verbatim). waiting,
+        amount_differs and contested each end when two officers resolve them
+        (LEDGER_CONTRACT §12, 2026-11-11): credited at VFD's amount, or
+        not_credited.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimContribution' }
+      responses:
+        '201':
+          description: Claimed. Its state as of this moment (posted, if VFD had already confirmed it).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContributionClaim' }
+        '200':
+          description: This member already claimed this session. NOTHING WAS WRITTEN. The first claim, in its current state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContributionClaim' }
+        '400':
+          description: "bad_request: malformed (amountKobo not a non-negative kobo string, a missing field)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own. An officer cannot claim for a member."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "zero_amount; bad_session (after removing spaces, not 10–64 letters and digits: the message says what a session id looks like)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: getContributionClaims
+      x-argon-built: true
+      summary: A member's own claims, newest first, each in its current state
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The member's claims.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContributionClaimList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/wallet-exceptions:
+    get:
+      operationId: getWalletExceptions
+      x-argon-built: true
+      summary: What a person must act on in the society's money at VFD, oldest first
+      description: |
+        Derived, never stored (0029, 0032, 0033). The payment kinds are the
+        officers' to resolve (payment-resolutions): inflow_unclaimed,
+        claim_contested, claim_amount_differs, claim_unconfirmed,
+        resolution_awaiting_confirmation. The rest are Argon's operational work
+        and are shown for reading only; no alert to Argon is built yet.
+        Any current officer of the society but the internal auditor; anyone
+        else gets 404.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The exceptions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WalletExceptionList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or the caller is not one of its officers (the internal auditor included)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/unmatched-payments:
+    get:
+      operationId: getUnmatchedPayments
+      x-argon-built: true
+      summary: Payments VFD confirmed into the society's account that are not credited, oldest first, each with every claim on its session
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The payments.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnmatchedPaymentList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or the caller is not one of its officers (the internal auditor included)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/payment-resolutions:
+    post:
+      operationId: proposePaymentResolution
+      x-argon-built: true
+      summary: Propose a payment's resolution, on the proposer's own PIN step-up; a second officer confirms it
+      description: |
+        LEDGER_CONTRACT §12 (2026-11-11). decision credit: credit this payment
+        (inflowId) to this member at VFD's confirmed amount, optionally naming
+        the member's claim it honours. decision decline: decline this claim;
+        the member reads the reason verbatim. Nothing happens until a DIFFERENT
+        officer confirms (confirmPaymentResolution). Neither officer may be the
+        member credited, or the claimant declined.
+
+        A credit two officers confirm closes every other member's claim on
+        that payment (not_credited: "This payment was credited to another
+        member after two officers checked it."). A declined claim is closed for
+        good: if its payment reaches the society's account later, it waits for
+        two officers to credit it.
+
+        Idempotency-Key is the proposal's reference, minted CLIENT-SIDE once
+        and reused on every retry (unique within the society). A repeat
+        answers 200 with the FIRST proposal, writes nothing, and needs no
+        step-up.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProposePaymentResolution' }
+      responses:
+        '201':
+          description: Proposed, waiting for a second officer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResolution' }
+        '200':
+          description: Already proposed under this key. NOTHING WAS WRITTEN. The first proposal, in its current state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResolution' }
+        '400':
+          description: "bad_request: malformed, no Idempotency-Key, a credit without inflowId and memberId, a decline without claimId."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (the internal auditor; the member it credits, or the claimant it declines)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or the caller is not one of its officers."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_credited (the payment is credited); claim_closed (credited, or declined already); open_resolution (one is waiting for its second officer: resolutionId names it; confirm or reject that one)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "bad_reason (not 10–500 characters); not_this_society (the payment, the member or the claim is not this society's)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: getPaymentResolutions
+      x-argon-built: true
+      summary: The society's payment resolutions, newest first
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [open, confirmed, rejected] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The resolutions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResolutionList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or the caller is not one of its officers."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /payment-resolutions/{resolutionId}/confirmations:
+    post:
+      operationId: confirmPaymentResolution
+      x-argon-built: true
+      summary: Confirm a proposal, as a second officer, on your own PIN step-up; it takes effect in the same transaction
+      security: [{ session: [] }]
+      parameters:
+        - { name: resolutionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmPaymentResolution' }
+      responses:
+        '200':
+          description: Confirmed. The credit is posted (entryId), or the claim is not_credited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResolution' }
+        '400':
+          description: "bad_request: malformed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (the proposer; the internal auditor; the member it credits, or the claimant it declines)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such resolution, or the caller is not an officer of its society."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_open (confirmed or rejected already); already_credited (the payment was credited since it was proposed); claim_closed (the claim was closed since: reject this one to clear it); not_postable (the society's chart lacks an account the credit needs: the message says which kind)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /payment-resolutions/{resolutionId}/rejections:
+    post:
+      operationId: rejectPaymentResolution
+      x-argon-built: true
+      summary: Reject a proposal, with a reason, on your own PIN step-up (the proposer may withdraw their own); nothing happens
+      security: [{ session: [] }]
+      parameters:
+        - { name: resolutionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectPaymentResolution' }
+      responses:
+        '200':
+          description: Rejected. The payment or claim is open for a new proposal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResolution' }
+        '400':
+          description: "bad_request: malformed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (the internal auditor; the member it credits, or the claimant it declines)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such resolution, or the caller is not an officer of its society."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_open (confirmed or rejected already)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "bad_reason (not 10–500 characters)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

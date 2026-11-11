@@ -43,6 +43,9 @@ type Worker interface {
 type Round struct {
 	Sent, Asked, Paid, Failed, Waiting int
 	Inflows                            int // confirmed by VFD and recorded (0029)
+	// Rematched: inflows credited from a claim that the claim's or the
+	// inflow's own transaction missed (the two committing at once, 0032).
+	Rematched int
 }
 
 type Config struct {
@@ -98,6 +101,11 @@ func (w *worker) Tick(ctx context.Context) (Round, error) {
 	}
 	if err := w.confirmInflows(ctx, &r); err != nil {
 		return r, err
+	}
+	// The database matches a claim and its inflow in whichever transaction
+	// arrives second; two arriving at once see neither, and this finds them.
+	if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {
+		return r, fmt.Errorf("wallet: matching claims a race missed: %w", err)
 	}
 	return r, w.reconcile(ctx)
 }

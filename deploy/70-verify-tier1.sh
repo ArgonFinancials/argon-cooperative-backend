@@ -652,6 +652,25 @@ probe req P68 argon_app '42501.*permission denied for table vfd_notifications' "
 probe ctl K62 argon_app '' "control: the webhook keeps a notification (rolled back)"   "BEGIN; INSERT INTO vfd_notifications (kind, raw, signed, reference) VALUES ('inflow', '{}', false, 'K62'); ROLLBACK;"
 probe ctl K63 argon_wallet '' "control: the wallet records a reconciliation run (rolled back)"   "BEGIN; INSERT INTO vfd_reconciliation_runs (account_number, period_from, period_to, outcome, detail) VALUES ('1000000001', now() - interval '1 day', now(), 'could_not_run', 'K63'); ROLLBACK;"
 fi
+# 0032: the app records a member's claim; the database matches and posts.
+# Nobody can credit an inflow to a member of their choosing.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.contribution_claims') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P72 argon_app '42501.*permission denied for function contribution_post_inflow' "app credits an inflow to a member it chooses"   "SELECT contribution_post_inflow($U1, $M1, NULL, 'claim');"
+probe req P73 argon_app '42501.*permission denied for table vfd_inflow_postings' "app writes a posting record"   "INSERT INTO vfd_inflow_postings (inflow_id, member_id, how) VALUES ($U1, $M1, 'claim');"
+probe req P74 argon_app '42501.*permission denied for table ledger_entries' "app writes a contribution naming an inflow"   "INSERT INTO ledger_entries (society_id, kind, value_date, actor_post_label, client_reference, vfd_inflow_id) VALUES ($S, 'contribution_in', $TODAY, 'x', 'P74', $U1);"
+probe req P75 argon_app '42501.*permission denied for table contribution_claims' "app backdates a claim"   "INSERT INTO contribution_claims (society_id, member_id, user_id, session_id, amount_kobo, claimed_at) VALUES ($S, $M1, $U1, '000011112222', 100, $TODAY - 1);"
+probe req P76 argon_wallet '42501.*permission denied for function contribution_match' "the wallet matches a payment to a session itself"   "SELECT contribution_match($S, '000011112222');"
+probe ctl K64 argon_app '' "control: the app records a member's own claim and reads its state (rolled back)"   "BEGIN; INSERT INTO contribution_claims (society_id, member_id, user_id, session_id, amount_kobo) VALUES ($S, $M1, $U1, '000011112222', 100); SELECT count(*) FROM contribution_claim_states; ROLLBACK;"
+probe ctl K65 argon_wallet '' "control: the wallet runs the rematch"   "SELECT contribution_rematch();"
+fi
+# 0033: the app records the officers' proposals and decisions; the database
+# keeps what is open and posts the credit.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.payment_resolutions') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P77 argon_app '42501.*permission denied for table payment_resolutions_open' "app clears an open proposal (two proposals on one payment)"   "DELETE FROM payment_resolutions_open;"
+probe req P78 argon_app '42501.*permission denied for table payment_resolutions' "app backdates a proposal"   "INSERT INTO payment_resolutions (society_id, decision, inflow_id, member_id, reason, proposed_by, proposed_act, client_reference, proposed_at) VALUES ($S, 'credit', $U1, $M1, 'probe reason here', $U1, $U1, 'P78', $TODAY - 1);"
+probe req P79 argon_app '42501.*permission denied for table payment_resolution_decisions' "app turns a rejection into a confirmation"   "UPDATE payment_resolution_decisions SET confirmed = true WHERE false;"
+probe ctl K66 argon_app '' "control: the app reads proposals, decisions, what is open, and which payments are credited"   "SELECT count(*) FROM payment_resolutions; SELECT count(*) FROM payment_resolution_decisions; SELECT count(*) FROM payment_resolutions_open; SELECT count(*) FROM vfd_inflow_postings;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

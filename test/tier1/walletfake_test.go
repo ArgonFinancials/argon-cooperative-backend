@@ -20,6 +20,7 @@
 //	dup_attempt_unrecorded a second delivery left with no attempt: never settled, asked about forever
 //	reconcile_silent    reconciliation records nothing (a missed inflow, and nobody told)
 //	reconcile_matched   reconciliation that could not run recorded as a match
+//	rematch_skipped     claims a race missed are never matched (the member waits on a payment that arrived)
 package tier1
 
 import (
@@ -72,6 +73,11 @@ func (w *refWallet) Tick(ctx context.Context) (wallet.Round, error) {
 	}
 	if err := w.confirmInflows(ctx, &r); err != nil {
 		return r, err
+	}
+	if w.brk != "rematch_skipped" {
+		if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {
+			return r, fmt.Errorf("wallet: matching claims a race missed: %w", err)
+		}
 	}
 	return r, w.reconcile(ctx)
 }
