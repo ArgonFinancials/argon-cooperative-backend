@@ -126,14 +126,27 @@ assert_scratch() {
 
 # Scratch databases (restore drills, constraint probes). Owned by argon_owner,
 # connectable only by the argon roles.
+#
+# A creation that fails AFTER the database exists drops what it made, here,
+# before returning: the callers arm their own drop only once this returns, so
+# a half-made database was nobody's to clean up (2026-11-11: the probe's GRANT
+# to a role the instance did not have yet left an argon_verify_* behind). A
+# CREATE that fails drops nothing: the name may be a database someone kept.
+SCRATCH_ROLES="${SCRATCH_ROLES:-argon_app, argon_migrator, argon_backup, argon_auth, argon_wallet}"
 create_scratch_db() {
   local db=$1
   assert_scratch "$db"
-  pg_super -d postgres <<SQL
-CREATE DATABASE "$db" OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0;
+  [[ $SCRATCH_ROLES =~ ^[a-z_]+(,\ [a-z_]+)*$ ]] || die "SCRATCH_ROLES='$SCRATCH_ROLES' is not a list of role names"
+  pg_super -d postgres -c "CREATE DATABASE \"$db\" OWNER argon_owner ENCODING 'UTF8' TEMPLATE template0" </dev/null || return 1
+  if ! pg_super -d postgres <<SQL
 REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
-GRANT CONNECT ON DATABASE "$db" TO argon_app, argon_migrator, argon_backup, argon_auth, argon_wallet;
+GRANT CONNECT ON DATABASE "$db" TO $SCRATCH_ROLES;
 SQL
+  then
+    printf '%s\n' "create_scratch_db: $db was created but its grants failed (above): dropping it" >&2
+    drop_scratch_db "$db" >/dev/null || printf '%s\n' "create_scratch_db: COULD NOT DROP $db: drop it by hand" >&2
+    return 1
+  fi
 }
 drop_scratch_db() {
   local db=$1

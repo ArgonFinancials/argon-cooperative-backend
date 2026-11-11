@@ -24,6 +24,13 @@ fi
 
 if on_server; then   # the server: back up first, and only with --confirm
   ((confirm)) || die "host target: re-run with --confirm. This will back up '$ARGON_DB' and then run: migrate ${args[*]}"
+  # The roles first, on every deploy: a release that adds a role (argon_wallet,
+  # 0028) needs it before its grants and its probe. 20-roles.sh is idempotent
+  # and sets each password to what the env file says; it lives in the release,
+  # so a new role ships with the release that needs it (2026-11-11: the deploy
+  # of e05a166 died at the probe on a role nothing had created).
+  info "roles (20-roles.sh)"
+  bash "$DEPLOY_DIR/20-roles.sh" || die "20-roles.sh failed: nothing migrated, nothing backed up"
   current=$(run_migrate "$ARGON_DB" version 2>&1 || true)
   if [[ $current == *"no migration"* ]]; then
     info "empty database — no pre-migration backup needed"

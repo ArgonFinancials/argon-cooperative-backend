@@ -151,6 +151,14 @@ jobs:
       - name: Operator script (47-founding-officer.sh), every rule sabotaged
         if: matrix.suite == '0027'
         run: bash test/ops/sabotage_founding_officer.sh
+      # The deploy's roles step and the scratch database's cleanup (finding 73).
+      # With 0028, the release that added a role.
+      - name: Deploy roles and scratch cleanup (40-migrate.sh, lib.sh)
+        if: matrix.suite == '0028'
+        run: bash test/ops/deploy_roles_test.sh
+      - name: Deploy roles and scratch cleanup, every rule sabotaged
+        if: matrix.suite == '0028'
+        run: bash test/ops/sabotage_deploy_roles.sh
 
   # The client install's FAILURE PATH, made to fire on every push (a failure
   # path is proven by making it fire, finding 47). apt is pointed at a proxy
