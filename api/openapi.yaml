@@ -3299,8 +3299,9 @@ paths:
         claim_contested, claim_amount_differs, claim_unconfirmed,
         resolution_awaiting_confirmation. The rest are Argon's operational work
         and are shown for reading only; no alert to Argon is built yet.
-        Any current officer of the society but the internal auditor; anyone
-        else gets 404.
+        Read by any current officer of the society, the internal auditor
+        included (the auditor reads and acts on nothing, LEDGER_CONTRACT §12);
+        anyone else gets 404.
       security: [{ session: [] }]
       parameters:
         - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3316,7 +3317,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
-          description: "No such society, or the caller is not one of its officers (the internal auditor included)."
+          description: "No such society, or the caller holds no current post in it. The internal auditor reads this (200)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -3342,7 +3343,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '404':
-          description: "No such society, or the caller is not one of its officers (the internal auditor included)."
+          description: "No such society, or the caller holds no current post in it. The internal auditor reads this (200)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
