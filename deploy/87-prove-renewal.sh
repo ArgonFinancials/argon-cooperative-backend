@@ -20,7 +20,11 @@ source "$(dirname "$0")/lib.sh"
 on_server || die "87-prove-renewal.sh is for the server (ARGON_HOST=1)"
 [[ $EUID -eq 0 ]] || die "run with sudo"
 : "${ARGON_API_DOMAIN:?set ARGON_API_DOMAIN in $ARGON_ENV}"
-D=$ARGON_API_DOMAIN
+# The API's name by default; the app's (88-install-app.sh --tls) by name:
+#   87-prove-renewal.sh coop.example.com
+D=${1:-$ARGON_API_DOMAIN}
+[[ $D == "$ARGON_API_DOMAIN" || $D == "${ARGON_ALLOWED_ORIGINS#https://}" ]] ||
+  die "$D is neither the API's name ($ARGON_API_DOMAIN) nor the app's (${ARGON_ALLOWED_ORIGINS#https://})"
 [[ -f /etc/letsencrypt/live/$D/cert.pem ]] || die "no certificate for $D: run 86-install-tls.sh first"
 [[ -x /etc/letsencrypt/renewal-hooks/deploy/argon-nginx-reload ]] || die "the reload hook is missing: run 86-install-tls.sh again"
 

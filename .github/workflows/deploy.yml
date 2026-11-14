@@ -19,6 +19,18 @@
 #
 # Repository settings this needs (none of them is in this file):
 #   secret   ARGON_DEPLOY_KEY   the PRIVATE half of the argon-deploy ed25519 key
+#   secret   ARGON_FRONTEND_KEY the PRIVATE half of a READ-ONLY deploy key on the
+#                               frontend repository: the frontend job checks out the
+#                               commit deploy/frontend.ref pins, and nothing else
+#   variable ARGON_APP_API_URL  the API's public origin, baked into the frontend at
+#                               build time (NEXT_PUBLIC_ARGON_API_URL)
+#
+# ONE COMMIT IS ONE DEPLOYED STATE, ACROSS TWO REPOSITORIES. The frontend is
+# part of what the backend carries: deploy/frontend.ref pins the frontend
+# commit, the frontend job builds exactly that commit (a static export) on
+# every push, and the deploy ships it inside the same release archive as the
+# backend. A frontend push deploys nothing until a backend commit moves the
+# pin; moving it is reviewed and tested like any other backend change.
 #   variable ARGON_DEPLOY_HOST  the server's hostname
 #   variable ARGON_DEPLOYERS    GitHub logins allowed to deploy, comma-separated
 #                               (changing it needs repo admin)
@@ -233,6 +245,95 @@ jobs:
         run: NGINX_BIN=/usr/sbin/nginx bash test/ops/going_live_test.sh
       - name: Every rule sabotaged, each caught
         run: NGINX_BIN=/usr/sbin/nginx bash test/ops/sabotage_going_live.sh
+      # The app's site (2026-11-14): the static export beside the API.
+      - name: The app's site
+        run: NGINX_BIN=/usr/sbin/nginx bash test/ops/app_site_test.sh
+      - name: The app's site, every rule sabotaged
+        run: NGINX_BIN=/usr/sbin/nginx bash test/ops/sabotage_app_site.sh site
+      - name: The frontend's install
+        run: bash test/ops/frontend_install_test.sh
+      - name: The frontend's install, every rule sabotaged
+        run: bash test/ops/sabotage_app_site.sh install
+
+  # The frontend the release carries: the commit deploy/frontend.ref pins,
+  # built here (a 1-2 GB build beside Postgres on the instance is how the
+  # database gets killed), as a static export. On every push, so a pin that
+  # does not build fails before anyone deploys it. No pin: no frontend.
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The pinned frontend commit
+        id: pin
+        run: |
+          if [[ ! -f deploy/frontend.ref ]]; then
+            echo "::notice::deploy/frontend.ref does not exist: this release carries no frontend"
+            echo "sha=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          sha=$(grep -vE '^[[:space:]]*(#|$)' deploy/frontend.ref | tr -d '[:space:]')
+          [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "::error::deploy/frontend.ref must hold one full 40-character commit id, and comments"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "frontend commit ${sha:0:12}"
+      - name: The key and the API address are set
+        if: steps.pin.outputs.sha != ''
+        env:
+          KEY: ${{ secrets.ARGON_FRONTEND_KEY }}
+          API_URL: ${{ vars.ARGON_APP_API_URL }}
+        run: |
+          [[ -n $KEY ]] || { echo "::error::secret ARGON_FRONTEND_KEY is not set: the pinned frontend cannot be checked out"; exit 1; }
+          [[ $API_URL =~ ^https://[a-z0-9.-]+$ ]] || { echo "::error::variable ARGON_APP_API_URL must be the API's https origin, not '$API_URL'"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pin.outputs.sha != ''
+        with:
+          repository: ArgonFinancials/Argon_Cooperative_Frontend
+          ref: ${{ steps.pin.outputs.sha }}
+          ssh-key: ${{ secrets.ARGON_FRONTEND_KEY }}
+          persist-credentials: false
+          path: frontend-src
+      - name: The checkout is the pinned commit
+        if: steps.pin.outputs.sha != ''
+        env:
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          got=$(git -C frontend-src rev-parse HEAD)
+          [[ $got == "$SHA" ]] || { echo "::error::checked out $got, not the pin $SHA"; exit 1; }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.pin.outputs.sha != ''
+        with:
+          node-version: 24
+      - name: Build the static export
+        if: steps.pin.outputs.sha != ''
+        working-directory: frontend-src
+        env:
+          NEXT_PUBLIC_ARGON_API_URL: ${{ vars.ARGON_APP_API_URL }}
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: The export is whole, and carries the API's address
+        if: steps.pin.outputs.sha != ''
+        env:
+          API_URL: ${{ vars.ARGON_APP_API_URL }}
+        run: |
+          o=frontend-src/out
+          [[ -f $o/index.html && -f $o/404.html && -d $o/_next/static ]] ||
+            { echo "::error::no static export at $o (index.html, 404.html, _next/static): is output export set in next.config?"; exit 1; }
+          grep -rlqF "$API_URL" "$o/_next/static" || { echo "::error::the export does not carry $API_URL"; exit 1; }
+          odd=$(find "$o" ! -type f ! -type d | head -3)
+          [[ -z $odd ]] || { echo "::error::the export contains something that is not a file: $odd"; exit 1; }
+          echo "export: $(find "$o" -type f | wc -l) files, $(du -sh "$o" | cut -f1)"
+          tar -C "$o" -czf "$RUNNER_TEMP/frontend-export.tgz" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.pin.outputs.sha != ''
+        with:
+          name: frontend-export
+          path: ${{ runner.temp }}/frontend-export.tgz
+          retention-days: 7
+          if-no-files-found: error
 
   # The gate: who, and which commit. Its own job so a refusal comes in seconds
   # and the deploy job never starts. Inputs reach the script as environment
@@ -257,7 +358,7 @@ jobs:
           echo "deploying ${GITHUB_SHA:0:12}, confirmed by $ACTOR"
 
   deploy:
-    needs: [gate, tier1, suite-list, ci-setup-selftest, going-live-ops]
+    needs: [gate, tier1, suite-list, ci-setup-selftest, going-live-ops, frontend]
     # Never on a push: only a person running the workflow by hand, on main.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -272,8 +373,28 @@ jobs:
       ARGON_HOST_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM6oRp+QC30/BqW45nTgtJyJCU3Gu6+IekXxw2Xag84M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Release archive of this commit
-        run: git archive --format=tar.gz --add-virtual-file="COMMIT:$GITHUB_SHA" -o "$RUNNER_TEMP/release.tgz" HEAD
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.frontend.outputs.sha != ''
+        with:
+          name: frontend-export
+          path: ${{ runner.temp }}/fe
+      - name: Release archive of this commit, with the frontend it pins
+        env:
+          FE_SHA: ${{ needs.frontend.outputs.sha }}
+        run: |
+          r="$RUNNER_TEMP/release.tar"
+          if [[ -n $FE_SHA ]]; then
+            git archive --format=tar --add-virtual-file="COMMIT:$GITHUB_SHA" --add-virtual-file="FRONTEND_COMMIT:$FE_SHA" -o "$r" HEAD
+            mkdir -p "$RUNNER_TEMP/rel/frontend"
+            tar -C "$RUNNER_TEMP/rel/frontend" -xzf "$RUNNER_TEMP/fe/frontend-export.tgz"
+            tar -C "$RUNNER_TEMP/rel" --owner=0 --group=0 -rf "$r" frontend
+            echo "release ${GITHUB_SHA:0:12} carries frontend ${FE_SHA:0:12}"
+          else
+            git archive --format=tar --add-virtual-file="COMMIT:$GITHUB_SHA" -o "$r" HEAD
+            echo "release ${GITHUB_SHA:0:12} carries no frontend (no pin)"
+          fi
+          gzip -9 -c "$r" > "$RUNNER_TEMP/release.tgz"
+          ls -l "$RUNNER_TEMP/release.tgz"
       - name: Deploy as argon-deploy
         env:
           DEPLOY_KEY: ${{ secrets.ARGON_DEPLOY_KEY }}

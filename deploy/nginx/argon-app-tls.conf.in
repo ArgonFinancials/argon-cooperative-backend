@@ -1,0 +1,52 @@
+# THE APP ON ITS PUBLIC NAME, HTTPS (2026-11-14). Rendered by
+# nginx/render-public.sh (88-install-app.sh --tls) into
+# /etc/nginx/sites-available/argon-app-tls.
+#
+# The app is a STATIC EXPORT, served from files: no process runs it, so it
+# takes no memory beside Postgres and the API and has nothing to crash (the
+# team's decision, 2026-11-14). The root is a symlink the deploy switches in
+# one rename (deploy/36-install-frontend.sh); nginx follows it per request,
+# so a new release is served without a reload.
+#
+# Its own certificate, for its own name. No default_server: the API's 443
+# site refuses the handshake for unknown names.
+#
+# Caching: the build's hashed assets (/_next/static/) never change under one
+# name, so a year, immutable; every page is revalidated (no-cache), so a
+# release is seen on the next load.
+# Tests: test/ops/app_site_test.sh A08-A13.
+
+server {
+    listen @HTTPS_LISTEN@ ssl;
+    server_name @APP_DOMAIN@;
+    server_tokens off;
+    root @APP_ROOT@;
+    charset utf-8;
+
+    ssl_certificate @APP_CERT@;
+    ssl_certificate_key @APP_KEY@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+
+    # A location that adds headers inherits none from the server: every
+    # location below names all of its own, HSTS included.
+    location ^~ /_next/static/ {
+        limit_except GET { deny all; }
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+    location / {
+        limit_except GET { deny all; }
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        try_files $uri $uri.html $uri/index.html =404;
+    }
+    error_page 404 /404.html;
+}

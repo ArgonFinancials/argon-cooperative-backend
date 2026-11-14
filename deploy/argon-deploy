@@ -2,8 +2,11 @@
 # THE SERVER. The ONLY thing the CI deploy key can run: authorized_keys forces
 #   restrict,command="sudo /opt/argon/bin/argon-deploy"
 # and sudoers allows exactly this path. It reads a release archive (git archive
-# of a commit that passed the Tier 1 suites in CI) on stdin, and installs it
-# through the same steps as the runbook: 05 → 30 → 40 → 70.
+# of a commit that passed the Tier 1 suites in CI, with the frontend's static
+# export built in CI from the commit deploy/frontend.ref pins) on stdin, and
+# installs it through the same steps as the runbook: 05 → 30 → 40 → 70, then
+# the API, then 36 (the frontend), LAST, so a deploy that fails anywhere
+# before never shows a new frontend against an old API.
 #
 # It does NOT start the API if it is not already running: starting it stays a
 # deliberate act. If it is running, it is recreated on the new image, and
@@ -45,5 +48,6 @@ if [[ -n $(dc ps -q api 2>/dev/null) ]]; then
 else
   info "the API is not running, and a deploy does not start it: starting it is a deliberate act (deploy/README.md)"
 fi
+run "install the frontend"  bash deploy/36-install-frontend.sh
 bash deploy/75-assert-loopback.sh
 ok "release $ARGON_RELEASE deployed"

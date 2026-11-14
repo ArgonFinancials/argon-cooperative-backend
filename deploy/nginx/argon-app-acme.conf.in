@@ -1,0 +1,27 @@
+# THE APP'S NAME ON PORT 80, ONCE IT HAS A CERTIFICATE (2026-11-14). Rendered
+# by nginx/render-public.sh (88-install-app.sh --tls) into
+# /etc/nginx/sites-available/argon-app (replacing argon-app-preview).
+#
+# The certificate check's file, and a redirect to HTTPS for GET and HEAD.
+# Nothing else is served in the clear: a page served over HTTP could be
+# altered on the way, and that page is where a member types a PIN.
+# No default_server: the API's port-80 site holds that.
+# Tests: test/ops/app_site_test.sh A06-A07.
+
+server {
+    listen @HTTP_LISTEN@;
+    server_name @APP_DOMAIN@;
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root @ACME_ROOT@;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        limit_except GET { deny all; }
+        # The literal name, never $host: the redirect goes where we say.
+        return 301 https://@APP_DOMAIN@$request_uri;
+    }
+}

@@ -58,17 +58,25 @@ if [[ -n ${ARGON_API_DOMAIN:-} ]]; then
     s=$(systemctl "$p" certbot.timer 2>/dev/null || true)
     [[ $s == enabled || $s == active ]] || cert+=("certbot.timer $p: ${s:-missing}")
   done
-  end=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$ARGON_API_DOMAIN" 2>/dev/null |
-        openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
-  if [[ -z $end ]]; then cert+=("nginx serves no readable certificate for $ARGON_API_DOMAIN on 127.0.0.1:443")
-  else
-    days=$(( ($(date -d "$end" +%s) - now) / 86400 ))
-    ((days >= CERT_MIN_DAYS)) && ok "certificate for $ARGON_API_DOMAIN: $days days left" ||
-      cert+=("the certificate nginx serves for $ARGON_API_DOMAIN has $days days left (limit $CERT_MIN_DAYS): renewals are failing")
-  fi
+  # Every name nginx serves with a certificate: the API's, and the app's once
+  # 88-install-app.sh --tls has given it one (2026-11-14). An app certificate
+  # that lapses locks everyone out as surely as the API's.
+  names=("$ARGON_API_DOMAIN")
+  app=${ARGON_ALLOWED_ORIGINS#https://}
+  [[ -n ${ARGON_ALLOWED_ORIGINS:-} && -d /etc/letsencrypt/live/$app ]] && names+=("$app")
+  for n in "${names[@]}"; do
+    end=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$n" 2>/dev/null |
+          openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+    if [[ -z $end ]]; then cert+=("nginx serves no readable certificate for $n on 127.0.0.1:443")
+    else
+      days=$(( ($(date -d "$end" +%s) - now) / 86400 ))
+      ((days >= CERT_MIN_DAYS)) && ok "certificate for $n: $days days left" ||
+        cert+=("the certificate nginx serves for $n has $days days left (limit $CERT_MIN_DAYS): renewals are failing")
+    fi
+  done
   if ((${#cert[@]})); then
     printf '%s\n' "${cert[@]}" | sed 's/^/  !! /' >&2
-    { echo "The API's certificate is not renewing. When it expires, every member and officer is locked out of the app."
+    { echo "A certificate is not renewing (the API's or the app's). When it expires, every member and officer is locked out of the app."
       echo; printf -- '- %s\n' "${cert[@]}"
       echo; echo "Check:  sudo certbot renew --dry-run ; journalctl -u certbot --since -14d ; then deploy/87-prove-renewal.sh"
     } | bash "$DEPLOY_DIR/alert.sh" raise "certificate not renewing (${#cert[@]} problem(s))" -

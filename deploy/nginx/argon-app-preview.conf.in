@@ -1,0 +1,47 @@
+# THE APP ON PORT 80, BEFORE ITS CERTIFICATE (2026-11-14). Rendered by
+# nginx/render-public.sh (88-install-app.sh --preview) into
+# /etc/nginx/sites-available/argon-app.
+#
+# Exists for ONE window: the app's files are on this instance and its name
+# still points elsewhere. It lets the operator check the release over plain
+# HTTP with `curl --resolve` before DNS moves, and it serves Let's Encrypt's
+# check once DNS has moved. Nobody uses it: until the name points here, no
+# browser reaches it. 88-install-app.sh --tls replaces it with
+# argon-app-acme.conf.in (a redirect) and argon-app-tls.conf.in.
+#
+# No default_server: the API's port-80 site holds that (unknown names, 444).
+# Static files only: the app is a static export (no server at runtime).
+# Tests: test/ops/app_site_test.sh A01-A05.
+
+server {
+    listen @HTTP_LISTEN@;
+    server_name @APP_DOMAIN@;
+    server_tokens off;
+    root @APP_ROOT@;
+    charset utf-8;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root @ACME_ROOT@;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    # A location that adds headers inherits none from the server: every
+    # location below names all of its own.
+    location ^~ /_next/static/ {
+        limit_except GET { deny all; }
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+    location / {
+        limit_except GET { deny all; }
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        try_files $uri $uri.html $uri/index.html =404;
+    }
+    error_page 404 /404.html;
+}

@@ -404,7 +404,82 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://<api name>/heal
 ```
 
 A deploy does not re-render nginx: after a release that changes
-`deploy/nginx/`, run 86 again (it keeps the certificate).
+`deploy/nginx/`, run 86 again (it keeps the certificate), and 88 with the step the app is at.
+
+## The app on this instance (2026-11-14)
+
+The frontend runs here, beside the API, as a **static export**: `next build`
+with `output: "export"` writes plain files, and nginx serves them. No process
+runs the app, so it takes no memory beside Postgres and the API and has
+nothing to crash. The team's reasons, kept so nobody undoes them by accident:
+the box is 3.7 GB and has already dropped a session under load; a Node server
+would add 100-400 MB and a third process for the OOM killer to choose from;
+and the app renders nothing on a server (its pages fetch from the API in the
+browser).
+
+**Built in CI, never here.** `next build` peaks at 1-2 GB. Beside Postgres on
+this box, that is the most likely way to lose the database. The `frontend`
+job builds it on a runner and the release archive carries the files.
+
+**One commit is one deployed state, across two repositories.**
+`deploy/frontend.ref` pins the frontend commit, with nothing else in the file
+but comments. The `frontend` job builds exactly that commit on every push, so
+a pin that does not build fails before anyone deploys it. The deploy ships its
+`out/` inside the same archive as the backend. A frontend push deploys nothing
+until a backend commit moves the pin. That is deliberate: the backend is what
+gets deployed, and the frontend is part of what it carries. Moving the pin is
+a backend change like any other: reviewed, tested, deployed as one state.
+
+**On the instance.** `argon-deploy` installs the frontend LAST, after the probe
+passes and the API is up (`36-install-frontend.sh`). A deploy that fails
+anywhere before it never shows a new frontend against an old API. Each release
+gets its own directory under `/var/www/argon-frontend/releases/`, and
+`/var/www/argon-frontend/current` switches to it in one rename. nginx follows
+the link per request, so no reload is needed. The previous two releases are
+kept as the step back:
+```bash
+ls -l /var/www/argon-frontend/current /var/www/argon-frontend/releases/
+cat /var/www/argon-frontend/releases/*.commit         # the frontend commit of each
+# Step back to the previous release's files (the API is unchanged):
+sudo ln -sfn releases/<previous release> /var/www/argon-frontend/current.new &&
+  sudo mv -Tf /var/www/argon-frontend/current.new /var/www/argon-frontend/current
+```
+
+**The repository's settings** (`.github/workflows/deploy.yml`, header):
+- secret `ARGON_FRONTEND_KEY`: the private half of a READ-ONLY deploy key on
+  the frontend repository;
+- variable `ARGON_APP_API_URL`: the API's public origin, which `next build`
+  bakes into the app (`NEXT_PUBLIC_ARGON_API_URL` is fixed at build time).
+
+### Putting the app on its name, once
+
+The app's name is `ARGON_ALLOWED_ORIGINS`' host: one setting, so the name nginx
+serves and the origin the API allows cannot differ. Before the first time,
+`argon-deploy` itself must be the version that runs `36-install-frontend.sh`.
+`25-deploy-user.sh` installs it, and a deploy never replaces it, so:
+
+```bash
+F=/etc/argon/deploy.env
+# 0. After the first deploy that carries a frontend (its "install the frontend"
+#    step was not run: the old argon-deploy did not have it):
+sudo install -m 0755 /opt/argon/src/deploy/argon-deploy /opt/argon/bin/argon-deploy
+sudo ARGON_ENV=$F bash /opt/argon/src/deploy/36-install-frontend.sh
+# 1. BEFORE DNS moves: port 80 serves the app on its name. Check it from
+#    anywhere with the curl line it prints (curl --resolve to the Elastic IP).
+sudo ARGON_ENV=$F bash /opt/argon/src/deploy/88-install-app.sh --preview
+# 2. Change the app name's record to an A record for the Elastic IP. Wait until
+#    it resolves here. The site is dark from this change to the end of step 3.
+# 3. The certificate, the redirect on 80, and 443.
+sudo ARGON_ENV=$F bash /opt/argon/src/deploy/88-install-app.sh --tls
+# 4. Prove the app's certificate renews (as 87 does for the API's).
+sudo ARGON_ENV=$F bash /opt/argon/src/deploy/87-prove-renewal.sh <app name>
+```
+
+`65-check-freshness.sh` alerts on the app's certificate as on the API's, once
+the app has one. Tests: `test/ops/app_site_test.sh` (the site, through real
+nginx on the rendered templates) and `test/ops/frontend_install_test.sh` (the
+install and the switch), each made to fail by `test/ops/sabotage_app_site.sh`.
+Neither 65 nor 87 has tests of its own, now or before.
 
 ## Alerts
 
