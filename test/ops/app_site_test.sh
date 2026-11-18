@@ -38,7 +38,8 @@ cleanup() {
 trap cleanup EXIT
 T=""; RED=()
 red()  { echo "  RED  $T — $*"; RED+=("${T%% *}"); }
-pass() { echo "  pass $T"; }
+PASSED=0
+pass() { echo "  pass $T"; PASSED=$((PASSED+1)); }
 npath() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
 command -v "$NGINX_BIN" >/dev/null || { echo "NOT RUN: no nginx ($NGINX_BIN)"; exit 2; }
 
@@ -263,4 +264,9 @@ fi
 
 echo
 if ((${#RED[@]})); then echo "RED: ${RED[*]}"; exit 1; fi
-echo "all 14 green"
+# The count is the file's own: every test declared here must have passed. A
+# count typed by hand said 14 while 15 ran; a test that ends with no verdict
+# would go unnoticed the same way.
+declared=$(grep -cE '^T="[A-Z][0-9]+ ' "${BASH_SOURCE[0]}")
+if ((PASSED != declared)); then echo "INCOMPLETE: $PASSED of $declared declared tests passed, and none was red"; exit 1; fi
+echo "all $declared green"
