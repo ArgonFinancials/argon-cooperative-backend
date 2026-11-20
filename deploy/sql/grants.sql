@@ -289,5 +289,23 @@ BEGIN
   END IF;
 END $$;
 
+-- 0034: OFFICERS ENROL BY EMAIL. The app sets a member's email with the
+-- secretary's act (the trigger checks the act; the time is the database's),
+-- and relinks a record to its person; it updates nothing else on members
+-- (P80). It asks for an emailed code (delivery) but never names the address
+-- it goes to: the database writes the member's own (P81). It records each
+-- send, never its time (P82), and never edits one (P83).
+DO $$
+BEGIN
+  IF to_regclass('public.email_sends') IS NOT NULL THEN
+    REVOKE UPDATE ON members FROM argon_app;
+    GRANT UPDATE (user_id, email, email_set_by_act) ON members TO argon_app;
+    GRANT INSERT (delivery) ON enrolment_codes TO argon_app;
+    GRANT SELECT (delivery, sent_to) ON enrolment_codes TO argon_app;
+    GRANT SELECT ON email_sends TO argon_app;
+    GRANT INSERT (id, member_id, code_id, kind, sent_to, outcome, provider_id, detail) ON email_sends TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

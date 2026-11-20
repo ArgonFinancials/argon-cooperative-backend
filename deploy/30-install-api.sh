@@ -59,6 +59,17 @@ case ${ARGON_VFD_WEBHOOK:-} in
 VFD_WEBHOOK_SECRET=${VFD_WEBHOOK_SECRET}" ;;
   *) die "ARGON_VFD_WEBHOOK must be hmac, unsigned or off: add ARGON_VFD_WEBHOOK=off to $ARGON_ENV (deploy/README.md, the wallet)" ;;
 esac
+# Officers' enrolment codes by email (0034): said, never inherited. off until
+# SES is set up (the slip still works; issuing by email answers 503).
+case ${ARGON_EMAIL:-} in
+  off) email_env="ARGON_EMAIL=off" ;;
+  ses)
+    require_env EMAIL_FROM AWS_REGION
+    email_env="ARGON_EMAIL=ses
+EMAIL_FROM=${EMAIL_FROM}
+AWS_REGION=${AWS_REGION}" ;;
+  *) die "ARGON_EMAIL must be ses or off: add ARGON_EMAIL=off to $ARGON_ENV until SES is set up (deploy/README.md, a new key on an existing instance)" ;;
+esac
 cat > /etc/argon/argon.env <<EOF
 DATABASE_URL=postgres://argon_app:${ARGON_APP_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
 AUTH_DATABASE_URL=postgres://argon_auth:${ARGON_AUTH_PASSWORD}@postgres:5432/${ARGON_DB}?sslmode=disable
@@ -69,6 +80,7 @@ ENV=production
 ARGON_ALLOWED_ORIGINS=${ARGON_ALLOWED_ORIGINS:-}
 ${sms_env}
 ${hook_env}
+${email_env}
 EOF
 # The wallet worker (stage 3): its own file, its own role (argon_wallet, the
 # only one that writes what VFD said). ARGON_VFD is said, never inherited:

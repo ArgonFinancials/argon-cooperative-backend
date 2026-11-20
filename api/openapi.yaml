@@ -217,11 +217,12 @@ components:
         code; caught by TestApiMoney01 before it shipped. member_register
         (0031): the secretary registering members. payment_resolution (0033):
         an officer proposing, confirming or rejecting a payment's resolution.
+        member_email (0034): the secretary setting a member's email.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
-             withdrawal_request, enrolment_issue, member_register, payment_resolution]
+             withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email]
 
     PinProofRequest:
       type: object
@@ -255,6 +256,10 @@ components:
         joinedOn: { type: string, format: date, description: "When they joined the society, from its records. Not in the future." }
         collectionChannel: { type: string, enum: [payroll, subscription, cash] }
         nextOfKin: { $ref: '#/components/schemas/NextOfKin' }
+        email:
+          type: string
+          maxLength: 254
+          description: "Optional. Where an officer's enrolment code is emailed (0034). One address; lower-cased by the server; 422 bad_email otherwise."
         pinProofId: { type: string, format: uuid, description: "The secretary's own proof, minted for member_register." }
 
     NextOfKin:
@@ -293,6 +298,10 @@ components:
         joinedOn: { type: string, format: date }
         collectionChannel: { type: string, enum: [payroll, subscription, cash] }
         nextOfKin: { $ref: '#/components/schemas/NextOfKin' }
+        email:
+          type: string
+          maxLength: 254
+          description: "Optional. Where an officer's enrolment code is emailed (0034). One address; lower-cased by the server; 422 bad_email otherwise."
 
     RegisteredRecord:
       type: object
@@ -329,6 +338,7 @@ components:
             - branch_unknown
             - joined_in_future
             - next_of_kin_incomplete
+            - bad_email
         message: { type: string }
         rows:
           type: array
@@ -350,7 +360,7 @@ components:
 
     MemberSummary:
       type: object
-      required: [memberId, memberNumber, fullName, phone, branchCode, status, joinedOn, posts, hasPin, hasTrustedDevice, enrolment, openingBalancePosted]
+      required: [memberId, memberNumber, fullName, phone, branchCode, status, joinedOn, posts, hasPin, hasTrustedDevice, enrolment, openingBalancePosted, email, emailSetBy, emailSetAt]
       properties:
         memberId: { type: string, format: uuid }
         memberNumber: { type: string }
@@ -371,6 +381,12 @@ components:
         hasPin: { type: boolean }
         openingBalancePosted: { type: boolean, description: "Whether an opening balance has been posted for them (postLedgerBatch): what the treasurer's screen still has to do." }
         hasTrustedDevice: { type: boolean }
+        email: { type: string, nullable: true, description: "Where an emailed enrolment code goes; null when none is recorded (0034)." }
+        emailSetBy:
+          nullable: true
+          description: "Who set (or cleared) the email: that officer does not issue this member's emailed code (409 email_set_by_you). null when never set."
+          allOf: [{ $ref: '#/components/schemas/EmailSetter' }]
+        emailSetAt: { type: string, format: date-time, nullable: true }
         enrolment:
           type: string
           enum: [enrolled, code_live, code_pending, none]
@@ -379,6 +395,24 @@ components:
             unused. code_pending: a signatory's code with one half issued. none.
             The issuing screen reads this with posts[].isSignatory: a signatory's
             code comes in two halves, from two other signatories.
+
+    EmailSetter:
+      type: object
+      required: [userId, name]
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+
+    SetMemberEmail:
+      type: object
+      required: [email, pinProofId]
+      properties:
+        email:
+          type: string
+          nullable: true
+          maxLength: 254
+          description: "The address, or null to clear it. Lower-cased by the server."
+        pinProofId: { type: string, format: uuid, description: "The secretary's own proof, minted for member_email." }
 
     LedgerBatch:
       type: object
@@ -1524,13 +1558,18 @@ components:
       type: object
       required: [pinProofId]
       properties:
+        delivery:
+          type: string
+          enum: [slip, email]
+          default: slip
+          description: "slip: the code is shown to its issuer, once, as before. email: the server sends it to the member's recorded email; the issuer never sees it (0034)."
         pinProofId:
           type: string
           format: uuid
           description: The issuer's own proof, minted for enrolment_issue.
     EnrolmentSlip:
       type: object
-      required: [codeId, kind, slip, expiresAt, complete]
+      required: [codeId, kind, delivery, expiresAt, complete]
       properties:
         codeId: { type: string, format: uuid }
         kind:
@@ -1546,7 +1585,11 @@ components:
           description: |
             SHOWN ONCE, to its issuer, and never again by any endpoint: the
             server keeps only digests. whole: XXXX-XXXX-XXXX-XXXX. A half:
-            XXXX-XXXX. Hand it over in person.
+            XXXX-XXXX. Hand it over in person. Absent when delivery is email.
+        delivery: { type: string, enum: [slip, email] }
+        sentTo:
+          type: string
+          description: "delivery email only: the address it was sent to, masked (first letter, •••, @domain)."
         expiresAt: { type: string, format: date-time }
         complete:
           type: boolean
@@ -1571,7 +1614,9 @@ components:
         voidReason:
           type: string
           enum: [reissued, wrong_tries]
-        expired: { type: boolean, description: "Live but past its 30 days: it redeems nothing." }
+        expired: { type: boolean, description: "Live but past its expiry (30 days for a slip, 72 hours for an email): it redeems nothing." }
+        delivery: { type: string, enum: [slip, email] }
+        sentTo: { type: string, description: "delivery email only: the address it was sent to, masked." }
         wrongTries: { type: integer }
         usedAt: { type: string, format: date-time }
         usedDeviceId:
@@ -1581,8 +1626,11 @@ components:
         replaces: { type: string, format: uuid }
     EnrolmentCodeHistory:
       type: object
-      required: [codes]
+      required: [codes, emailDelivery]
       properties:
+        emailDelivery:
+          type: boolean
+          description: "Whether this server can email a code at all (a sender is configured). False: offer the slip only. Says nothing about the member: their MemberSummary.email does."
         codes:
           type: array
           description: Newest first. Never a code or a digest.
@@ -2885,6 +2933,57 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /societies/{societyId}/members/{memberId}/email:
+    put:
+      operationId: setMemberEmail
+      x-argon-built: true
+      summary: The secretary sets (or clears) a member's email, on their own PIN step-up
+      description: |
+        Where the member's enrolment code is emailed (0034): a security
+        setting, so it is set only by the society's current secretary, on their
+        own step-up (act member_email), and recorded with who set it and when.
+        The officer who sets it does not issue the member's emailed code.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetMemberEmail' }
+      responses:
+        '200':
+          description: Set. The member, as the register shows them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberSummary' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for member_email, the caller's own, unspent); not_permitted (not the society's current secretary)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "bad_email: not one address."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /societies/{societyId}/members/{memberId}/enrolment-codes:
     post:
       operationId: issueEnrolmentCode
@@ -2901,6 +3000,19 @@ paths:
 
         The slip is SHOWN ONCE, in this response, to its issuer. Neither
         signatory ever sees the other's half: the server keeps only digests.
+
+        delivery "email" (0034, officers who do not meet in person): the server
+        draws the code (or half), sends it to the member's recorded email, and
+        answers sentTo masked; the issuer never sees it. It lives 72 hours. The
+        officer who set that email issues neither the code nor either half. A
+        second half goes the way the first did. The email is sent inside the
+        issuing transaction: if it is not sent, nothing is issued (502).
+
+        NO REFUSAL SPENDS THE PIN PROOF: it is spent by the act inside the
+        issuing transaction, which any refusal rolls back, so the same proof
+        serves a slip after an email refusal. The refusals that need nothing
+        drawn (no_email, email_set_by_you, delivery_mismatch,
+        email_unavailable) are checked before the transaction opens.
       security: [{ session: [] }]
       parameters:
         - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2937,12 +3049,22 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: "second_signatory_needed: this signatory issued the first half; a different signatory issues the other."
+          description: "second_signatory_needed: this signatory issued the first half; a different signatory issues the other. email_set_by_you: you set or last changed this member's email; another officer issues their emailed code. delivery_mismatch: a second half goes the way its first half went."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "no_email: the member has no email recorded; the secretary sets it (setMemberEmail), or issue a slip."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '502':
+          description: "email_not_sent: the email could not be sent; nothing was issued (the transaction was rolled back) and the proof is unspent. Try again, or issue a slip."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '503':
-          description: "enrolment_unavailable — this server runs without an auth service, which draws the codes."
+          description: "enrolment_unavailable — this server runs without an auth service, which draws the codes. email_unavailable — no email sender is configured on this server (EnrolmentCodeHistory.emailDelivery is false): issue a slip."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

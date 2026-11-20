@@ -58,7 +58,7 @@ func apiServer(t *testing.T) *httptest.Server {
 		if serr != nil {
 			t.Fatalf("FIXTURE: cannot construct the auth service: %v", serr)
 		}
-		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, CSRFKey: testCSRFKey})
+		h, err = api.NewServer(api.Deps{DB: app, Auth: svc, CSRFKey: testCSRFKey, Email: testMail})
 		if err != nil {
 			t.Fatalf("FIXTURE: cannot construct the API: %v", err)
 		}

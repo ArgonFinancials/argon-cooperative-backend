@@ -153,6 +153,7 @@ func TestApiWebhook06_TheConfigurationNamesTheMode(t *testing.T) {
 	t.Setenv("ARGON_CSRF_KEY", strings.Repeat("ab", 32))
 	t.Setenv("AUTH_DATABASE_URL", "")
 	t.Setenv("AUTH_CODE_KEY", "")
+	t.Setenv("ARGON_EMAIL", "off") // 0034: said, never inherited
 	secret := "a-webhook-secret-that-is-long-enough-1234"
 	for _, c := range []struct{ mode, secret, what string }{
 		{"", "", "no ARGON_VFD_WEBHOOK"}, {"yes", "", "an unknown mode"},

@@ -74,6 +74,8 @@ type fakeAPI struct {
 	csrfKey []byte
 	// webhook: how VFD's notifications are taken (apifake_webhook_test.go).
 	webhook api.Webhook
+	// noEmail: started with no email sender (0034), as a server is until SES is set up.
+	noEmail bool
 }
 
 // The paths that need no session, as in the real server.

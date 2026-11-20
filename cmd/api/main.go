@@ -24,6 +24,7 @@ import (
 	"github.com/argon/backend/internal/auth"
 	"github.com/argon/backend/internal/config"
 	"github.com/argon/backend/internal/db"
+	"github.com/argon/backend/internal/email"
 )
 
 func main() {
@@ -77,6 +78,17 @@ func main() {
 	deps := api.Deps{DB: pool, Log: log, AllowedOrigins: api.ParseOrigins(cfg.AllowedOrigins), CSRFKey: cfg.CSRFKey,
 		VFDWebhook: api.Webhook{Mode: cfg.VFDWebhook, Secret: cfg.VFDWebhookSecret}}
 	log.Info("VFD's notifications", "mode", cfg.VFDWebhook)
+	// Officers' enrolment codes by email (0034): SES with the instance's role,
+	// or off (the slip still works; issuing by email answers 503).
+	if cfg.Email == "ses" {
+		sender, err := email.NewSES(ctx, cfg.AWSRegion, cfg.EmailFrom, log)
+		if err != nil {
+			log.Error("email sender", "err", err)
+			os.Exit(1)
+		}
+		deps.Email = sender
+	}
+	log.Info("officers' enrolment email", "mode", cfg.Email)
 	if len(deps.AllowedOrigins) == 0 {
 		log.Info("no browser origin may call this API (ARGON_ALLOWED_ORIGINS is empty: closed by default)")
 	} else {

@@ -159,6 +159,24 @@ func loadConfig() (config.Config, error) {
 	default:
 		return c, errors.New("ARGON_VFD_WEBHOOK must be set to hmac, unsigned or off")
 	}
+	// Officers' enrolment email (0034): said, never defaulted.
+	c.Email = os.Getenv("ARGON_EMAIL")
+	if c.Email == "" && brk == "email_mode_defaulted" {
+		c.Email = "off"
+	}
+	switch c.Email {
+	case "off":
+	case "ses":
+		c.EmailFrom, c.AWSRegion = os.Getenv("EMAIL_FROM"), os.Getenv("AWS_REGION")
+		if !strings.Contains(c.EmailFrom, "@") || strings.ContainsAny(c.EmailFrom, " ,;<>") {
+			return c, errors.New("ARGON_EMAIL=ses: EMAIL_FROM must be the one verified sender address")
+		}
+		if c.AWSRegion == "" && brk != "ses_region_optional" {
+			return c, errors.New("ARGON_EMAIL=ses: AWS_REGION must be set")
+		}
+	default:
+		return c, errors.New("ARGON_EMAIL must be set to ses or off")
+	}
 	// The SMS sender, with an auth service (2026-10-28).
 	if os.Getenv("AUTH_DATABASE_URL") == "" {
 		return c, nil

@@ -20,11 +20,27 @@
 //	history_issuer_unnamed      the history names the issuer by id, not name
 //	history_no_device           the history does not say what device a code trusted
 //	history_oldest_first        the history is oldest first
+//	email_slip_shown            an emailed code is also shown to its issuer (as a slip)
+//	email_issued_unsent         a send that fails still issues the code (201)
+//	email_setter_db             the officer who set the email is refused by the database (500), not told
+//	email_no_address_db         a member with no email is refused by the database (500), not told
+//	email_mismatch_unchecked    a second half goes by slip after an emailed first half
+//	email_unmasked              sentTo is the whole address
+//	email_unavailable_500       with no sender, issuing by email answers 500
+//	history_email_always        the history says email works with no sender configured
+//	set_email_any_officer       an officer who is not the secretary is refused by the database (500)
+//	set_email_bad_as_500        a bad address reaches the database (500), not 422
+//	email_setter_hidden         the summary does not say who set the email
+//	register_email_dropped      an email given at registration is not recorded
+//	history_sent_to_unmasked    the history shows the whole address
+//	email_mode_defaulted        (config) no ARGON_EMAIL starts as off
+//	ses_region_optional         (config) ses starts with no AWS_REGION
 package tier1
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +49,7 @@ import (
 
 	"github.com/argon/backend/internal/api"
 	"github.com/argon/backend/internal/auth"
+	"github.com/argon/backend/internal/email"
 )
 
 func (f *fakeAPI) PostEnrol(ctx context.Context, req api.PostEnrolRequestObject) (api.PostEnrolResponseObject, error) {
@@ -130,6 +147,36 @@ func (f *fakeAPI) IssueEnrolmentCode(ctx context.Context, req api.IssueEnrolment
 			return api.IssueEnrolmentCode409JSONResponse{Code: "second_signatory_needed", Message: "you issued the first half; a different current signatory issues the other"}, nil
 		}
 	}
+	delivery := "slip"
+	if req.Body.Delivery != nil {
+		delivery = string(*req.Body.Delivery)
+	}
+	if pending != "" && f.brk != "email_mismatch_unchecked" {
+		var pd string
+		f.db.QueryRow(ctx, `SELECT delivery FROM enrolment_codes WHERE id = $1`, pending).Scan(&pd)
+		if pd != delivery {
+			return api.IssueEnrolmentCode409JSONResponse{Code: "delivery_mismatch", Message: "the second half goes the way the first went"}, nil
+		}
+	}
+	if delivery == "email" {
+		if f.noEmail {
+			if f.brk == "email_unavailable_500" {
+				return nil, errors.New("no sender")
+			}
+			return api.IssueEnrolmentCode503JSONResponse{Code: "email_unavailable", Message: "no email sender is configured"}, nil
+		}
+		var addr, setter *string
+		f.db.QueryRow(ctx, `SELECT m.email, a.actor_user_id::text FROM members m LEFT JOIN credential_acts a ON a.id = m.email_set_by_act WHERE m.id = $1`, member).Scan(&addr, &setter)
+		if addr == nil && f.brk != "email_no_address_db" {
+			return api.IssueEnrolmentCode422JSONResponse{Code: "no_email", Message: "no email recorded"}, nil
+		}
+		if setter != nil && *setter == caller && f.brk != "email_setter_db" {
+			return api.IssueEnrolmentCode409JSONResponse{Code: "email_set_by_you", Message: "another officer emails it"}, nil
+		}
+	}
+	var shown, sentTo string
+	var sent *string
+	var sendErr error
 	var out api.IssueEnrolmentCode201JSONResponse
 	var id string
 	var expires time.Time
@@ -142,29 +189,56 @@ func (f *fakeAPI) IssueEnrolmentCode(ctx context.Context, req api.IssueEnrolment
 		switch {
 		case signs && pending != "":
 			text, d := svc.NewEnrolmentHalf()
-			out.Kind, out.Slip, out.Complete = api.SecondHalf, text, true
+			out.Kind, out.Complete, shown = api.SecondHalf, true, text
 			if f.brk == "issue_second_sees_first" {
 				if first, ok := fakeHalves.Load(pending); ok {
-					out.Slip = text + " " + first.(string)
+					shown = text + " " + first.(string)
 				}
 			}
 			id = pending
-			return x.QueryRow(ctx, `UPDATE enrolment_codes SET second_half_digest = $2, second_by_act = $3 WHERE id = $1 RETURNING expires_at`,
-				pending, d, act).Scan(&expires)
+			if err := x.QueryRow(ctx, `UPDATE enrolment_codes SET second_half_digest = $2, second_by_act = $3 WHERE id = $1 RETURNING expires_at, sent_to`,
+				pending, d, act).Scan(&expires, &sent); err != nil {
+				return err
+			}
 		case signs:
 			text, d := svc.NewEnrolmentHalf()
-			out.Kind, out.Slip, out.Complete = api.FirstHalf, text, false
-			err := x.QueryRow(ctx, `INSERT INTO enrolment_codes (user_id, member_id, first_half_digest, issued_by_act) VALUES ($1, $2, $3, $4)
-				RETURNING id::text, expires_at`, target, member, d, act).Scan(&id, &expires)
+			out.Kind, out.Complete, shown = api.FirstHalf, false, text
+			if err := x.QueryRow(ctx, `INSERT INTO enrolment_codes (user_id, member_id, first_half_digest, issued_by_act, delivery) VALUES ($1, $2, $3, $4, $5)
+				RETURNING id::text, expires_at, sent_to`, target, member, d, act, delivery).Scan(&id, &expires, &sent); err != nil {
+				return err
+			}
 			fakeHalves.Store(id, text)
-			return err
 		default:
 			text, d := svc.NewEnrolmentCode()
-			out.Kind, out.Slip, out.Complete = api.Whole, text, true
-			return x.QueryRow(ctx, `INSERT INTO enrolment_codes (user_id, member_id, code_digest, issued_by_act) VALUES ($1, $2, $3, $4)
-				RETURNING id::text, expires_at`, target, member, d, act).Scan(&id, &expires)
+			out.Kind, out.Complete, shown = api.Whole, true, text
+			if err := x.QueryRow(ctx, `INSERT INTO enrolment_codes (user_id, member_id, code_digest, issued_by_act, delivery) VALUES ($1, $2, $3, $4, $5)
+				RETURNING id::text, expires_at, sent_to`, target, member, d, act, delivery).Scan(&id, &expires, &sent); err != nil {
+				return err
+			}
 		}
+		if delivery == "slip" || f.brk == "email_slip_shown" {
+			out.Slip = &shown
+		}
+		if delivery == "slip" {
+			return nil
+		}
+		sentTo = deref(sent)
+		pid, err := testMail.Send(ctx, email.Message{To: sentTo, Subject: "Your Argon enrolment code", Text: "Your enrolment code: " + shown})
+		if err != nil {
+			sendErr = err
+			if f.brk == "email_issued_unsent" {
+				return nil
+			}
+			return err
+		}
+		_, err = x.Exec(ctx, `INSERT INTO email_sends (member_id, code_id, kind, sent_to, outcome, provider_id) VALUES ($1, $2, $3, $4, 'sent', $5)`,
+			member, id, string(out.Kind), sentTo, pid)
+		return err
 	})
+	if sendErr != nil && f.brk != "email_issued_unsent" {
+		f.db.Exec(ctx, `INSERT INTO email_sends (member_id, kind, sent_to, outcome, detail) VALUES ($1, $2, $3, 'failed', $4)`, member, string(out.Kind), sentTo, sendErr.Error())
+		return api.IssueEnrolmentCode502JSONResponse{Code: "email_not_sent", Message: "not sent; nothing issued"}, nil
+	}
 	if err != nil {
 		if f.brk == "issue_refusals_as_500" {
 			return nil, err
@@ -180,6 +254,14 @@ func (f *fakeAPI) IssueEnrolmentCode(ctx context.Context, req api.IssueEnrolment
 		return nil, err
 	}
 	out.CodeId, out.ExpiresAt = uuid.MustParse(id), expires
+	out.Delivery = api.EnrolmentSlipDelivery(delivery)
+	if delivery == "email" {
+		m := email.Masked(sentTo)
+		if f.brk == "email_unmasked" {
+			m = sentTo
+		}
+		out.SentTo = &m
+	}
 	return out, nil
 }
 
@@ -205,7 +287,7 @@ func (f *fakeAPI) GetEnrolmentCodes(ctx context.Context, req api.GetEnrolmentCod
 	rows, err := f.db.Query(ctx, `SELECT c.id, c.issued_at, c.expires_at, `+who+`, c.issued_by_operator IS NOT NULL, u2.full_name,
 		CASE WHEN c.used_at IS NOT NULL THEN 'used' WHEN c.voided_at IS NOT NULL THEN 'voided' WHEN c.pending THEN 'waiting_for_second_half' ELSE 'live' END,
 		c.void_reason, c.used_at IS NULL AND c.voided_at IS NULL AND auth_now() >= c.expires_at, c.wrong_tries, c.used_at, c.used_device_id, c.replaces_id,
-		coalesce(c.code_digest, '')
+		coalesce(c.code_digest, ''), c.delivery, c.sent_to
 		FROM enrolment_codes c
 		LEFT JOIN credential_acts a1 ON a1.id = c.issued_by_act LEFT JOIN users u1 ON u1.id = a1.actor_user_id
 		LEFT JOIN credential_acts a2 ON a2.id = c.second_by_act LEFT JOIN users u2 ON u2.id = a2.actor_user_id
@@ -214,15 +296,24 @@ func (f *fakeAPI) GetEnrolmentCodes(ctx context.Context, req api.GetEnrolmentCod
 		return nil, err
 	}
 	defer rows.Close()
-	out := api.GetEnrolmentCodes200JSONResponse{Codes: []api.EnrolmentCodeRecord{}}
+	out := api.GetEnrolmentCodes200JSONResponse{Codes: []api.EnrolmentCodeRecord{}, EmailDelivery: !f.noEmail || f.brk == "history_email_always"}
 	for rows.Next() {
 		var r api.EnrolmentCodeRecord
-		var state, d string
-		var reason, second *string
+		var state, d, delivery string
+		var reason, second, sentTo *string
 		var tries int16
 		if err := rows.Scan(&r.CodeId, &r.IssuedAt, &r.ExpiresAt, &r.IssuedBy, &r.IssuedByOperator, &second, &state,
-			&reason, &r.Expired, &tries, &r.UsedAt, &r.UsedDeviceId, &r.Replaces, &d); err != nil {
+			&reason, &r.Expired, &tries, &r.UsedAt, &r.UsedDeviceId, &r.Replaces, &d, &delivery, &sentTo); err != nil {
 			return nil, err
+		}
+		dl := api.EnrolmentCodeRecordDelivery(delivery)
+		r.Delivery = &dl
+		if sentTo != nil {
+			m := email.Masked(*sentTo)
+			if f.brk == "history_sent_to_unmasked" {
+				m = *sentTo
+			}
+			r.SentTo = &m
 		}
 		r.State, r.WrongTries, r.SecondHalfBy = api.EnrolmentCodeRecordState(state), int(tries), second
 		if reason != nil {
@@ -238,4 +329,53 @@ func (f *fakeAPI) GetEnrolmentCodes(ctx context.Context, req api.GetEnrolmentCod
 		out.Codes = append(out.Codes, r)
 	}
 	return out, rows.Err()
+}
+
+func (f *fakeAPI) SetMemberEmail(ctx context.Context, req api.SetMemberEmailRequestObject) (api.SetMemberEmailResponseObject, error) {
+	caller := ctx.Value(ctxUser{}).(string)
+	society, member := req.SocietyId.String(), req.MemberId.String()
+	if !f.officerHere(ctx, caller, society) {
+		return api.SetMemberEmail404JSONResponse{Code: "not_found", Message: "no such member"}, nil
+	}
+	var here bool
+	f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND society_id = $2)`, member, society).Scan(&here)
+	if !here {
+		return api.SetMemberEmail404JSONResponse{Code: "not_found", Message: "no such member"}, nil
+	}
+	b := req.Body
+	var addr any
+	if b.Email != nil {
+		e := strings.ToLower(strings.TrimSpace(*b.Email))
+		if !emailRef.MatchString(e) && f.brk != "set_email_bad_as_500" {
+			return api.SetMemberEmail422JSONResponse{Code: "bad_email", Message: "not one address"}, nil
+		}
+		addr = e
+	}
+	if f.brk != "set_email_any_officer" {
+		var sec bool
+		f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM appointments a JOIN members m ON m.id = a.member_id WHERE m.user_id = $1 AND a.society_id = $2
+			AND a.post = 'secretary' AND a.held_from <= current_date AND (a.held_until IS NULL OR a.held_until >= current_date))`, caller, society).Scan(&sec)
+		if !sec {
+			return api.SetMemberEmail403JSONResponse{Code: "not_permitted", Message: "the secretary sets a member's email"}, nil
+		}
+	}
+	err := pgx.BeginFunc(ctx, f.db, func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(ctx, `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('member_email', $1, $2) RETURNING id`, caller, b.PinProofId.String()).Scan(&act); err != nil {
+			return err
+		}
+		_, err := x.Exec(ctx, `UPDATE members SET email = $2, email_set_by_act = $3 WHERE id = $1`, member, addr, act)
+		return err
+	})
+	if err != nil {
+		if lockStepUpRefused[pgConstraint(err)] {
+			return api.SetMemberEmail403JSONResponse{Code: "step_up_required", Message: "a fresh PIN proof for member_email, your own"}, nil
+		}
+		return nil, err
+	}
+	s, err := f.summary(ctx, f.db, member)
+	if err != nil {
+		return nil, err
+	}
+	return api.SetMemberEmail200JSONResponse(s), nil
 }

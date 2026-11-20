@@ -160,6 +160,34 @@ sudo grep -qE '^ARGON_VFD_WEBHOOK=(hmac|unsigned|off)$' "$F" || { sudo sed -i '/
 sudo grep -c '^ARGON_WALLET_PASSWORD=' "$F"; sudo grep '^ARGON_VFD=\|^ARGON_VFD_WEBHOOK=' "$F"   # 1, and two lines
 ```
 
+`ARGON_EMAIL` (2026-11-20, officers' enrolment codes by email, 0034) is the fifth. A decision, not a secret: `off` until SES is set up (below). With `off` the slip works as before and issuing by email answers 503 `email_unavailable`; the officer's screen hides the choice.
+
+```bash
+F=/etc/argon/deploy.env
+sudo grep -qE '^ARGON_EMAIL=(ses|off)$' "$F" || { sudo sed -i '/^ARGON_EMAIL=/d' "$F"; echo "ARGON_EMAIL=off" | sudo tee -a "$F" >/dev/null; }
+sudo grep '^ARGON_EMAIL=' "$F"   # must print one line
+```
+
+### Enrolment codes by email: setting up SES
+
+The API sends with Amazon SES (sesv2 `SendEmail`), signed by the instance's own role: no key is stored anywhere. Until every step here is done, keep `ARGON_EMAIL=off`.
+
+1. **Verify the sending domain** in SES, in the region the instance uses: a domain identity with **Easy DKIM** (three CNAMEs in DNS). Add **SPF** (`include:amazonses.com` on a custom MAIL FROM subdomain) and a **DMARC** record. A code that lands in spam is a code that never arrived.
+2. **Leave the SES sandbox** (request production access). In the sandbox SES sends only to verified addresses, so every officer's email but yours would fail with 502 `email_not_sent`.
+3. **Allow the instance role `ses:SendEmail`**, scoped to the identity: `arn:aws:ses:<region>:<account>:identity/<domain>`.
+4. **Let the container reach the role.** The API runs in a container, one network hop beyond the instance. With IMDSv2's default hop limit of 1 the container gets no credentials and every send fails. Set it to 2: `aws ec2 modify-instance-metadata-options --instance-id <id> --http-put-response-hop-limit 2 --http-tokens required`.
+5. **Set the three lines** in `/etc/argon/deploy.env`, then deploy (or run `30-install-api.sh` and restart the API):
+
+```bash
+ARGON_EMAIL=ses
+EMAIL_FROM=codes@example.com           # one bare address on the verified domain
+AWS_REGION=eu-west-1                   # the region the identity was verified in
+```
+
+6. **Prove it:** issue one emailed code to your own member record from a second officer's account, and read the message. The API logs `officers' enrolment email mode=ses` at start, and logs each send with the recipient's domain only. `email_sends` records each send and each failure. A failure's `detail` is the provider's words; the code itself is never stored.
+
+Cost: $0.10 per 1,000 messages. One message per code (two for a signatory's halves).
+
 **A new ROLE is not a new key.** A role is created by `20-roles.sh`, which the first install ran once. Until 2026-11-11 no deploy ran it again, so a release that added a role (`argon_wallet`) reached its probe without it, and the deploy of e05a166 died there (finding 73). `40-migrate.sh` now runs `20-roles.sh` on the server before its backup, on every deploy. It is idempotent and sets each role's password to what `deploy.env` says. So a release that adds a role needs only its password line, above, written before the deploy. If `deploy.env` lacks the password, the deploy stops at the roles: nothing is backed up, migrated or restarted.
 
 Why not a plain append: run twice, it leaves two keys; the later one wins, and every open page's CSRF token is refused until it reloads, which would look like the cookie work was broken rather than the install. Why not the first-install `sed s|^…=.*|…|` alone: on a file without the line it changes nothing and says nothing.

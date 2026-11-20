@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/argon/backend/internal/email"
 	"log/slog"
 	"net/http"
 
@@ -28,6 +29,9 @@ type Deps struct {
 	// VFDWebhook: how VFD's notifications are taken (webhook.go). The zero
 	// value is off: refused.
 	VFDWebhook Webhook
+	// Email: the sender of officers' enrolment codes (0034). nil: off, and
+	// issuing by email answers 503 email_unavailable; the slip still works.
+	Email email.Sender
 }
 
 type server struct {
@@ -36,6 +40,10 @@ type server struct {
 	auth    auth.Service
 	csrfKey []byte
 	webhook Webhook
+	email   email.Sender
+	// appOrigin: the app's address, for the link in an enrolment email (the
+	// first allowed origin; "" when none).
+	appOrigin string
 }
 
 type (
@@ -55,7 +63,10 @@ func NewServer(d Deps) (http.Handler, error) {
 	if len(d.CSRFKey) == 0 {
 		return nil, errors.New("api: Deps.CSRFKey is required")
 	}
-	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey, webhook: d.VFDWebhook}
+	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey, webhook: d.VFDWebhook, email: d.Email}
+	if len(d.AllowedOrigins) > 0 {
+		s.appOrigin = d.AllowedOrigins[0]
+	}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

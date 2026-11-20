@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -28,6 +29,11 @@ type Config struct {
 	// hmac, unsigned or off, no default; hmac needs VFD_WEBHOOK_SECRET.
 	VFDWebhook       string
 	VFDWebhookSecret []byte
+	// The enrolment code sender for officers (internal/email, 0034):
+	// ARGON_EMAIL, ses or off, no default; ses needs EMAIL_FROM (the verified
+	// sender address) and AWS_REGION. The credentials are the instance's role.
+	Email                string
+	EmailFrom, AWSRegion string
 }
 
 func Load() (Config, error) {
@@ -69,6 +75,9 @@ func Load() (Config, error) {
 	if err := c.loadWebhook(); err != nil {
 		return c, err
 	}
+	if err := c.loadEmail(); err != nil {
+		return c, err
+	}
 	return c, c.loadSMS()
 }
 
@@ -88,6 +97,26 @@ func (c *Config) loadWebhook() error {
 		return nil
 	}
 	return fmt.Errorf("ARGON_VFD_WEBHOOK must be set to hmac, unsigned or off (deploy/README.md, the wallet)")
+}
+
+// loadEmail: whether officers' codes can be emailed, said and never inherited.
+// off: issuing by email answers 503 email_unavailable, and the slip works.
+func (c *Config) loadEmail() error {
+	c.Email = os.Getenv("ARGON_EMAIL")
+	switch c.Email {
+	case "off":
+		return nil
+	case "ses":
+		c.EmailFrom, c.AWSRegion = os.Getenv("EMAIL_FROM"), os.Getenv("AWS_REGION")
+		if !strings.Contains(c.EmailFrom, "@") || strings.ContainsAny(c.EmailFrom, " ,;<>") {
+			return fmt.Errorf("ARGON_EMAIL=ses: EMAIL_FROM must be the one verified sender address")
+		}
+		if c.AWSRegion == "" {
+			return fmt.Errorf("ARGON_EMAIL=ses: AWS_REGION must be set (the SES region the sender is verified in)")
+		}
+		return nil
+	}
+	return fmt.Errorf("ARGON_EMAIL must be set to ses or off (deploy/README.md, a new key on an existing instance)")
 }
 
 func envOr(key, fallback string) string {

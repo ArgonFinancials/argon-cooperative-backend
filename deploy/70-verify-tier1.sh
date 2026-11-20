@@ -671,6 +671,15 @@ probe req P78 argon_app '42501.*permission denied for table payment_resolutions'
 probe req P79 argon_app '42501.*permission denied for table payment_resolution_decisions' "app turns a rejection into a confirmation"   "UPDATE payment_resolution_decisions SET confirmed = true WHERE false;"
 probe ctl K66 argon_app '' "control: the app reads proposals, decisions, what is open, and which payments are credited"   "SELECT count(*) FROM payment_resolutions; SELECT count(*) FROM payment_resolution_decisions; SELECT count(*) FROM payment_resolutions_open; SELECT count(*) FROM vfd_inflow_postings;"
 fi
+# 0034: an email is set with the secretary's act; an emailed code goes to the
+# member's own address, which the app cannot name; sends are never rewritten.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.email_sends') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P80 argon_app '42501.*permission denied for table members' "app backdates when an email was set"   "UPDATE members SET email_set_at = $TODAY - 365 WHERE false;"
+probe req P81 argon_app '42501.*permission denied for table enrolment_codes' "app names the address an emailed code goes to"   "INSERT INTO enrolment_codes (user_id, member_id, code_digest, issued_by_act, delivery, sent_to) VALUES ($U1, $M1, repeat('a', 64), $U1, 'email', 'attacker@example.net');"
+probe req P82 argon_app '42501.*permission denied for table email_sends' "app backdates a send"   "INSERT INTO email_sends (member_id, kind, sent_to, outcome, detail, at) VALUES ($M1, 'whole', 'x@example.com', 'failed', 'probe', $TODAY - 1);"
+probe req P83 argon_app '42501.*permission denied for table email_sends' "app rewrites a failed send as sent"   "UPDATE email_sends SET outcome = 'sent' WHERE false;"
+probe ctl K67 argon_app '' "control: the app reads sends and how each code was delivered"   "SELECT count(*) FROM email_sends; SELECT delivery, sent_to FROM enrolment_codes LIMIT 1;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

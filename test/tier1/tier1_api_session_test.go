@@ -691,6 +691,7 @@ func TestApiSession32_TheConfigurationRequiresTheCsrfKey(t *testing.T) {
 	t.Setenv("AUTH_DATABASE_URL", "")
 	t.Setenv("AUTH_CODE_KEY", "")
 	t.Setenv("ARGON_VFD_WEBHOOK", "off")
+	t.Setenv("ARGON_EMAIL", "off") // 0034: said, never inherited
 	for _, c := range []struct{ what, value string }{
 		{"unset", ""},
 		{"not hex", "this-is-not-hex-at-all-and-is-long-enough-0123456789abcdef"},

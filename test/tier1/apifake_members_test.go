@@ -58,6 +58,7 @@ func (f *fakeAPI) summary(ctx context.Context, q querier, member string) (api.Me
 	var s api.MemberSummary
 	var id, branch, status, enrol string
 	var joined time.Time
+	var setByID, setByName *string
 	err := q.QueryRow(ctx, `SELECT m.id::text, m.member_number, m.full_name, m.phone, b.code, m.status::text, m.joined_on,
 		  EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = m.user_id),
 		  EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id AND d.revoked_at IS NULL),
@@ -67,9 +68,13 @@ func (f *fakeAPI) summary(ctx context.Context, q querier, member string) (api.Me
 		       ELSE 'none' END,
 		  EXISTS (SELECT 1 FROM ledger_entries e JOIN ledger_lines l ON l.entry_id = e.id JOIN accounts a ON a.id = l.account_id
 		           WHERE e.kind = 'opening_balance' AND e.reverses_id IS NULL AND l.member_id = m.id AND a.role = 'member_savings'
-		             AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reverses_id = e.id))
-		FROM members m JOIN branches b ON b.id = m.branch_id WHERE m.id = $1`, member).
-		Scan(&id, &s.MemberNumber, &s.FullName, &s.Phone, &branch, &status, &joined, &s.HasPin, &s.HasTrustedDevice, &enrol, &s.OpeningBalancePosted)
+		             AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reverses_id = e.id)),
+		  m.email, ea.actor_user_id::text, eu.full_name, m.email_set_at
+		FROM members m JOIN branches b ON b.id = m.branch_id
+		LEFT JOIN credential_acts ea ON ea.id = m.email_set_by_act LEFT JOIN users eu ON eu.id = ea.actor_user_id
+		WHERE m.id = $1`, member).
+		Scan(&id, &s.MemberNumber, &s.FullName, &s.Phone, &branch, &status, &joined, &s.HasPin, &s.HasTrustedDevice, &enrol, &s.OpeningBalancePosted,
+			&s.Email, &setByID, &setByName, &s.EmailSetAt)
 	if err != nil {
 		return s, err
 	}
@@ -80,6 +85,9 @@ func (f *fakeAPI) summary(ctx context.Context, q querier, member string) (api.Me
 		s.OpeningBalancePosted = false
 	}
 	s.MemberId, s.BranchCode, s.Status = uuidOf(id), branch, api.MemberSummaryStatus(status)
+	if setByID != nil && f.brk != "email_setter_hidden" {
+		s.EmailSetBy = &api.EmailSetter{UserId: uuidOf(*setByID), Name: deref(setByName)}
+	}
 	s.JoinedOn = openapi_types.Date{Time: joined}
 	s.Enrolment = api.MemberSummaryEnrolment(enrol)
 	rows, err := q.Query(ctx, `SELECT a.post::text, a.is_signatory FROM appointments a WHERE a.member_id = $1
@@ -186,6 +194,7 @@ type regRow struct {
 	number, name, phone, branch, channel string
 	joined                               time.Time
 	nokName, nokPhone, nokRel            string
+	email                                string
 }
 
 // rowCodes: every reason this row is refused, before anything is written.
@@ -210,6 +219,8 @@ func (f *fakeAPI) rowCode(ctx context.Context, q querier, society string, r regR
 		return "joined_in_future", "joined on a day that has not come"
 	case nok != 0 && (nok != 3 || !e164Ref.MatchString(r.nokPhone)):
 		return "next_of_kin_incomplete", "a next of kin is name, phone and relationship, or nothing"
+	case r.email != "" && !emailRef.MatchString(r.email):
+		return "bad_email", fmt.Sprintf("%q is not one email address", r.email)
 	case taken:
 		return "number_already_registered", fmt.Sprintf("%s is already a member of this society", r.number)
 	}
@@ -234,6 +245,10 @@ func (f *fakeAPI) register(ctx context.Context, x pgx.Tx, society, act string, b
 	var id string
 	err := x.QueryRow(ctx, `SELECT register_member($1, $2, $3, $4, $5, $6::date, $7::collection_channel, nullif($8, ''), nullif($9, ''), nullif($10, ''), $11, $12, $13)::text`,
 		society, r.branch, r.number, r.name, r.phone, r.joined.Format("2006-01-02"), r.channel, r.nokName, r.nokPhone, r.nokRel, act, batch, nilIfZero(r.line)).Scan(&id)
+	if err != nil || r.email == "" || f.brk == "register_email_dropped" {
+		return id, err
+	}
+	_, err = x.Exec(ctx, `UPDATE members SET email = $2, email_set_by_act = $3 WHERE id = $1`, id, r.email, act)
 	return id, err
 }
 
@@ -264,7 +279,7 @@ func (f *fakeAPI) RegisterMember(ctx context.Context, req api.RegisterMemberRequ
 	b := req.Body
 	nn, np, nr := nokOf(b.NextOfKin)
 	r := regRow{number: strings.TrimSpace(b.MemberNumber), name: b.FullName, phone: f.phoneOf(b.Phone), branch: b.BranchCode,
-		channel: string(b.CollectionChannel), joined: b.JoinedOn.Time, nokName: nn, nokPhone: normalPhone(np), nokRel: nr}
+		channel: string(b.CollectionChannel), joined: b.JoinedOn.Time, nokName: nn, nokPhone: normalPhone(np), nokRel: nr, email: lowerEmail(b.Email)}
 	if code, msg := f.rowCode(ctx, f.db, society, r); code != "" && f.brk != "register_phone_raw" {
 		if f.brk == "register_refusal_as_500" {
 			return nil, errors.New(msg)
@@ -337,7 +352,7 @@ func (f *fakeAPI) RegisterMembers(ctx context.Context, req api.RegisterMembersRe
 		for _, row := range b.Rows {
 			nn, np, nr := nokOf(row.NextOfKin)
 			r := regRow{line: row.Line, number: strings.TrimSpace(row.MemberNumber), name: row.FullName, phone: normalPhone(row.Phone), branch: row.BranchCode,
-				channel: string(row.CollectionChannel), joined: row.JoinedOn.Time, nokName: nn, nokPhone: normalPhone(np), nokRel: nr}
+				channel: string(row.CollectionChannel), joined: row.JoinedOn.Time, nokName: nn, nokPhone: normalPhone(np), nokRel: nr, email: lowerEmail(row.Email)}
 			code, msg := f.rowCode(ctx, x, society, r)
 			if code == "" && seen[strings.ToLower(r.number)] {
 				code, msg = "number_repeated_in_file", fmt.Sprintf("%s appears more than once in this file", r.number)
@@ -452,4 +467,13 @@ func (f *fakeAPI) registeredRecord(ctx context.Context, q querier, society, ref 
 		}{line, uuidOf(id), num})
 	}
 	return rec, true, rows.Err()
+}
+
+var emailRef = regexp.MustCompile(`^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>.]+$`)
+
+func lowerEmail(e *string) string {
+	if e == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(*e))
 }

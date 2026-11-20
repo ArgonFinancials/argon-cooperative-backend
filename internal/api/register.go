@@ -60,6 +60,7 @@ func memberSummary(ctx context.Context, q querier, member string) (MemberSummary
 	var m MemberSummary
 	var id, status, enrol string
 	var joined time.Time
+	var setByID, setByName *string
 	err := q.QueryRow(ctx, `SELECT m.id::text, m.member_number, m.full_name, m.phone, b.code, m.status::text, m.joined_on,
 		  EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = m.user_id),
 		  EXISTS (SELECT 1 FROM auth_devices d WHERE d.user_id = m.user_id AND d.revoked_at IS NULL),
@@ -71,13 +72,20 @@ func memberSummary(ctx context.Context, q querier, member string) (MemberSummary
 		       ELSE 'none' END,
 		  EXISTS (SELECT 1 FROM ledger_entries e JOIN ledger_lines l ON l.entry_id = e.id JOIN accounts a ON a.id = l.account_id
 		           WHERE e.kind = 'opening_balance' AND e.reverses_id IS NULL AND l.member_id = m.id AND a.role = 'member_savings'
-		             AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reverses_id = e.id))
-		FROM members m JOIN branches b ON b.id = m.branch_id WHERE m.id = $1`, member).
-		Scan(&id, &m.MemberNumber, &m.FullName, &m.Phone, &m.BranchCode, &status, &joined, &m.HasPin, &m.HasTrustedDevice, &enrol, &m.OpeningBalancePosted)
+		             AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reverses_id = e.id)),
+		  m.email, ea.actor_user_id::text, eu.full_name, m.email_set_at
+		FROM members m JOIN branches b ON b.id = m.branch_id
+		LEFT JOIN credential_acts ea ON ea.id = m.email_set_by_act LEFT JOIN users eu ON eu.id = ea.actor_user_id
+		WHERE m.id = $1`, member).
+		Scan(&id, &m.MemberNumber, &m.FullName, &m.Phone, &m.BranchCode, &status, &joined, &m.HasPin, &m.HasTrustedDevice, &enrol, &m.OpeningBalancePosted,
+			&m.Email, &setByID, &setByName, &m.EmailSetAt)
 	if err != nil {
 		return m, err
 	}
 	m.MemberId, m.Status, m.Enrolment = uuidOf(id), MemberSummaryStatus(status), MemberSummaryEnrolment(enrol)
+	if setByID != nil {
+		m.EmailSetBy = &EmailSetter{UserId: uuidOf(*setByID), Name: deref(setByName)}
+	}
 	m.JoinedOn = openapi_types.Date{Time: joined}
 	rows, err := q.Query(ctx, `SELECT post::text, is_signatory FROM appointments WHERE member_id = $1
 		AND held_from <= current_date AND (held_until IS NULL OR held_until >= current_date) ORDER BY post`, member)
@@ -185,10 +193,14 @@ type newRegistrant struct {
 	number, name, phone, branch, channel string
 	joined                               time.Time
 	nokName, nokPhone, nokRel            string
+	email                                string // lower-cased; "" when none
 }
 
-func registrantOf(line int, number, name, phone, branch, channel string, joined time.Time, nok *NextOfKin) newRegistrant {
+func registrantOf(line int, number, name, phone, branch, channel string, joined time.Time, nok *NextOfKin, email *string) newRegistrant {
 	r := newRegistrant{line: line, number: strings.TrimSpace(number), name: name, phone: nigerianPhone(phone), branch: branch, channel: channel, joined: joined}
+	if email != nil {
+		r.email = strings.ToLower(strings.TrimSpace(*email))
+	}
 	if nok != nil {
 		r.nokName, r.nokPhone, r.nokRel = nok.FullName, nigerianPhone(nok.Phone), nok.Relationship
 	}
@@ -221,6 +233,8 @@ func refusalOf(ctx context.Context, q querier, society string, r newRegistrant) 
 		return "joined_in_future", "joined on a day that has not come", nil
 	case nok != 0 && (nok != 3 || !e164NG.MatchString(r.nokPhone)):
 		return "next_of_kin_incomplete", "a next of kin is a name, a Nigerian phone and a relationship, or nothing", nil
+	case r.email != "" && !oneEmail.MatchString(r.email):
+		return "bad_email", fmt.Sprintf("%q is not one email address", r.email), nil
 	case taken:
 		return "number_already_registered", fmt.Sprintf("%s is already in this society's register", r.number), nil
 	}
@@ -235,6 +249,11 @@ func registerOne(ctx context.Context, x pgx.Tx, society, act string, batch any, 
 	var id string
 	err := x.QueryRow(ctx, `SELECT register_member($1, $2, $3, $4, $5, $6::date, $7::collection_channel, nullif($8, ''), nullif($9, ''), nullif($10, ''), $11, $12, $13)::text`,
 		society, r.branch, r.number, r.name, r.phone, r.joined.Format("2006-01-02"), r.channel, r.nokName, r.nokPhone, r.nokRel, act, batch, line).Scan(&id)
+	if err != nil || r.email == "" {
+		return id, err
+	}
+	// The email, on the same secretary's registration act (0034 allows it).
+	_, err = x.Exec(ctx, `UPDATE members SET email = $2, email_set_by_act = $3 WHERE id = $1`, id, r.email, act)
 	return id, err
 }
 
@@ -262,7 +281,7 @@ func (s *server) RegisterMember(ctx context.Context, req RegisterMemberRequestOb
 	if b == nil {
 		return RegisterMember400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
 	}
-	r := registrantOf(0, b.MemberNumber, b.FullName, b.Phone, b.BranchCode, string(b.CollectionChannel), b.JoinedOn.Time, b.NextOfKin)
+	r := registrantOf(0, b.MemberNumber, b.FullName, b.Phone, b.BranchCode, string(b.CollectionChannel), b.JoinedOn.Time, b.NextOfKin, b.Email)
 	code, msg, err := refusalOf(ctx, s.db, society, r)
 	if err != nil {
 		return nil, err
@@ -329,7 +348,7 @@ func (s *server) RegisterMembers(ctx context.Context, req RegisterMembersRequest
 		bad := refusedLines{}
 		seen := map[string]bool{}
 		for _, row := range b.Rows {
-			r := registrantOf(row.Line, row.MemberNumber, row.FullName, row.Phone, row.BranchCode, string(row.CollectionChannel), row.JoinedOn.Time, row.NextOfKin)
+			r := registrantOf(row.Line, row.MemberNumber, row.FullName, row.Phone, row.BranchCode, string(row.CollectionChannel), row.JoinedOn.Time, row.NextOfKin, row.Email)
 			code, msg, err := refusalOf(ctx, x, society, r)
 			if err != nil {
 				return err
@@ -424,4 +443,59 @@ func registeredRecord(ctx context.Context, q querier, society, ref string) (Regi
 		}{line, uuidOf(id), num})
 	}
 	return rec, true, rows.Err()
+}
+
+// oneEmail: one address, as the database's member_email_shape (0034).
+var oneEmail = regexp.MustCompile(`^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>.]+$`)
+
+// SetMemberEmail: the society's current secretary sets (or clears) a member's
+// email, on their own step-up (act member_email). The database checks the act
+// and the post, lower-cases the address and records who and when (0034).
+func (s *server) SetMemberEmail(ctx context.Context, req SetMemberEmailRequestObject) (SetMemberEmailResponseObject, error) {
+	society, member := req.SocietyId.String(), req.MemberId.String()
+	if officer, err := s.officerHere(ctx, society); err != nil || !officer {
+		if err != nil {
+			return nil, err
+		}
+		return SetMemberEmail404JSONResponse(notFound("member")), nil
+	}
+	var here bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND society_id = $2)`, member, society).Scan(&here); err != nil {
+		return nil, err
+	}
+	if !here {
+		return SetMemberEmail404JSONResponse(notFound("member")), nil
+	}
+	b := req.Body
+	if b == nil {
+		return SetMemberEmail400JSONResponse{Code: "bad_request", Message: "a body is required"}, nil
+	}
+	var addr any
+	if b.Email != nil {
+		e := strings.ToLower(strings.TrimSpace(*b.Email))
+		if !oneEmail.MatchString(e) || len(e) > 254 {
+			return SetMemberEmail422JSONResponse{Code: "bad_email", Message: fmt.Sprintf("%q is not one email address", *b.Email)}, nil
+		}
+		addr = e
+	}
+	err := s.onStepUp(ctx, "member_email", b.PinProofId.String(), func(x pgx.Tx, act string) error {
+		_, err := x.Exec(ctx, `UPDATE members SET email = $2, email_set_by_act = $3 WHERE id = $1`, member, addr, act)
+		return err
+	})
+	if err != nil {
+		switch c := refusedBy(err); {
+		case stepUpRefused[c] || c == "email_act":
+			return SetMemberEmail403JSONResponse(stepUpProblem("member_email")), nil
+		case c == "email_by_secretary":
+			return SetMemberEmail403JSONResponse{Code: "not_permitted", Message: "a member's email is set by the society's current secretary"}, nil
+		case c == "member_email_shape":
+			return SetMemberEmail422JSONResponse{Code: "bad_email", Message: "not one email address"}, nil
+		}
+		return nil, err
+	}
+	m, err := memberSummary(ctx, s.db, member)
+	if err != nil {
+		return nil, err
+	}
+	return SetMemberEmail200JSONResponse(m), nil
 }

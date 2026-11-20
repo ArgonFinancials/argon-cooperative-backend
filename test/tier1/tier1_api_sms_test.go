@@ -191,6 +191,7 @@ func TestApiSms06_TheConfigurationNamesTheSender(t *testing.T) {
 	t.Setenv("AUTH_DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
 	t.Setenv("AUTH_CODE_KEY", strings.Repeat("cd", 32))
 	t.Setenv("ARGON_VFD_WEBHOOK", "off")
+	t.Setenv("ARGON_EMAIL", "off") // 0034: said, never inherited
 	termii := map[string]string{"TERMII_URL": "https://termii.example/api/sms/send", "TERMII_API_KEY": termiiKey, "TERMII_SENDER_ID": termiiSender}
 	set := func(sms string, drop string, over map[string]string) {
 		t.Setenv("ARGON_SMS", sms)
