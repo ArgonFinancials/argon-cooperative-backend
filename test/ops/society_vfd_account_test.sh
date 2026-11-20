@@ -209,6 +209,6 @@ fi
 
 echo
 if ((${#RED[@]})); then echo "RED: ${RED[*]}"; exit 1; fi
-declared=$(grep -cE '^  ?T="V[0-9]+ ' "${BASH_SOURCE[0]}")
+declared=$(grep -cE '^ *T="V[0-9]+ ' "${BASH_SOURCE[0]}")
 if ((PASSED != declared)); then echo "INCOMPLETE: $PASSED of $declared declared tests passed, and none was red"; exit 1; fi
 echo "all $declared green"
