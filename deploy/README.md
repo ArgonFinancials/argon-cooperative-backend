@@ -647,7 +647,7 @@ The last signature on a withdrawal places its hold (LEDGER_CONTRACT §13). The *
 
 It runs as `argon_wallet`, the only role that writes VFD's evidence (probes P60–P65). It never sends a transfer twice, never releases on a timeout, and pays only holds the last signature placed.
 
-**Before it can run:** a society's own VFD account recorded by the operator (`operator_record_society_vfd_account`, from VFD's name enquiry), the member's own VFD account, and VFD's credentials in `deploy.env`:
+**Before it can run:** a society's own VFD account recorded by the operator (`48-society-vfd-account.sh`, below: from VFD's name enquiry, never typed), the member's own VFD account, and VFD's credentials in `deploy.env`:
 
 ```bash
 # On the instance, set by hand from whoever holds the VFD relationship; never pasted into a chat or a ticket.
@@ -661,6 +661,32 @@ Then `30-install-api.sh` writes `/etc/argon/wallet.env`, and the worker is start
 ```bash
 cd /opt/argon/src && sudo docker compose --env-file /etc/argon/deploy.env -f deploy/compose/docker-compose.prod.yml --profile wallet up -d wallet
 ```
+
+### A society's VFD account: the operator (`48-society-vfd-account.sh`)
+
+The account a society's members pay into and its payouts leave from is
+"recorded by the operator from VFD's answer, never typed" (LEDGER_CONTRACT §12).
+The operator gives the account NUMBER and nothing else about it. The script
+asks VFD (the API image's `vfd-account-lookup`, VFD's name enquiry), shows
+VFD's answer, and records exactly that with `--confirm`: the name, VFD's
+client id and account id. There is no `--name`, `--client` or `--account-id`:
+each is refused.
+
+```bash
+cd /opt/argon/src
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/48-society-vfd-account.sh --society CODE --account NNNNNNNNNN \
+  --operator "Your name" --reason "VFD's onboarding letter of <date>" --db argon           # shows VFD's answer
+# ...then the same line with --confirm to record it.
+```
+
+It needs VFD's credentials in `deploy.env` (as above), which reach the lookup
+in its environment, never on a command line. It records nothing when VFD does
+not know the account, when VFD does not answer, or when VFD's answer is for
+another number or carries no client id, and it says which. A society has one
+account; a second is refused, and a recorded account is never edited. The BVN
+the name enquiry carries is never printed or stored. Tests:
+`test/ops/society_vfd_account_test.sh` (V01–V13), each made to fail by
+`sabotage_vfd_account.sh`.
 
 **Unverified, and how each is handled until VFD confirms it** (docs/VFD_INTEGRATION.md): VFD's failure statuses are not known, so none is mapped (a transfer fails only on a refused send, a connection never made, or "not found" two hours after the send, `vfd_settlement_window`, PROVISIONAL); `transactionStatus 99` is pending, not success; there is no known statement endpoint, so reconciliation records that it could not run rather than reporting nothing missed.
 

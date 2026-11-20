@@ -42,6 +42,12 @@ func main() {
 		return
 	}
 
+	// The operator's one-shot (deploy/48-society-vfd-account.sh): VFD's own
+	// answer for a society's account, never the operator's typing.
+	if len(os.Args) >= 2 && os.Args[1] == "vfd-account-lookup" {
+		os.Exit(runVFDLookup(os.Args[2:]))
+	}
+
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// The wallet worker (stage 3): its own process, as argon_wallet. Sends the

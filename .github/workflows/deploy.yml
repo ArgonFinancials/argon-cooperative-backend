@@ -171,6 +171,14 @@ jobs:
       - name: Deploy roles and scratch cleanup, every rule sabotaged
         if: matrix.suite == '0028'
         run: bash test/ops/sabotage_deploy_roles.sh
+      # The society's VFD account, from VFD's answer (48 and the image's
+      # vfd-account-lookup, 2026-11-20); its V11/V12 need Linux, as here.
+      - name: Operator script (48-society-vfd-account.sh)
+        if: matrix.suite == '0028'
+        run: bash test/ops/society_vfd_account_test.sh
+      - name: Operator script (48-society-vfd-account.sh), every rule sabotaged
+        if: matrix.suite == '0028'
+        run: bash test/ops/sabotage_vfd_account.sh
 
   # The client install's FAILURE PATH, made to fire on every push (a failure
   # path is proven by making it fire, finding 47). apt is pointed at a proxy
