@@ -188,6 +188,14 @@ jobs:
       - name: Operator script (49-demo-society.sh), every rule sabotaged
         if: matrix.suite == '0035'
         run: bash test/ops/sabotage_demo_society.sh
+      # The deploy's image prune (32): a Docker daemon is needed, and here
+      # there is one; the test fails rather than pass where there is none.
+      - name: Image prune (32-prune-api-images.sh)
+        if: matrix.suite == '0035'
+        run: bash test/ops/prune_images_test.sh
+      - name: Image prune, every rule sabotaged
+        if: matrix.suite == '0035'
+        run: bash test/ops/sabotage_prune_images.sh
 
   # The client install's FAILURE PATH, made to fire on every push (a failure
   # path is proven by making it fire, finding 47). apt is pointed at a proxy

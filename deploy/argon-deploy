@@ -50,4 +50,7 @@ else
 fi
 run "install the frontend"  bash deploy/36-install-frontend.sh
 bash deploy/75-assert-loopback.sh
+# Old API images (2026-11-21: 24 on a 3.7 GB disk): the newest three, the
+# running one and the releases on disk stay. Never fails a deploy that worked.
+run "prune old API images"  bash deploy/32-prune-api-images.sh --confirm || info "pruning old API images failed (above); the deploy itself succeeded"
 ok "release $ARGON_RELEASE deployed"
