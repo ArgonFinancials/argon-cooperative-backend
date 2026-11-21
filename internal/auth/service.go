@@ -50,12 +50,14 @@ func New(d Deps) (Service, error) {
 }
 
 // HashPIN returns an argon2id PHC string with this service's parameters.
-func (s *service) HashPIN(pin string) (string, error) {
+func (s *service) HashPIN(pin string) (string, error) { return HashPINWith(s.d.Argon, pin) }
+
+// HashPINWith: an argon2id PHC string with the given parameters.
+func HashPINWith(a Argon2, pin string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	a := s.d.Argon
 	h := argon2.IDKey([]byte(pin), salt, a.Time, a.MemoryKiB, a.Threads, 32)
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", a.MemoryKiB, a.Time, a.Threads,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(h)), nil
@@ -228,6 +230,17 @@ func (s *service) signInOne(ctx context.Context, c candidate, credDigest string,
 		return Result{SessionToken: tok}, nil
 	}
 
+	// A demonstration society's people (0035) sign in on any device with the
+	// PIN the operator gave them: no code, no officer, no slip. ONLY someone who
+	// belongs to demonstration societies and to nothing real; the database says
+	// who (auth_demo_only), and a person in any real society takes the path
+	// below. A schema before 0035 has no such people.
+	if demo, err := s.demoOnly(ctx, c.user); err != nil {
+		return Result{}, err
+	} else if demo {
+		return s.trustDemoDevice(ctx, c.user)
+	}
+
 	// A new device: a code to the ONE registered number, or an officer.
 	var dest *string
 	if err := s.d.DB.QueryRow(ctx, `SELECT otp_destination($1)`, c.user).Scan(&dest); err != nil {
@@ -324,4 +337,39 @@ func (s *service) VerifyCode(ctx context.Context, challenge, code string) (Resul
 func isConstraint(err error, name string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.ConstraintName == name
+}
+
+// demoOnly: whether the database counts this person as a demonstration
+// society's and nothing else's (0035). False on a schema without 0035.
+func (s *service) demoOnly(ctx context.Context, user string) (bool, error) {
+	var has bool
+	if err := s.d.DB.QueryRow(ctx, `SELECT to_regprocedure('auth_demo_only(uuid)') IS NOT NULL`).Scan(&has); err != nil || !has {
+		return false, err
+	}
+	var demo bool
+	err := s.d.DB.QueryRow(ctx, `SELECT auth_demo_only($1)`, user).Scan(&demo)
+	return demo, err
+}
+
+// trustDemoDevice: the device becomes trusted and signed in, as enrolment
+// would make it, on the PIN alone (0035: demonstration people only).
+func (s *service) trustDemoDevice(ctx context.Context, user string) (Result, error) {
+	devTok, sessTok := randomToken(), randomToken()
+	var at time.Time
+	err := pgx.BeginFunc(ctx, s.d.DB, func(tx pgx.Tx) error {
+		var device string
+		if err := tx.QueryRow(ctx, `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id::text`,
+			user, TokenDigest(devTok)).Scan(&device); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3) RETURNING started_at`,
+			user, device, TokenDigest(sessTok)).Scan(&at)
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if err := s.d.Notify.NewDeviceSignedIn(ctx, user, at); err != nil {
+		return Result{}, err
+	}
+	return Result{SessionToken: sessTok, DeviceToken: devTok}, nil
 }

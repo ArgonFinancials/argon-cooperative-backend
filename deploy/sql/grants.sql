@@ -307,5 +307,16 @@ BEGIN
   END IF;
 END $$;
 
+-- 0035: DEMONSTRATION SOCIETIES. The auth service asks whether a person is a
+-- demonstration's and nothing else's (K68), to trust a device on the PIN
+-- alone. The app neither marks a society (P85) nor sets a PIN by the
+-- operator's path (P84): those are the owner's functions, the operator's.
+DO $$
+BEGIN
+  IF to_regprocedure('public.auth_demo_only(uuid)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION auth_demo_only(uuid) TO argon_auth;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

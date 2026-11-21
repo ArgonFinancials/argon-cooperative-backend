@@ -271,6 +271,10 @@ type Argon2 struct {
 	Threads   uint8
 }
 
+// ServerArgon: the parameters the server hashes PINs with (cmd/api), in one
+// place, so a hash made outside the service (0035's demo PINs) matches.
+var ServerArgon = Argon2{MemoryKiB: 19 * 1024, Time: 2, Threads: 1}
+
 type Deps struct {
 	DB      *pgxpool.Pool
 	SMS     SMS

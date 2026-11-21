@@ -159,6 +159,33 @@ func (f *fakeService) SignIn(ctx context.Context, req auth.SignInRequest) (auth.
 		return auth.Result{SessionToken: t}, nil
 	}
 
+	// 0035: a demonstration society's people, and only theirs, sign in on a
+	// new device with the PIN alone. Breaks: demo_everyone (any person, the
+	// real societies' included), demo_never (nobody), demo_any_member (one demo
+	// membership is enough, though they also belong to a real society).
+	var hasDemo bool
+	f.d.DB.QueryRow(ctx, `SELECT to_regclass('demo_pins') IS NOT NULL`).Scan(&hasDemo)
+	if hasDemo && f.brk != "demo_never" {
+		var demo bool
+		q := `SELECT EXISTS (SELECT 1 FROM members m WHERE m.user_id = $1)
+		   AND NOT EXISTS (SELECT 1 FROM members m JOIN societies s ON s.id = m.society_id WHERE m.user_id = $1 AND NOT s.demo)`
+		if f.brk == "demo_any_member" {
+			q = `SELECT EXISTS (SELECT 1 FROM members m JOIN societies s ON s.id = m.society_id WHERE m.user_id = $1 AND s.demo)`
+		}
+		f.d.DB.QueryRow(ctx, q, user).Scan(&demo)
+		if demo || f.brk == "demo_everyone" {
+			dt, st := token(), token()
+			var dev string
+			if err := f.d.DB.QueryRow(ctx, `INSERT INTO auth_devices (user_id, token_digest) VALUES ($1, $2) RETURNING id::text`, user, sha(dt)).Scan(&dev); err != nil {
+				return auth.Result{}, err
+			}
+			if _, err := f.d.DB.Exec(ctx, `INSERT INTO auth_sessions (user_id, device_id, token_digest) VALUES ($1, $2, $3)`, user, dev, sha(st)); err != nil {
+				return auth.Result{}, err
+			}
+			return auth.Result{SessionToken: st, DeviceToken: dt}, nil
+		}
+	}
+
 	// New device: a code to the ONE registered number, or an officer.
 	var phones []string
 	rows, _ = f.d.DB.Query(ctx, `SELECT DISTINCT phone FROM members WHERE user_id = $1 ORDER BY phone`, user)

@@ -669,6 +669,46 @@ number, the slip, and a PIN they choose (`POST /auth/enrol`). From then on,
 officers issue everyone else's codes; a signatory's comes in two halves from
 two other signatories (0026).
 
+**A forgotten PIN is not fixed by a new slip.** A code never resets a PIN
+(enrolment answers `pin_already_set`), and no API resets one yet. The
+database has the act (`member_reset`, or `signatory_reset_request` with two
+other signatories' approval) but nothing calls it. For a test society, make a
+new demonstration society instead (below).
+
+## A demonstration society: the operator (`49-demo-society.sh`)
+
+TEST DATA ONLY (0035; LEDGER_CONTRACT §12, 2026-11-21). One run makes a NEW
+society, marked a demonstration for good and named "TEST DATA: ...", with:
+- its floor (₦1,000) and withdrawal charges (DEMO figures);
+- a chairman, a treasurer and a secretary, all signatories;
+- two members with opening balances (₦250,000 and ₦180,000);
+- a PIN for each of the five.
+
+It prints the table to hand out. Each of the five signs in on any device with
+the member number and the PIN: no slip, no activation, no code.
+
+```bash
+cd /opt/argon/src
+sudo ARGON_ENV=/etc/argon/deploy.env bash deploy/49-demo-society.sh --code DEMO3   --name "Lagos demonstration" --operator "Your Name" --reason "demonstrations for the team"   --db "$(sudo grep -oP '^ARGON_DB=\K.*' /etc/argon/deploy.env)" --confirm
+```
+
+Without `--confirm` it shows what it would make. `--pins P1,P2,P3,P4,P5`
+sets them (chairman, treasurer, secretary, member one, member two); without it
+they are drawn. Either way they are held to the same rule as any new PIN. It
+needs the API up: the members are registered by the secretary, and the
+balances posted by the treasurer, through it.
+
+**Why it cannot reach anything real:**
+- **It only makes a new society.** A code in use is refused before anything is written.
+- **The database sets an operator's PIN only for someone who belongs to demonstration societies and to nothing real** (`demo_pin_only_for_demo`).
+- **Sign-in trusts a new device on the PIN alone only for the same people** (`auth_demo_only`). Anyone in a real society takes the real path.
+- **A society is marked only by its own function**, only while nobody belongs to it, and only named TEST DATA. The mark is permanent and the name must keep saying TEST DATA.
+- **Every operator PIN is recorded** in `demo_pins`: who, from which login, and why.
+
+If it stops after making the society (the API refused a member, say), it says
+so. That society stays a harmless, marked demonstration; run again with a new
+`--code`.
+
 ## The wallet: the system that pays (stage 3)
 
 The last signature on a withdrawal places its hold (LEDGER_CONTRACT §13). The **wallet worker** (`argon-api wallet-worker`, the `wallet` compose profile) sends that hold's transfer from the society's VFD account to the member's own, asks VFD what happened, and records VFD's answer; the database then releases the hold on a definitive failure or posts the payout on VFD's success, in the same transaction, attributed to VFD's outcome and to no user (0028).

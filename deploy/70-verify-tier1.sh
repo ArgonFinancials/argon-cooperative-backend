@@ -680,6 +680,11 @@ probe req P82 argon_app '42501.*permission denied for table email_sends' "app ba
 probe req P83 argon_app '42501.*permission denied for table email_sends' "app rewrites a failed send as sent"   "UPDATE email_sends SET outcome = 'sent' WHERE false;"
 probe ctl K67 argon_app '' "control: the app reads sends and how each code was delivered"   "SELECT count(*) FROM email_sends; SELECT delivery, sent_to FROM enrolment_codes LIMIT 1;"
 fi
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.demo_pins') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P84 argon_app '42501.*permission denied for function operator_set_demo_pin' "app sets a PIN by the operator's path"   "SELECT operator_set_demo_pin($U1, repeat('a', 10), 'probe', 'probe', 'probe');"
+probe req P85 argon_app '42501.*permission denied for table societies' "app marks a society a demonstration"   "UPDATE societies SET demo = true WHERE false;"
+probe ctl K68 argon_auth '' "control: the auth service asks whether a person is a demonstration's only"   "SELECT auth_demo_only($U1);"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

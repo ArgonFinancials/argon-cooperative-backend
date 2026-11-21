@@ -43,6 +43,14 @@ func main() {
 		return
 	}
 
+	// The operator's one-shot (deploy/49-demo-society.sh, 0035): a demo
+	// person's PIN and its hash. A PIN on stdin is checked by the same rule
+	// as any new PIN; none (an empty line) draws one that passes. Prints the
+	// PIN and the hash on one line; nothing is stored or logged here.
+	if len(os.Args) >= 2 && os.Args[1] == "demo-pin" {
+		os.Exit(runDemoPIN(os.Args[2:]))
+	}
+
 	// The operator's one-shot (deploy/48-society-vfd-account.sh): VFD's own
 	// answer for a society's account, never the operator's typing.
 	if len(os.Args) >= 2 && os.Args[1] == "vfd-account-lookup" {
@@ -121,7 +129,7 @@ func main() {
 			SMS:     sms,
 			Notify:  auth.LogNotifier{Log: log},
 			CodeKey: cfg.AuthCodeKey,
-			Argon:   auth.Argon2{MemoryKiB: 19 * 1024, Time: 2, Threads: 1},
+			Argon:   auth.ServerArgon,
 		})
 		if err != nil {
 			log.Error("auth service", "err", err)
