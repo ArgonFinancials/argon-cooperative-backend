@@ -138,6 +138,7 @@ func (f *fakeAPI) apprView(ctx context.Context, r apprRow, projection string) (a
 		// when the two differ (the balance rewrite, piece 3).
 		v.QuotedCharges = f.quotedChargesOf(ctx, r.id, r.amount, r.society)
 		v.ChargeChanged = f.chargeChangedOf(ctx, r.id, r.society, v.QuotedCharges, v.AuthorisedCharges)
+		v.Payout = f.payoutOf(ctx, r.id)
 	}
 	f.db.QueryRow(ctx, `SELECT count(DISTINCT user_id) FROM signatory_approvals WHERE request_id = $1`, r.id).Scan(&v.SignedCount)
 	if projection == "officer" && f.brk != "appr_officer_unnamed" || projection == "member" && f.brk == "appr_member_sees_names" {
@@ -415,4 +416,36 @@ func (f *fakeAPI) RejectApproval(ctx context.Context, req api.RejectApprovalRequ
 		return nil, err
 	}
 	return api.RejectApproval201JSONResponse(v), nil
+}
+
+// payoutOf: what became of the payment (2026-11-21). Breaks:
+//
+//	payout_never           never said (always null)
+//	payout_release_unsaid  a released hold still reads open
+//	payout_paid_unsaid     a paid hold still reads open
+//	payout_reason_hidden   a release's reason is not given
+func (f *fakeAPI) payoutOf(ctx context.Context, req string) *api.RequestPayout {
+	if f.brk == "payout_never" {
+		return nil
+	}
+	var p api.RequestPayout
+	var hold string
+	if err := f.db.QueryRow(ctx, `SELECT id::text, held_at FROM withdrawal_holds WHERE request_id = $1 ORDER BY held_at DESC, id DESC LIMIT 1`, req).
+		Scan(&hold, &p.HeldAt); err != nil {
+		return nil
+	}
+	f.db.QueryRow(ctx, `SELECT min(posted_at) FROM ledger_entries WHERE hold_id = $1`, hold).Scan(&p.PaidAt)
+	f.db.QueryRow(ctx, `SELECT at, reason FROM withdrawal_hold_releases WHERE hold_id = $1`, hold).Scan(&p.ReleasedAt, &p.ReleaseReason)
+	if f.brk == "payout_reason_hidden" {
+		p.ReleaseReason = nil
+	}
+	switch {
+	case p.PaidAt != nil && f.brk != "payout_paid_unsaid":
+		p.State = api.RequestPayoutStatePaid
+	case p.ReleasedAt != nil && f.brk != "payout_release_unsaid":
+		p.State = api.RequestPayoutStateReleased
+	default:
+		p.State = api.RequestPayoutStateOpen
+	}
+	return &p
 }

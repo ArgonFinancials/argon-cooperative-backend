@@ -357,6 +357,14 @@ type bMemberRequest struct {
 	RequestId                        string
 	QuotedCharges, AuthorisedCharges *mCharges
 	ChargeChanged                    *string
+	Payout                           *bPayout
+}
+
+type bPayout struct {
+	State              string
+	HeldAt             string
+	PaidAt, ReleasedAt *string
+	ReleaseReason      *string
 }
 
 // memberRequestOf: the request as the member's own list shows it.
@@ -550,5 +558,43 @@ func TestApiBalance16_AReleasedHoldPutsTheRequestBackInTheList(t *testing.T) {
 	}
 	if p.WithdrawableKobo == nil || *p.WithdrawableKobo != k(borrowerWithdrawable) || len(deductionsOf(p, "authorised_payout")) != 0 {
 		t.Fatalf("NOT RETURNED — figure %s, deductions %+v; want %s, the released hold taking nothing", orNone(p.WithdrawableKobo), p.Deductions, k(borrowerWithdrawable))
+	}
+}
+
+// What became of the payment (2026-11-21, the frontend's finding: an approved
+// request could not say whether its money was held, paid or released, so the
+// member's screen could only guess). Nothing until the hold; held; released,
+// with the officer's words; and, for another request, paid.
+func TestApiBalance17_TheRequestSaysWhatBecameOfThePayment(t *testing.T) {
+	w := newMoneyAPI(t)
+	v := w.raisedVia(t, payKobo)
+	if r := w.signVia(t, w.s2, v.RequestId); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the first signature: %d %s", r.status, r.body)
+	}
+	if c := memberRequestOf(t, w, v.RequestId); c.Payout != nil {
+		t.Fatalf("INVENTED — before any hold the request reads payout %+v; want null", *c.Payout)
+	}
+	if r := w.signVia(t, w.secretary, v.RequestId); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the last signature, with its hold: %d %s", r.status, r.body)
+	}
+	c := memberRequestOf(t, w, v.RequestId)
+	if c.Payout == nil || c.Payout.State != "open" || c.Payout.HeldAt == "" || c.Payout.PaidAt != nil || c.Payout.ReleasedAt != nil {
+		t.Fatalf("UNSAID — an approved request with its hold reads payout %+v; want open, with when it was held", c.Payout)
+	}
+	var hold string
+	fixture(t, db.QueryRow(bg(), `SELECT id::text FROM withdrawal_holds WHERE request_id = $1`, v.RequestId).Scan(&hold), "the hold")
+	why := "The member's bank account details were wrong"
+	if rr := w.releaseVia(t, w.s2, hold, why); rr.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the release: %d %s", rr.status, rr.body)
+	}
+	c = memberRequestOf(t, w, v.RequestId)
+	if c.Payout == nil || c.Payout.State != "released" || c.Payout.ReleasedAt == nil || c.Payout.ReleaseReason == nil || *c.Payout.ReleaseReason != why || c.Payout.PaidAt != nil {
+		t.Fatalf("UNSAID — a released hold reads payout %+v; want released, when, and the officer's words", c.Payout)
+	}
+	req, h2 := w.heldVia(t, payKobo)
+	decoded[mMovement](t, w.payOut(t, w.poster, payoutCall{hold: h2, member: w.bMem, ref: w.ref(), kobo: payKobo, proof: stepUp(t, w.poster, "withdrawal_payout")}),
+		http.StatusCreated, "the payout")
+	if p := memberRequestOf(t, w, req).Payout; p == nil || p.State != "paid" || p.PaidAt == nil || p.ReleasedAt != nil {
+		t.Fatalf("UNSAID — a paid request reads payout %+v; want paid, with when", p)
 	}
 }

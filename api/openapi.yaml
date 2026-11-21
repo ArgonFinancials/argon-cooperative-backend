@@ -1133,7 +1133,7 @@ components:
       type: object
       required: [requestId, societyId, kind, amountKobo, memberId, loanId, reason, required, raisedAt, expiresAt,
                  projection, status, signedCount, signatures, rejection, escalated, nextStep, raisedBy, resubmitsId,
-                 authorisedCharges, quotedCharges, chargeChanged]
+                 authorisedCharges, quotedCharges, chargeChanged, payout]
       properties:
         requestId: { type: string, format: uuid }
         societyId: { type: string, format: uuid }
@@ -1213,6 +1213,14 @@ components:
             and authorisedCharges exist and differ: both amounts, and the date
             the society's charges changed. NULL when they match, so that when
             it appears it is read.
+        payout:
+          nullable: true
+          description: |
+            What became of the payment (2026-11-21, the frontend's finding: an
+            approved request could not say whether its money was held, paid or
+            released). The request's newest hold; NULL until the payout is
+            authorised (for a withdrawal, the last signature). Both projections.
+          allOf: [{ $ref: '#/components/schemas/RequestPayout' }]
 
     ApprovalList:
       type: object
@@ -1499,6 +1507,27 @@ components:
           type: string
           format: uuid
           description: A proof with act withdrawal_authorisation, minted by the authoriser.
+
+    RequestPayout:
+      type: object
+      additionalProperties: false
+      required: [state, heldAt, paidAt, releasedAt, releaseReason]
+      properties:
+        state:
+          type: string
+          enum: [open, paid, released]
+          description: |
+            open: held from what the member may withdraw, neither paid nor
+            released (waiting to be sent, or sent and not yet confirmed).
+            paid: the payout is recorded. released: it will not be paid; the
+            amount is the member's to withdraw again.
+        heldAt: { type: string, format: date-time }
+        paidAt: { type: string, format: date-time, nullable: true }
+        releasedAt: { type: string, format: date-time, nullable: true }
+        releaseReason:
+          type: string
+          nullable: true
+          description: The releasing officer's words, shown to the member as written.
 
     PayoutHold:
       type: object

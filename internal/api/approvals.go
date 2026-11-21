@@ -106,6 +106,9 @@ func (s *server) approvalView(ctx context.Context, r approvalRow, projection str
 		if err := s.requestCharges(ctx, r.id, &v); err != nil {
 			return v, err
 		}
+		if err := s.requestPayout(ctx, r.id, &v); err != nil {
+			return v, err
+		}
 	}
 	var rj ApprovalRejection
 	var reason, by, post string
@@ -174,6 +177,33 @@ func (s *server) requestCharges(ctx context.Context, id string, v *ApprovalView)
 			" and were charged " + naira(*ht) + ", because the society's charges changed on " + since.Format("2 January 2006") + "."
 		v.ChargeChanged = &sentence
 	}
+	return nil
+}
+
+// requestPayout: what became of the payment, both projections (2026-11-21,
+// the frontend's finding). The request's newest hold; paid when a payout
+// names it, released when a release does; null before any hold.
+func (s *server) requestPayout(ctx context.Context, id string, v *ApprovalView) error {
+	var p RequestPayout
+	err := s.db.QueryRow(ctx, `SELECT h.held_at,
+		  (SELECT min(e.posted_at) FROM ledger_entries e WHERE e.hold_id = h.id), rl.at, rl.reason
+		  FROM withdrawal_holds h LEFT JOIN withdrawal_hold_releases rl ON rl.hold_id = h.id
+		 WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, id).Scan(&p.HeldAt, &p.PaidAt, &p.ReleasedAt, &p.ReleaseReason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case p.PaidAt != nil:
+		p.State = RequestPayoutStatePaid
+	case p.ReleasedAt != nil:
+		p.State = RequestPayoutStateReleased
+	default:
+		p.State = RequestPayoutStateOpen
+	}
+	v.Payout = &p
 	return nil
 }
 

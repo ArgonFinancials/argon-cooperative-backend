@@ -51,4 +51,8 @@ declare -gA SVC_TARGET_OF=(
   [requested_hidden]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'
   [requested_kept_after_authorised]='TestApiBalance12_ARequestIsListedAndNotTakenUntilItIsAuthorised'
   [requested_lost_after_release]='TestApiBalance16_AReleasedHoldPutsTheRequestBackInTheList'
+  [payout_never]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
+  [payout_release_unsaid]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
+  [payout_paid_unsaid]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
+  [payout_reason_hidden]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
 )
