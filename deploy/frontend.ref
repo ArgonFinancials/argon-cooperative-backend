@@ -8,6 +8,6 @@
 # of what it carries. Moving it is reviewed and tested like any other change.
 #
 # One full 40-character commit id; lines starting with # are comments.
-# 9733365: the officer finds a member and issues their code (slips; email
-# waits on its spec); no demo on the live product, 2026-11-20.
-9733365cdbc4c083ab9bcf2d2db88bdc3dc16f40
+# 20acf4f: an approved payment's hold released by a signatory; register one
+# member; opening balances; the request says held, paid or released, 2026-11-21.
+20acf4fe1dd538a04bbc0005644ce547830f4808
