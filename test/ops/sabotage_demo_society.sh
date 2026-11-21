@@ -58,6 +58,7 @@ script_break no_confirm_gate "D01" '((confirm)) || { info "nothing done' 'true |
 script_break code_reused "D04" '[[ $taken == 0 ]] ||' 'true ||'
 script_break db_defaults "D08" 'confirm=0 db= pins=' 'confirm=0 db=$ARGON_DB pins='
 script_break api_unchecked "D07" "python3 - \"\$API\" <<'PY' || die" "python3 - \"\$API\" <<'PY' || true"
+script_break name_doubled "D10" '[[ ${v[name]} == "test data"* ]] && die' '[[ ${v[name]} == "never"* ]] && die'
 script_break pins_ignored "D05" 'read -r p h < <(printf '"'"'%s\n'"'"' "${given[$i]:-}" | pingen' 'read -r p h < <(printf '"'"'\n'"'"' | pingen'
 pin_break easy_pin_taken "D06" '	} else if err := auth.CheckNewPIN(pin, phones...); err != nil {' '	} else if err := auth.CheckNewPIN("380915"); err != nil {'
 pin_break pin_in_hash "D03" '	fmt.Println(pin, h)' '	fmt.Println(pin, h[:len(h)-6]+pin)'

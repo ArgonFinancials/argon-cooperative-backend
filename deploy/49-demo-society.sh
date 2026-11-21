@@ -51,6 +51,9 @@ blank() { [[ -z ${1//[[:space:]]/} ]]; }
 for f in $flags; do blank "${v[$f]-}" && die "--$f is required"; done
 [[ -n $db ]] || die "--db is required: name the database (on the server, the one in ARGON_DB). The script never chooses one itself (finding 69)."
 [[ ${v[code]} =~ ^[A-Z0-9]{3,12}$ ]] || die "--code '${v[code]}' is 3 to 12 capital letters or digits"
+shopt -s nocasematch
+[[ ${v[name]} == "test data"* ]] && die "--name is the name AFTER the prefix: the script adds \"TEST DATA: \" itself. Pass --name \"$(sed -E 's/^test data[: ]*//I' <<<"${v[name]}")\""
+shopt -u nocasematch
 IFS=',' read -r -a given <<<"$pins"
 [[ -z $pins || ${#given[@]} -eq 5 ]] || die "--pins is five PINs, comma-separated, in the order chairman, treasurer, secretary, member one, member two"
 
@@ -93,16 +96,23 @@ import sys, urllib.request
 urllib.request.urlopen(sys.argv[1] + "/healthz", timeout=10).read()
 PY
 
-# The PINs, as hashes, by the API image (or DEMO_PINGEN, the tests' binary).
+# The PINs, as hashes, by the image the RUNNING API was started from: the
+# same code that will check them, and an image that is certainly here
+# (DEMO_PINGEN: the tests' binary).
+if [[ -z ${DEMO_PINGEN:-} ]]; then
+  cid=$(dc --profile api ps -q api 2>/dev/null) || true
+  [[ -n $cid ]] || die "no API container is running here (docker compose ps api): start the API, then run this again. Nothing was made."
+  image=$(docker inspect -f '{{.Config.Image}}' "$cid") || die "cannot read the running API's image. Nothing was made."
+fi
 pingen() {
   if [[ -n ${DEMO_PINGEN:-} ]]; then "$DEMO_PINGEN" demo-pin "$1"
-  else docker run --rm -i "argon-api:$(cat "$REPO_DIR/RELEASE")" demo-pin "$1"; fi
+  else docker run --rm -i "$image" demo-pin "$1"; fi
 }
 pin=() hash=()
 for i in 0 1 2 3 4; do
   read -r p h < <(printf '%s\n' "${given[$i]:-}" | pingen "${phones[$i]}") || true
   [[ $p =~ ^[0-9]{6}$ && $h == '$argon2id$'* ]] ||
-    die "no PIN for ${names[$i]}$([[ -n $pins ]] && echo ": '${given[$i]}' is refused (six digits, not a run, not a repeat, not the end of the phone number)" || echo ": is argon-api built?"). Nothing was made."
+    die "no PIN for ${names[$i]}$([[ -n $pins ]] && echo ": '${given[$i]}' is refused (six digits, not a run, not a repeat, not the end of the phone number)" || echo ": the API's image ${image:-$DEMO_PINGEN} did not make one (is it release 6590404 or later?)"). Nothing was made."
   pin+=("$p"); hash+=("$h")
 done
 

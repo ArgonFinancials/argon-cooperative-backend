@@ -95,6 +95,10 @@ T="D08 --db is required, never defaulted"
 DEMO_API="$API" DEMO_PINGEN="$BIN" bash "$SCRIPT" --code "DT8$$" --name "No db" --operator "Test Operator" --reason "t" --confirm >"$W/out" 2>"$W/err"; rc=$?
 [[ $rc != 0 ]] && grep -q -- "--db is required" "$W/err" && pass || red "exit $rc"
 
+T="D10 a name already saying TEST DATA is refused, not doubled, and nothing is made"
+before=$(nsoc); run --code "DT10$$" --name "TEST DATA: Lagos" "${OP[@]}" --confirm; rc=$?
+[[ $rc != 0 && $(nsoc) == "$before" ]] && grep -q -- '--name "Lagos"' "$W/err" && pass || red "exit $rc, societies $before -> $(nsoc): $(head -c 200 "$W/err")"
+
 T="D09 a real society's member gets no PIN from the operator, and no device on the PIN alone"
 R="DR$$"
 sql "SELECT operator_create_society('$R', 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2, 'Test Operator', 'test@host', 'Founding resolution', current_date, 'test')" >/dev/null

@@ -696,7 +696,10 @@ Without `--confirm` it shows what it would make. `--pins P1,P2,P3,P4,P5`
 sets them (chairman, treasurer, secretary, member one, member two); without it
 they are drawn. Either way they are held to the same rule as any new PIN. It
 needs the API up: the members are registered by the secretary, and the
-balances posted by the treasurer, through it.
+balances posted by the treasurer, through it. The PINs are hashed by the image
+the running API container was started from. `--name` is the name after the
+prefix: the script adds "TEST DATA: " itself, and refuses a name that already
+starts with it.
 
 **Why it cannot reach anything real:**
 - **It only makes a new society.** A code in use is refused before anything is written.
