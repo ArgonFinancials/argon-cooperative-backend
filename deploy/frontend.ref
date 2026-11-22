@@ -8,6 +8,7 @@
 # of what it carries. Moving it is reviewed and tested like any other change.
 #
 # One full 40-character commit id; lines starting with # are comments.
-# 20acf4f: an approved payment's hold released by a signatory; register one
-# member; opening balances; the request says held, paid or released, 2026-11-21.
-20acf4fe1dd538a04bbc0005644ce547830f4808
+# a0f77f9: one app for members and officers (Home, Activity, Loans, Me, and
+# Society for officers), wide on a laptop, sign-in and activate split screen,
+# the bare address opening sign-in at once, 2026-11-22.
+a0f77f99c1ca3c266a38c4406557418c266ccccf
