@@ -311,8 +311,8 @@ signatories() {
   local i
   for ((i = 1; i <= $2; i++)); do
     sql "WITH u AS (INSERT INTO users (full_name) VALUES ('Signatory $i of $1') RETURNING id),
-              m AS (INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-                    SELECT s.id, (SELECT id FROM branches WHERE society_id = s.id LIMIT 1), '$1-S$i', 'Signatory $i', '+2349$(printf '%09d' $((N * 100 + i)))', 'cash', '2020-01-01', u.id
+              m AS (INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+                    SELECT s.id, (SELECT id FROM branches WHERE society_id = s.id LIMIT 1), '$1-S$i', 'Signatory $i', '+2349$(printf '%09d' $((N * 100 + i)))', 'pending', 'cash', '2020-01-01', u.id
                       FROM societies s, u WHERE s.code = '$1' RETURNING id, society_id)
          INSERT INTO appointments (society_id, member_id, post, is_signatory, held_from, held_until)
          SELECT society_id, id, 'treasurer', true, '2020-01-01', '2099-12-31' FROM m" >/dev/null || die "cannot appoint signatory $i in $1"

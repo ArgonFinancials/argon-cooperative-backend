@@ -69,7 +69,7 @@ OUT="$W/out"; RC=0
 code() { C="FND$$X$((++N))"; }
 args() {
   printf '%s\0' --code "$C" --name "Ikeja Teachers' Cooperative Society" --registration "LSCS/2019/0412" --directorate Lagos \
-    --withdrawal-quorum 2 --write-off-quorum 3 --signature-count 2 \
+    --withdrawal-quorum 2 --write-off-quorum 3 --signature-count 2 --request-days 14 --guard-threshold 25000000 \
     --operator "Adaeze Okafor (Argon operations)" --reason "Onboarding on the founding resolution" \
     --resolution "Founding resolution, inaugural meeting, item 3" --resolution-date 2026-09-30
 }
@@ -143,7 +143,7 @@ if ((RC == 0)) || [[ $(founded "$C") != 0 ]]; then red "a caller-supplied login 
 
 T="S03 every value is required, each quorum too: no default, refused before the database"
 bad=""
-for f in --code --name --registration --directorate --withdrawal-quorum --write-off-quorum --signature-count --operator --reason --resolution --resolution-date; do
+for f in --code --name --registration --directorate --withdrawal-quorum --write-off-quorum --signature-count --request-days --guard-threshold --operator --reason --resolution --resolution-date; do
   code; run "$f" "" --confirm
   if ((RC == 0)) || [[ $(founded "$C") != 0 ]]; then bad+=" $f(accepted)"
   elif ! grep -q -- "$f" "$OUT"; then bad+=" $f(refused without naming it)"; fi

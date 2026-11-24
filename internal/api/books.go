@@ -61,7 +61,7 @@ func (s *server) GetChartOfAccounts(ctx context.Context, req GetChartOfAccountsR
 	if ok, err := s.mayReadBooks(ctx, req.SocietyId.String()); err != nil || !ok {
 		return GetChartOfAccounts404JSONResponse(booksNotFound), err
 	}
-	rows, err := s.db.Query(ctx, `SELECT code, name, kind::text, role, postable FROM accounts WHERE society_id = $1 ORDER BY code`,
+	rows, err := s.db.Query(ctx, `SELECT code, name, kind::text, role FROM accounts WHERE society_id = $1 ORDER BY code`,
 		req.SocietyId.String())
 	if err != nil {
 		return nil, err
@@ -71,10 +71,11 @@ func (s *server) GetChartOfAccounts(ctx context.Context, req GetChartOfAccountsR
 	for rows.Next() {
 		var a Account
 		var kind, role string
-		if err := rows.Scan(&a.Code, &a.Name, &kind, &role, &a.Postable); err != nil {
+		if err := rows.Scan(&a.Code, &a.Name, &kind, &role); err != nil {
 			return nil, err
 		}
-		a.Kind, a.Role = AccountKind(kind), AccountRole(role)
+		// postable: deprecated (0037 dropped the column; nothing was ever not postable).
+		a.Kind, a.Role, a.Postable = AccountKind(kind), AccountRole(role), true
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -143,8 +144,9 @@ func (s *server) GetGeneralLedger(ctx context.Context, req GetGeneralLedgerReque
 	}
 	var acct Account
 	var accountID, kind, role string
-	err := s.db.QueryRow(ctx, `SELECT id::text, code, name, kind::text, role, postable FROM accounts WHERE society_id = $1 AND code = $2`,
-		society, req.AccountCode).Scan(&accountID, &acct.Code, &acct.Name, &kind, &role, &acct.Postable)
+	err := s.db.QueryRow(ctx, `SELECT id::text, code, name, kind::text, role FROM accounts WHERE society_id = $1 AND code = $2`,
+		society, req.AccountCode).Scan(&accountID, &acct.Code, &acct.Name, &kind, &role)
+	acct.Postable = true // deprecated (0037)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GetGeneralLedger404JSONResponse(Problem{Code: "not_found", Message: "no such account"}), nil
 	}

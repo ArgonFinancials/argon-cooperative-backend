@@ -41,8 +41,8 @@ func personIn(t *testing.T, society, name string) demoPerson {
 func memberOf(t *testing.T, society, user, number, phone string) string {
 	t.Helper()
 	var m string
-	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		SELECT $1, b.id, $2, u.full_name, $3, 'payroll', '2020-01-01', u.id FROM branches b, users u
+	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+		SELECT $1, b.id, $2, u.full_name, $3, 'pending', 'payroll', '2020-01-01', u.id FROM branches b, users u
 		 WHERE b.society_id = $1 AND u.id = $4 ORDER BY b.code LIMIT 1 RETURNING id`, society, number, phone, user).Scan(&m), "a member record")
 	return m
 }

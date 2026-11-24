@@ -21,9 +21,9 @@ END $$;
 
 -- Append-only.
 GRANT SELECT ON
-  ledger_batches, ledger_entries, ledger_lines, signatory_approvals, wallet_reconciliations
+  ledger_batches, ledger_entries, ledger_lines, signatory_approvals
 TO argon_app;
-GRANT INSERT ON ledger_batches, ledger_lines, wallet_reconciliations TO argon_app;
+GRANT INSERT ON ledger_batches, ledger_lines TO argon_app;
 -- act_id, request_id, payout_reference (0011): a single movement's step-up act,
 -- the approved request a payout pays, and the transfer that paid it.
 -- client_reference (0015): the client's reference for a single contribution,
@@ -48,7 +48,7 @@ GRANT INSERT (id, request_id, member_id, post_at_signing, user_id, act_id)
 -- Mutable reference state. No DELETE: a society, member or user is ended by a
 -- status change, not by vanishing. members.user_id is updatable (linking a
 -- record to its person); relinking is checked by members_relink_auditor_check.
-GRANT SELECT, INSERT, UPDATE ON branches, members, accounts, wallets TO argon_app;
+GRANT SELECT, INSERT, UPDATE ON branches, members, accounts TO argon_app;
 
 -- A society: its descriptive fields only (0011, LEDGER_CONTRACT §10). Its
 -- quorums (signatures_required, write_off_signatures_required,
@@ -102,9 +102,17 @@ GRANT INSERT (guarantee_id, act_id) ON loan_guarantee_withdrawals TO argon_app;
 GRANT SELECT, INSERT ON accounting_periods TO argon_app;
 GRANT UPDATE (closed_at, closed_by) ON accounting_periods TO argon_app;
 
--- A reconciliation item is explained and resolved, which is an update of
--- those two columns only.
-GRANT UPDATE (explanation, resolved_at) ON wallet_reconciliations TO argon_app;
+-- 0001's wallets and wallet_reconciliations, until 0037 drops them (nothing
+-- ever used them). A reconciliation item was explained and resolved, an
+-- update of those two columns only.
+DO $$
+BEGIN
+  IF to_regclass('public.wallet_reconciliations') IS NOT NULL THEN
+    GRANT SELECT, INSERT ON wallet_reconciliations TO argon_app;
+    GRANT UPDATE (explanation, resolved_at) ON wallet_reconciliations TO argon_app;
+    GRANT SELECT, INSERT, UPDATE ON wallets TO argon_app;
+  END IF;
+END $$;
 
 -- ---- 0003 auth, split by role (0005) -----------------------------------------
 -- INSERT lists leave out every server-written column (times, act_xid,
@@ -315,6 +323,18 @@ DO $$
 BEGIN
   IF to_regprocedure('public.auth_demo_only(uuid)') IS NOT NULL THEN
     GRANT EXECUTE ON FUNCTION auth_demo_only(uuid) TO argon_auth;
+  END IF;
+END $$;
+
+-- 0038: A MEMBER'S STATUS. The app records a change (the member, the status
+-- it goes to, the reason, the secretary's act); the database says where it
+-- came from, when, and for which society (P86), and moves the member: the app
+-- never sets a status itself (P87).
+DO $$
+BEGIN
+  IF to_regclass('public.member_status_changes') IS NOT NULL THEN
+    GRANT SELECT ON member_status_changes TO argon_app;
+    GRANT INSERT (id, member_id, to_status, reason, act_id) ON member_status_changes TO argon_app;
   END IF;
 END $$;
 

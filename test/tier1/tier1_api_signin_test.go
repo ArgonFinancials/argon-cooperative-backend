@@ -313,8 +313,8 @@ func TestApiSignIn08_SharedPhoneAcrossSocietiesSignsNobodyIn(t *testing.T) {
 	there := newSociety(t)
 	var bUser, bMember string
 	fixture(t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Child') RETURNING id`).Scan(&bUser), "second person")
-	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		VALUES ($1, $2, $3, 'Child', $4, 'cash', '2020-01-01', $5) RETURNING id`, there.id, there.branch, "SH-"+digest()[:8], a.phone, bUser).Scan(&bMember), "the same phone, another society")
+	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+		VALUES ($1, $2, $3, 'Child', $4, 'pending', 'cash', '2020-01-01', $5) RETURNING id`, there.id, there.branch, "SH-"+digest()[:8], a.phone, bUser).Scan(&bMember), "the same phone, another society")
 	fixture(t, one(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, bUser, hashPIN(signPIN)), "the second person's PIN")
 	outcome(t, signInAs(t, srv, a.phone, signPIN, a.device, ""), "see_officer")
 	if n := sessionsOf(t, a.user, bUser); n != 0 {

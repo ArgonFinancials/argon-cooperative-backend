@@ -62,6 +62,18 @@ require_env() { local v; for v in "$@"; do [[ -n "${!v:-}" ]] || die "$v is empt
 
 dc() { docker compose --env-file "$ARGON_ENV" -f "$COMPOSE_FILE" "$@"; }
 
+# api_image: the image the RUNNING API container was started from. The
+# operator's one-shots (47, 48, 49) run the API's own binary from it: an image
+# certainly present, and the code that is serving. Never the tag RELEASE names
+# (finding 74: Docker once could not find that tag although it was there).
+# No API container running: empty, and the caller refuses.
+api_image() {
+  local cid
+  cid=$(dc --profile api ps -q api 2>/dev/null) || true
+  [[ -n $cid ]] || return 1
+  docker inspect -f '{{.Config.Image}}' "$cid"
+}
+
 # Superuser access. Reads SQL on stdin.
 pg_super() {
   case $TARGET in

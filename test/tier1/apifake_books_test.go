@@ -18,7 +18,6 @@
 // Chart:
 //
 //	books_chart_by_name          ordered by name, not code
-//	books_chart_all_postable     every account reported postable
 //	books_chart_all_societies    every society's accounts
 //
 // Trial balance:
@@ -136,7 +135,7 @@ func (f *fakeAPI) GetChartOfAccounts(ctx context.Context, req api.GetChartOfAcco
 	if f.brk == "books_chart_by_name" {
 		order = `ORDER BY name, code`
 	}
-	rows, err := f.db.Query(ctx, `SELECT code, name, kind::text, role, postable FROM accounts `+where+` `+order, society)
+	rows, err := f.db.Query(ctx, `SELECT code, name, kind::text, role FROM accounts `+where+` `+order, society)
 	if err != nil {
 		return nil, err
 	}
@@ -147,13 +146,10 @@ func (f *fakeAPI) GetChartOfAccounts(ctx context.Context, req api.GetChartOfAcco
 	for rows.Next() {
 		var a api.Account
 		var kind, role string
-		if err := rows.Scan(&a.Code, &a.Name, &kind, &role, &a.Postable); err != nil {
+		if err := rows.Scan(&a.Code, &a.Name, &kind, &role); err != nil {
 			return nil, err
 		}
-		a.Kind, a.Role = api.AccountKind(kind), api.AccountRole(role)
-		if f.brk == "books_chart_all_postable" {
-			a.Postable = true
-		}
+		a.Kind, a.Role, a.Postable = api.AccountKind(kind), api.AccountRole(role), true
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -239,8 +235,9 @@ func (f *fakeAPI) GetGeneralLedger(ctx context.Context, req api.GetGeneralLedger
 	}
 	var acct api.Account
 	var accountID, kind, role string
-	err := f.db.QueryRow(ctx, `SELECT id::text, code, name, kind::text, role, postable FROM accounts WHERE society_id = $1 AND code = $2`,
-		society, req.AccountCode).Scan(&accountID, &acct.Code, &acct.Name, &kind, &role, &acct.Postable)
+	err := f.db.QueryRow(ctx, `SELECT id::text, code, name, kind::text, role FROM accounts WHERE society_id = $1 AND code = $2`,
+		society, req.AccountCode).Scan(&accountID, &acct.Code, &acct.Name, &kind, &role)
+	acct.Postable = true
 	if errors.Is(err, pgx.ErrNoRows) {
 		if f.brk == "books_gl_unknown_account_ok" {
 			return api.GetGeneralLedger200JSONResponse(api.GeneralLedger{SocietyId: req.SocietyId, Account: api.Account{Code: req.AccountCode},

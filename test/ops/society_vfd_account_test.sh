@@ -38,7 +38,7 @@ pass() { echo "  pass $T"; PASSED=$((PASSED+1)); }
 
 # A society to record against (0023's founding function, as 46 calls it).
 found() {
-  sql "SELECT operator_create_society('$1', 'Test Society $1', 'REG-$1', 'Lagos', 2, 3, 2, 'Test Operator', 'test@host', 'Founding resolution', DATE '2026-01-01', 'a society for the VFD account tests')" >/dev/null ||
+  sql "SELECT operator_create_society('$1', 'Test Society $1', 'REG-$1', 'Lagos', 2, 3, 2, 7, 10000000, 'Test Operator', 'test@host', 'Founding resolution', DATE '2026-01-01', 'a society for the VFD account tests')" >/dev/null ||
     die "cannot found society $1"
 }
 found VFDA; found VFDB; found VFDC; found VFDD

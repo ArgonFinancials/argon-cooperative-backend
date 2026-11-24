@@ -24,7 +24,7 @@
 source "$(dirname "$0")/lib.sh"
 set +E
 
-SETTINGS="withdrawal-quorum write-off-quorum signature-count account-floor guard-threshold lifecycle charge-series"
+SETTINGS="withdrawal-quorum write-off-quorum signature-count account-floor guard-threshold request-days lifecycle charge-series"
 
 # What each setting is, said where it is set.
 explain() {
@@ -33,6 +33,7 @@ explain() {
     write-off-quorum)  echo "Signatures a write-off needs. At least 2: one person must never decide alone that a debt will not be recovered." ;;
     signature-count)   echo "Signatures the society's other governed acts need. At least 2." ;;
     account-floor)     echo "What the society's account keeps back, in kobo. Never negative." ;;
+    request-days)      echo "Days a withdrawal request stays open for signatures before it closes. 1 to 366. Set at founding (0037); changed here on a resolution." ;;
     guard-threshold)   echo "The amount, in kobo, above which the app asks a person to confirm more deliberately. It is INTERFACE FRICTION, NOT AUTHORISATION: it decides what a person is asked to confirm, never who must sign. So it has NO MINIMUM; the quorum rule does not apply to it." ;;
     lifecycle)         echo "Argon's state for this society (prospect, verifying, ... active, dormant, departed). It is Argon's state, not the society's decision about itself: a named operator and a reason, and no society resolution." ;;
     charge-series)     echo "A charge series from a file. Charges are Argon's and the partner's configuration, not a society's decision: no society resolution. Never backdated: today, or a future date announced before it takes effect." ;;
@@ -151,6 +152,7 @@ case $setting in
   signature-count)   fn=operator_set_signature_count;   colname=signatures_required;            cast=int ;;
   account-floor)     fn=operator_set_account_floor;     colname=account_floor_kobo;             cast=bigint ;;
   guard-threshold)   fn=operator_set_guard_threshold;   colname=guard_threshold_kobo;           cast=bigint ;;
+  request-days)      fn=operator_set_withdrawal_request_days; colname=withdrawal_request_days;   cast=int ;;
   lifecycle)         fn=operator_set_lifecycle;         colname=lifecycle;                      cast=society_lifecycle ;;
   charge-series)     fn=operator_add_charge_series ;;
 esac

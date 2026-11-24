@@ -422,8 +422,8 @@ func (s *svcT) elsewhere(phone, number string) string {
 	other := newSociety(s.t)
 	var u, m string
 	fixture(s.t, db.QueryRow(bg(), `INSERT INTO users (full_name) VALUES ('Other society member') RETURNING id`).Scan(&u), "user")
-	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		VALUES ($1, $2, $3, 'Member', $4, 'cash', '2020-01-01', $5) RETURNING id`, other.id, other.branch, number, phone, u).Scan(&m), "member elsewhere")
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+		VALUES ($1, $2, $3, 'Member', $4, 'pending', 'cash', '2020-01-01', $5) RETURNING id`, other.id, other.branch, number, phone, u).Scan(&m), "member elsewhere")
 	fixture(s.t, s.exec(`INSERT INTO auth_credentials (user_id, pin_hash) VALUES ($1, $2)`, u, hashPIN("4827")), "PIN")
 	return u
 }
@@ -472,8 +472,8 @@ func TestAuthS11_Control_OnePersonTwoSocietiesIsOneAccount(t *testing.T) {
 	s := newSvc(t)
 	m := s.member("Member")
 	other := newSociety(t)
-	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		VALUES ($1, $2, $3, 'Member', $4, 'cash', '2020-01-01', $5) RETURNING id`, other.id, other.branch, fmt.Sprintf("Y-%d", seq.Add(1)), m.phone, m.user).Scan(new(string)),
+	fixture(t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+		VALUES ($1, $2, $3, 'Member', $4, 'pending', 'cash', '2020-01-01', $5) RETURNING id`, other.id, other.branch, fmt.Sprintf("Y-%d", seq.Add(1)), m.phone, m.user).Scan(new(string)),
 		"the same person's record in a second society")
 	r, err := s.signIn(m.phone, m.pin, m.deviceToken)
 	accepted(t, err, "one person, records in two societies, same phone, known device")

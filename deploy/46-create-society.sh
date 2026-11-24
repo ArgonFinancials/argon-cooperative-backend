@@ -6,6 +6,7 @@
 #   46-create-society.sh --code CODE --name "Registered name" \
 #       --registration "LSCS/2019/0412" --directorate Lagos \
 #       --withdrawal-quorum N --write-off-quorum N --signature-count N \
+#       --request-days N --guard-threshold KOBO \
 #       --operator "Your Name" --reason "why" \
 #       --resolution "minutes reference" --resolution-date YYYY-MM-DD --db NAME [--confirm]
 #
@@ -35,7 +36,7 @@ GATE_DAYS=8
 usage() { sed -n '5,11p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 
 declare -A v=()
-flags="code name registration directorate withdrawal-quorum write-off-quorum signature-count operator reason resolution resolution-date"
+flags="code name registration directorate withdrawal-quorum write-off-quorum signature-count request-days guard-threshold operator reason resolution resolution-date"
 confirm=0 db=
 while (($#)); do
   case $1 in
@@ -62,7 +63,7 @@ ok "backups are off the instance, and the newest passing drill $((age / 86400))d
 # ---- every value, required -----------------------------------------------------
 blank() { [[ -z ${1//[[:space:]]/} ]]; }
 for f in $flags; do blank "${v[$f]-}" && die "--$f is required: a founding states every value (no quorum has a default)"; done
-for f in withdrawal-quorum write-off-quorum signature-count; do
+for f in withdrawal-quorum write-off-quorum signature-count request-days guard-threshold; do
   [[ ${v[$f]} =~ ^[0-9]+$ ]] || die "--$f '${v[$f]}' is not a whole number"
 done
 [[ ${v[resolution-date]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "--resolution-date '${v[resolution-date]}' is not YYYY-MM-DD"
@@ -79,6 +80,8 @@ Founding a society
   registered name    ${v[name]}
   registration       ${v[registration]}  (${v[directorate]} state directorate)
   quorums            withdrawals ${v[withdrawal-quorum]}, write-offs ${v[write-off-quorum]}, other governed acts ${v[signature-count]}
+  requests           a withdrawal request closes after ${v[request-days]} day(s) unless approved
+  guard threshold    ${v[guard-threshold]} kobo (above it, a person is asked to confirm more deliberately)
   on the resolution  ${v[resolution]}, ${v[resolution-date]}
   by                 ${v[operator]}  [$login]
   why                ${v[reason]}
@@ -90,10 +93,11 @@ EOF
 id=$(pg_as argon_migrator "$db" -q -At -v ON_ERROR_STOP=1 \
   -v code="${v[code]}" -v name="${v[name]}" -v reg="${v[registration]}" -v dir="${v[directorate]}" \
   -v wq="${v[withdrawal-quorum]}" -v woq="${v[write-off-quorum]}" -v sc="${v[signature-count]}" \
+  -v days="${v[request-days]}" -v guard="${v[guard-threshold]}" \
   -v op="${v[operator]}" -v login="$login" -v ref="${v[resolution]}" -v rdate="${v[resolution-date]}" -v why="${v[reason]}" \
   -f - <<'SQL'
 SELECT operator_create_society(:'code', :'name', :'reg', :'dir', :'wq'::int, :'woq'::int, :'sc'::int,
-                               :'op', :'login', :'ref', :'rdate'::date, :'why');
+                               :'days'::int, :'guard'::bigint, :'op', :'login', :'ref', :'rdate'::date, :'why');
 SQL
 ) || die "the database refused the founding (its reason is above): nothing was founded"
 ok "founded ${v[code]} ($id): a prospect, on the standard chart. Next: its first officers and their enrolment codes."

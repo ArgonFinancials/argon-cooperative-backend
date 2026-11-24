@@ -127,7 +127,7 @@ draw() {
   if [[ -n ${FOUNDING_CODEGEN:-} ]]; then
     AUTH_CODE_KEY="${ARGON_CODE_KEY:-}" "$FOUNDING_CODEGEN"
   else
-    AUTH_CODE_KEY="${ARGON_CODE_KEY:-}" docker run --rm -e AUTH_CODE_KEY "argon-api:$(cat "$REPO_DIR/RELEASE")" enrolment-code
+    AUTH_CODE_KEY="${ARGON_CODE_KEY:-}" docker run --rm -e AUTH_CODE_KEY "$(api_image || echo no-running-api-container)" enrolment-code
   fi
 }
 read -r slip digest < <(draw) || true

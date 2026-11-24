@@ -43,7 +43,7 @@ import (
 // ---- the fixture: one society's books, told as a short story ------------------
 //
 // Society S (chart: newChart's seven role accounts, newSociety's 1000 and 2000,
-// and a non-postable grouping account 2900). Member A and member B.
+// and another account, 2900). Member A and member B.
 //
 //   eOpening   opening_balance, NO as-at date (batch R)  3901 +48,000,000 / 2000 −48,000,000 (A)
 //   eContrib   contribution_in, value 2026-03-02         1000 +2,500,000 / 2000 −2,491,250 (A) / 2101 −5,000 / 2111 −3,750
@@ -72,8 +72,8 @@ func newBooks(t *testing.T) *books {
 	t.Helper()
 	b := &books{srv: apiServer(t), c: newChart(t), t: newChart(t)}
 	s := b.c.s
-	fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role, postable)
-		VALUES ($1, '2900', 'Liabilities (group)', 'liability', 'general', false) RETURNING id`, s.id).Scan(new(string)), "grouping account")
+	fixture(t, db.QueryRow(bg(), `INSERT INTO accounts (society_id, code, name, kind, role)
+		VALUES ($1, '2900', 'Liabilities (group)', 'liability', 'general') RETURNING id`, s.id).Scan(new(string)), "another account")
 
 	person := func(name string) (user, member string) {
 		user = s.user(name)
@@ -321,15 +321,6 @@ func TestApiBooks5_ChartIsOrderedByCode(t *testing.T) {
 	}
 	if strings.Join(got, " ") != strings.Join(booksCodes, " ") {
 		t.Fatalf("ACCEPTED — chart order %v, want by code %v", got, booksCodes)
-	}
-}
-
-func TestApiBooks6_ChartSaysWhichAccountsArePostable(t *testing.T) {
-	b := newBooks(t)
-	for _, a := range b.chart(t).Accounts {
-		if want := a.Code != "2900"; a.Postable != want {
-			t.Fatalf("ACCEPTED — account %s reported postable=%v, want %v (2900 is a grouping account)", a.Code, a.Postable, want)
-		}
 	}
 }
 

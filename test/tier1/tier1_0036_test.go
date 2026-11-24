@@ -17,7 +17,11 @@ import (
 func prospect(t *testing.T) string {
 	t.Helper()
 	var id string
-	fixture(t, db.QueryRow(bg(), `SELECT operator_create_society($1, 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2,
+	extra := ""
+	if foundingTakesWindow() {
+		extra = " 7, 10000000,"
+	}
+	fixture(t, db.QueryRow(bg(), `SELECT operator_create_society($1, 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2,`+extra+`
 		'Test Operator', 'test@host', 'Founding resolution', current_date, 'a test')`, fmt.Sprintf("FA%d", seq.Add(1))).Scan(&id), "a society being founded")
 	return id
 }

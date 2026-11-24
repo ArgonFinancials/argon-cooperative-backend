@@ -351,8 +351,8 @@ func (s *soc) user(name string) string {
 // member creates a member record, linked to a person (user) or not ("").
 func (s *soc) member(user string) string {
 	var id string
-	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id)
-		VALUES ($1, $2, $3, 'Member', $4, 'cash', '2020-01-01', $5) RETURNING id`,
+	fixture(s.t, db.QueryRow(bg(), `INSERT INTO members (society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id)
+		VALUES ($1, $2, $3, 'Member', $4, 'pending', 'cash', '2020-01-01', $5) RETURNING id`,
 		s.id, s.branch, fmt.Sprintf("M-%d", seq.Add(1)), fmt.Sprintf("+23470%08d", seq.Add(1)), nz(user)).Scan(&id), "member")
 	return id
 }

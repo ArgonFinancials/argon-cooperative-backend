@@ -22,7 +22,6 @@ declare -gA SVC_TARGET_OF=(
   [books_officer_ever]='TestApiBooks4_FormerOfficerGetsNotFound'
   [books_not_found_says_why]='TestApiBooks2_MemberOfTheSocietyGetsNotFound|TestApiBooks3_OfficerOfAnotherSocietyGetsNotFound|TestApiBooks4_FormerOfficerGetsNotFound'
   [books_chart_by_name]='TestApiBooks5_ChartIsOrderedByCode'
-  [books_chart_all_postable]='TestApiBooks6_ChartSaysWhichAccountsArePostable'
   [books_chart_all_societies]='TestApiBooks7_ChartIsTheSocietysOwn'
   [books_tb_posting_basis]='TestApiBooks8_TrialBalanceIsAsAtTheValueDate'
   [books_tb_undated_excluded]='TestApiBooks9_UndatedOpeningBalanceCountsAtEveryDate'

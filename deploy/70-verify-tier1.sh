@@ -214,10 +214,10 @@ fi
 pg_as $OWNER_SEED "$db" -q <<SQL >/dev/null
 BEGIN;
 INSERT INTO branches (id, society_id, code, name) VALUES ($B, $S, 'HQ', 'Head office');
-INSERT INTO members (id, society_id, branch_id, member_number, full_name, phone, collection_channel, joined_on, user_id) VALUES
-  ($M1, $S, $B, 'P-001', 'Probe Treasurer', '+2340000000001', 'payroll', '2020-01-01', $U1),
-  ($M2, $S, $B, 'P-002', 'Probe Auditor',   '+2340000000002', 'payroll', '2020-01-01', $U2),
-  ($M3, $S, $B, 'P-003', 'Probe Chairman',  '+2340000000003', 'cash',    '2020-01-01', $U3);
+INSERT INTO members (id, society_id, branch_id, member_number, full_name, phone, status, collection_channel, joined_on, user_id) VALUES
+  ($M1, $S, $B, 'P-001', 'Probe Treasurer', '+2340000000001', 'active', 'payroll', '2020-01-01', $U1),
+  ($M2, $S, $B, 'P-002', 'Probe Auditor',   '+2340000000002', 'active', 'payroll', '2020-01-01', $U2),
+  ($M3, $S, $B, 'P-003', 'Probe Chairman',  '+2340000000003', 'active', 'cash',    '2020-01-01', $U3);
 COMMIT;
 SQL
 pg_as argon_app "$db" -q <<SQL >/dev/null
@@ -519,7 +519,11 @@ probe req P38 argon_app '42501.*permission denied for function operator_set_life
 has_founding=$(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.standard_chart') IS NOT NULL)::int" </dev/null)
 [[ $has_founding == 1 ]] || info "schema before 0023: no founding function to probe (P51 not run)"
 if [[ $has_founding == 1 ]]; then
-probe req P51 argon_app '42501.*permission denied for function operator_create_society' "app founds a society through the operator's function"   "SELECT operator_create_society('APP', 'App Cooperative', 'X/1', 'Lagos', 2, 2, 2, 'app', 'app', 'none', $TODAY, 'app');"
+# The founding function's arguments as the schema has them (0037 added the
+# request window and the guard threshold).
+found_extra=""
+[[ $(pg_as argon_app "$db" -At -c "SELECT (to_regprocedure('operator_create_society(text,text,text,text,int,int,int,int,bigint,text,text,text,date,text)') IS NOT NULL)::int" </dev/null) == 1 ]] && found_extra=" 7, 10000000,"
+probe req P51 argon_app '42501.*permission denied for function operator_create_society' "app founds a society through the operator's function"   "SELECT operator_create_society('APP', 'App Cooperative', 'X/1', 'Lagos', 2, 2, 2,$found_extra 'app', 'app', 'none', $TODAY, 'app');"
 fi
 probe req P39 argon_app '42501.*permission denied for table society_settings_log' "app writes into the log of who changed a society's rules"   "INSERT INTO society_settings_log (society_id, setting, new_value) VALUES ($S, 'withdrawal_signatures_required', '1');"
 fi
@@ -534,8 +538,10 @@ probe req P4 argon_app '42501.*must be owner of table ledger_entries' "app DISAB
   "ALTER TABLE ledger_entries DISABLE TRIGGER ledger_entries_immutable;"
 probe req P5 argon_app '42501.*permission denied to set parameter "session_replication_role"' "app SET session_replication_role = replica" \
   "SET session_replication_role = replica;"
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.wallet_reconciliations') IS NOT NULL)::int" </dev/null) == 1 ]]; then
 probe req P6 argon_app '42501.*permission denied for table wallet_reconciliations' "app rewrites a reconciliation difference" \
   "UPDATE wallet_reconciliations SET difference_kobo = 0;"
+fi
 probe req P7 argon_app '42501.*permission denied for table signatory_approvals' "app edits a signature (post/time frozen at signing, §4)" \
   "UPDATE signatory_approvals SET post_at_signing = 'chairman' WHERE request_id = $R1 AND member_id = $M1;"
 probe req P8 argon_app '42501.*permission denied for table appointments' "app back-dates an appointment (handover must not rewrite, §4.3)" \
@@ -685,6 +691,11 @@ probe req P84 argon_app '42501.*permission denied for function operator_set_demo
 probe req P85 argon_app '42501.*permission denied for table societies' "app marks a society a demonstration"   "UPDATE societies SET demo = true WHERE false;"
 probe ctl K68 argon_auth '' "control: the auth service asks whether a person is a demonstration's only"   "SELECT auth_demo_only($U1);"
 fi
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.member_status_changes') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P86 argon_app '42501.*permission denied for table member_status_changes' "app says where a member's status came from, and when"   "INSERT INTO member_status_changes (member_id, from_status, to_status, reason, act_id, at) VALUES ($M1, 'exited', 'active', 'probe', $U1, $TODAY - 30);"
+probe req P87 argon_app '42501.*permission denied for table members' "app sets a member's status around the secretary's record"   "UPDATE members SET status = 'suspended' WHERE false;"
+probe ctl K69 argon_app '' "control: the app reads a member's status changes"   "SELECT count(*) FROM member_status_changes;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no
@@ -699,7 +710,7 @@ probe ctl K18 argon_app '' "control: app reads a request's derived status" \
   "SELECT approval_status($R1);"
 # Loans (0008). Finding 16's question asked up front: what the app still needs
 # to do, it can (K19), and what it must never do, it cannot (P21, P22).
-probe ctl K19 argon_app '' "control: app agrees a loan on a product, with its schedule (what its handlers need)"   "BEGIN; INSERT INTO loan_products (id, society_id, code, name, max_term_months, guarantors_required, savings_multiple_pct, allows_prepayment) VALUES ($LP, $S, 'K19', 'Probe loan', 12, 0, 300, true); INSERT INTO loans (id, society_id, member_id, product_id, principal_kobo, term_months, purpose, guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment) VALUES ($LN, $S, $M1, $LP, 20000, 1, 'probe', 0, 300, 0, true); INSERT INTO loan_instalments (loan_id, n, due_on, amount_kobo) VALUES ($LN, 1, '2026-12-01', 20000); COMMIT;"
+probe ctl K19 argon_app '' "control: app agrees a loan on a product, with its schedule (what its handlers need)"   "BEGIN; INSERT INTO loan_products (id, society_id, code, name, max_term_months, guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment) VALUES ($LP, $S, 'K19', 'Probe loan', 12, 0, 300, 0, true); INSERT INTO loans (id, society_id, member_id, product_id, principal_kobo, term_months, purpose, guarantors_required, savings_multiple_pct, interest_rate_bp, allows_prepayment) VALUES ($LN, $S, $M1, $LP, 20000, 1, 'probe', 0, 300, 0, true); INSERT INTO loan_instalments (loan_id, n, due_on, amount_kobo) VALUES ($LN, 1, '2026-12-01', 20000); COMMIT;"
 # P21 needs K19's loan: an UPDATE of zero rows succeeds whatever the grants.
 # (If K19 fails, the probe already fails on it.)
 probe req P21 argon_app '42501.*permission denied for table loans' "app raises an agreed loan's principal"   "UPDATE loans SET principal_kobo = principal_kobo * 2;"

@@ -100,9 +100,7 @@ PY
 # same code that will check them, and an image that is certainly here
 # (DEMO_PINGEN: the tests' binary).
 if [[ -z ${DEMO_PINGEN:-} ]]; then
-  cid=$(dc --profile api ps -q api 2>/dev/null) || true
-  [[ -n $cid ]] || die "no API container is running here (docker compose ps api): start the API, then run this again. Nothing was made."
-  image=$(docker inspect -f '{{.Config.Image}}' "$cid") || die "cannot read the running API's image. Nothing was made."
+  image=$(api_image) || die "no API container is running here (docker compose ps api): start the API, then run this again. Nothing was made."
 fi
 pingen() {
   if [[ -n ${DEMO_PINGEN:-} ]]; then "$DEMO_PINGEN" demo-pin "$1"

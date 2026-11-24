@@ -72,7 +72,7 @@ lookup() {
     "$VFD_LOOKUP" "$1"
   else
     VFD_BASE_URL="${VFD_BASE_URL:-}" VFD_ACCESS_TOKEN="${VFD_ACCESS_TOKEN:-}" \
-      docker run --rm -e VFD_BASE_URL -e VFD_ACCESS_TOKEN "argon-api:$(cat "$REPO_DIR/RELEASE")" vfd-account-lookup "$1"
+      docker run --rm -e VFD_BASE_URL -e VFD_ACCESS_TOKEN "$(api_image || echo no-running-api-container)" vfd-account-lookup "$1"
   fi
 }
 # `|| rc=$?`, never `; rc=$?`: under lib.sh's set -e, a lookup that exits 3

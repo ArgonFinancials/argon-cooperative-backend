@@ -218,11 +218,46 @@ components:
         (0031): the secretary registering members. payment_resolution (0033):
         an officer proposing, confirming or rejecting a payment's resolution.
         member_email (0034): the secretary setting a member's email.
+        member_status (0038): the secretary suspending, reinstating or
+        recording the departure of a member.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
-             withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email]
+             withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email,
+             member_status]
+
+    ChangeMemberStatus:
+      type: object
+      required: [status, reason, pinProofId]
+      properties:
+        status:
+          type: string
+          enum: [suspended, active, exited]
+          description: "suspended: suspend an active member. active: reinstate a suspended one. exited: the member leaves (final)."
+        reason: { type: string, description: "Why, in the secretary's words; recorded as written." }
+        pinProofId: { type: string, format: uuid, description: "The secretary's own proof, minted for member_status." }
+
+    MemberStatusChange:
+      type: object
+      additionalProperties: false
+      required: [changeId, memberId, from, to, reason, byUserId, byName, at]
+      properties:
+        changeId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        from: { type: string, enum: [pending, active, suspended, exited] }
+        to: { type: string, enum: [pending, active, suspended, exited] }
+        reason: { type: string }
+        byUserId: { type: string, format: uuid }
+        byName: { type: string }
+        at: { type: string, format: date-time }
+
+    MemberStatusChangeList:
+      type: object
+      additionalProperties: false
+      required: [changes]
+      properties:
+        changes: { type: array, items: { $ref: '#/components/schemas/MemberStatusChange' } }
 
     PinProofRequest:
       type: object
@@ -831,7 +866,11 @@ components:
         role: { $ref: '#/components/schemas/AccountRole' }
         postable:
           type: boolean
-          description: False for a grouping account that no line may post to.
+          deprecated: true
+          description: |
+            DEPRECATED (0037, 2026-11-24): always true. The column is gone: no
+            account was ever not postable, and nothing enforced it. Sent only
+            until the ledger view stops reading it; do not use.
 
     ChartOfAccounts:
       type: object
@@ -2958,6 +2997,88 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "reason_required (more than ten characters: what happened, and how the member was identified)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/status-changes:
+    post:
+      operationId: changeMemberStatus
+      x-argon-built: true
+      summary: The secretary suspends, reinstates, or records the departure of a member, on their own PIN, with a reason
+      description: |
+        0038. Active and suspended move to each other; either may leave;
+        leaving is final. Never the secretary's own status. An officer is not
+        suspended or recorded as leaving while they hold a post (a suspended
+        signatory would still sign). The change is recorded, never edited, and
+        the member moves with it. What a status does: a member who is not
+        active cannot guarantee a loan (0008).
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeMemberStatus' }
+      responses:
+        '201':
+          description: Recorded, and the member moved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberStatusChange' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for member_status, the caller's own, unspent); not_permitted (not the society's current secretary); conflict_of_interest (the secretary's own status)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_allowed (that move is not made from the member's status: e.g. a member who left); holds_a_post (the member holds a post in the society: their appointment ends first)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: getMemberStatusChanges
+      x-argon-built: true
+      summary: A member's status changes, newest first, for the society's officers
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The changes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberStatusChangeList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

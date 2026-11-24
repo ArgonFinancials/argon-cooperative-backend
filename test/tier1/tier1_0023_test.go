@@ -62,6 +62,11 @@ func aFounding() founding {
 func found(f founding) (string, error) {
 	var id string
 	err := tx(func(x pgx.Tx) error {
+		if foundingTakesWindow() { // 0037: the request window and the guard threshold, said
+			return x.QueryRow(bg(), `SELECT operator_create_society($1, $2, $3, $4, $5, $6, $7, 7, 10000000, $8, $9, $10, $11::date, $12)::text`,
+				f.code, f.name, f.reg, f.directorate, f.withdrawal, f.writeOff, f.sigs,
+				nz(f.operator), nz(f.login), nz(f.ref), nz(f.date), nz(f.reason)).Scan(&id)
+		}
 		return x.QueryRow(bg(), `SELECT operator_create_society($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12)::text`,
 			f.code, f.name, f.reg, f.directorate, f.withdrawal, f.writeOff, f.sigs,
 			nz(f.operator), nz(f.login), nz(f.ref), nz(f.date), nz(f.reason)).Scan(&id)
@@ -315,4 +320,12 @@ func TestFound_Control_AFoundingOnItsResolution(t *testing.T) {
 	if id == "" {
 		t.Fatalf("NO ID — the founding returned no society")
 	}
+}
+
+// foundingTakesWindow: whether this schema's founding function takes the
+// request window and the guard threshold (0037), as the live one does.
+func foundingTakesWindow() bool {
+	var yes bool
+	db.QueryRow(bg(), `SELECT to_regprocedure('operator_create_society(text,text,text,text,int,int,int,int,bigint,text,text,text,date,text)') IS NOT NULL`).Scan(&yes)
+	return yes
 }

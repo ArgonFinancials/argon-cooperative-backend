@@ -101,7 +101,7 @@ before=$(nsoc); run --code "DT10$$" --name "TEST DATA: Lagos" "${OP[@]}" --confi
 
 T="D09 a real society's member gets no PIN from the operator, and no device on the PIN alone"
 R="DR$$"
-sql "SELECT operator_create_society('$R', 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2, 'Test Operator', 'test@host', 'Founding resolution', current_date, 'test')" >/dev/null
+sql "SELECT operator_create_society('$R', 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2, 7, 10000000, 'Test Operator', 'test@host', 'Founding resolution', current_date, 'test')" >/dev/null
 rm=$(sql "SELECT operator_appoint_founding_officer((SELECT id FROM societies WHERE code = '$R'), 'Real Chair', '+2347099999901', '$R-1', '2024-01-01', 'chairman', true, 'Test Operator', 'test@host', 'Founding resolution', current_date, 'test')")
 h=$(printf '380915\n' | "$BIN" demo-pin | awk '{print $2}')
 pg_as argon_migrator "$db" -At -q -v u="$rm" -v h="$h" -f - >"$W/out" 2>"$W/err" <<'SQL'

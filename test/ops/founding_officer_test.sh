@@ -53,7 +53,7 @@ chmod +x "$W/codegen"
 { cat "$ARGON_ENV"; printf 'ARGON_CODE_KEY=%s\nARGON_DB=argon_verify_no_such_db\n' "$KEY"; } >"$W/env"
 
 S=FND$$
-sql "SELECT operator_create_society('$S', 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2,
+sql "SELECT operator_create_society('$S', 'Ikeja Teachers Cooperative', 'LSCS/2019/0412', 'Lagos', 2, 2, 2, 7, 10000000,
   'Adaeze Okafor', 'test@host', 'Founding resolution, item 3', '2026-09-30', 'test society')" >/dev/null || die "cannot found the test society"
 
 OUT="$W/out"; RC=0
