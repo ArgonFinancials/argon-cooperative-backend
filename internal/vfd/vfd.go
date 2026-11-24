@@ -13,11 +13,15 @@
 //     did nothing), unknown (VFD may have acted: a timeout, a 5xx, an
 //     unreadable answer). Unknown is never reported as refused: a caller that
 //     believed "refused" would release money that may be leaving.
-//   - A TRANSFER'S STATE is succeeded, not_found, pending or unknown. The
-//     client never reports a failure VFD did not state: no failure status of
-//     VFD's is known from VFD's own documentation, so none is mapped. A
-//     definitive failure is the CALLER's: not found after its settlement
-//     window. "99" is not taken as success (UNVERIFIED in the spec).
+//   - A TRANSFER'S STATE is succeeded, not_found, pending or unknown, as
+//     docs/VFD_INTEGRATION.md §1.6 has it from 193 transfers looked up at VFD
+//     (2026-11-24): succeeded ONLY on status 00 with transactionStatus 00;
+//     not_found ONLY on 108; pending is anything else VFD said (91, 25, 99,
+//     a word, another code): VFD may have created and sent that transfer, so
+//     the caller holds it and shows a person. Unknown: no readable answer.
+//   - EVERY REPLY KEPT: a send's and a requery's HTTP status and body, as
+//     received, for the caller to store (the wallet stored neither, and so
+//     nobody can say which send codes led where).
 //   - THE CALLER'S REFERENCE, never one made here: a reference derived from
 //     what authorised the transfer is what stops a retry becoming a second
 //     payment. A transfer with no reference is refused before sending.
@@ -29,7 +33,6 @@ package vfd
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 )
@@ -95,10 +98,12 @@ type Transfer struct {
 }
 
 type Sent struct {
-	Outcome   Outcome
-	Code      string // VFD's status, or http_<n>
-	TxnID     string
-	SessionID string
+	Outcome    Outcome
+	Code       string // VFD's status, or http_<n>
+	TxnID      string
+	SessionID  string
+	HTTPStatus int    // 0: no answer at all
+	Reply      string // VFD's body as received (capped); empty when none came
 }
 
 type Requeried struct {
@@ -111,6 +116,34 @@ type Requeried struct {
 	FromAcct   string
 	ToAcct     string
 	At         string // VFD's transactionDate, as given
+	TxnType    string // VFD's transactionType: OUTFLOW or INFLOW
+	HTTPStatus int
+	Reply      string
+}
+
+// Pool: Argon's VFD pool account (§1.1): every transfer goes out from it.
+type Pool struct {
+	Outcome Outcome
+	Code    string
+	Party   Party // AccountNo, AccountID (fromSavingsId), ClientID, Name (client)
+}
+
+// HistoryRow: one line of an account's history (§4).
+type HistoryRow struct {
+	TxnID      string // transactionId: the caller's reference for an outflow, VFD's for an inflow
+	AmountKobo int64
+	FromAcct   string
+	ToAcct     string
+	SessionID  string
+	Time       string
+	Type       string // INFLOW, OUTFLOW, POOL TRANSFER
+	Response   string // transactionResponse, e.g. 00, 91
+}
+
+type History struct {
+	Outcome Outcome
+	Code    string
+	Rows    []HistoryRow // empty: the last page
 }
 
 type Person struct {
@@ -129,17 +162,14 @@ type Opened struct {
 	ClientID  string
 }
 
-// ErrStatementUnavailable: no endpoint listing an account's transactions over
-// a period is known from VFD's documentation or the wallet's code. Asked for
-// a statement, the client says so; it never answers an empty one (an empty
-// statement says "nothing was missed").
-var ErrStatementUnavailable = errors.New("vfd: no statement endpoint is known (docs/VFD_INTEGRATION.md: confirm with VFD); reconciliation cannot run")
-
 type Client interface {
 	NameEnquiry(ctx context.Context, accountNo, bank string) (Lookup, error)
 	Transfer(ctx context.Context, t Transfer) (Sent, error)
 	Requery(ctx context.Context, reference string) (Requeried, error)
 	OpenAccount(ctx context.Context, p Person) (Opened, error)
 	OpenAnother(ctx context.Context, previousAccountNo string) (Opened, error)
-	Statement(ctx context.Context, accountNo string, from, to time.Time) error
+	// Pool: GET /account/enquiry.
+	Pool(ctx context.Context) (Pool, error)
+	// History: GET /account/transactions, one page (0, 1, ...), from..to.
+	History(ctx context.Context, accountNo string, from, to time.Time, page int) (History, error)
 }

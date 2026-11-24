@@ -1,26 +1,31 @@
 //go:build tier1
 
 // THE MUTATION VEHICLE FOR THE WALLET WORKER — test code, NOT the worker.
-// Generated from internal/wallet/wallet.go (the same code, so it cannot
-// drift), with one break per run (ARGON_TEST_WALLET_FAKE=<break>):
+// GENERATED from internal/wallet/wallet.go and inflow.go (the same code, so it
+// cannot drift), with one break per run (ARGON_TEST_WALLET_FAKE=<break>):
 //
-//	pays_officer_holds  pays a hold an officer authorised by hand (§13: the system pays only the last signature's)
-//	no_enquiry          sends without VFD confirming the member's account
-//	refused_waits       a send VFD refused or never received is left waiting (the member left with silence)
-//	resend_unknown      a send with no answer is sent again (how a payment goes out twice)
-//	release_on_unknown  a send with no answer is failed and the hold released (money that may be leaving freed)
-//	lost_resent         a send whose answer was lost is sent again
-//	lost_ignored        a send whose answer was lost is never asked about (the hold held forever)
-//	notfound_fails_now  "not found" fails the transfer at once (settlement lag taken as failure)
-//	unreadable_fails    an unreadable requery past the window fails it
-//	success_unrecorded  VFD's success is not recorded as paid
-//	body_amount_believed an inflow recorded at the notification's amount, not VFD's
-//	unconfirmed_believed an inflow VFD does not confirm, recorded anyway
-//	unmatched_unsaid    money to no society's account marked confirmed (nobody looks)
-//	dup_attempt_unrecorded a second delivery left with no attempt: never settled, asked about forever
-//	reconcile_silent    reconciliation records nothing (a missed inflow, and nobody told)
-//	reconcile_matched   reconciliation that could not run recorded as a match
-//	rematch_skipped     claims a race missed are never matched (the member waits on a payment that arrived)
+//	pays_officer_holds          pays a hold an officer authorised by hand
+//	no_enquiry                  sends without VFD confirming the member's account
+//	send_00_waits               VFD's 00 to the send not taken as the payment
+//	refused_released            a refused send released at once (VFD had sent 3 of 32 of those)
+//	reply_unkept                VFD's replies not kept
+//	schedule_ignored            asked about on every tick, not on §1.6's schedule
+//	resend_unknown              a send with no answer sent again (how a payment goes out twice)
+//	success_unrecorded          VFD's 00/00 not recorded as paid
+//	notfound_once               released on one 108 past the window
+//	notfound_fails_now          released on 108 moments after the send
+//	needs_vfd_silent            91, 25, 99 held and told to nobody
+//	lost_ignored                a send whose answer was lost never asked about
+//	outflow_as_inflow           money going out taken as a deposit
+//	unconfirmed_believed        a deposit VFD does not confirm, recorded anyway
+//	body_amount_believed        a deposit recorded at the notification's amount, not VFD's
+//	dup_attempt_unrecorded      a second delivery left with no attempt
+//	unmatched_unsaid            money to no society's account marked confirmed
+//	sweep_silent                no history read, a missed deposit never found
+//	sweep_page_one              only the history's first page read
+//	sweep_could_not_as_matched  a history VFD did not give recorded as nothing missing
+//	sweep_believed              a deposit in the history credited without VFD's requery
+//	rematch_skipped             claims a race missed never matched
 package tier1
 
 import (
@@ -41,8 +46,20 @@ func newRefWallet(cfg wallet.Config, brk string) (wallet.Worker, error) {
 	if cfg.DB == nil || cfg.VFD == nil {
 		return nil, errors.New("wallet: the worker needs its database and the VFD client")
 	}
+	if cfg.FirstAsk <= 0 {
+		cfg.FirstAsk = 2 * time.Minute
+	}
 	if cfg.AskEvery <= 0 {
-		cfg.AskEvery = time.Minute
+		cfg.AskEvery = 10 * time.Minute
+	}
+	if cfg.LateAfter <= 0 {
+		cfg.LateAfter = 24 * time.Hour
+	}
+	if cfg.LateAskEvery <= 0 {
+		cfg.LateAskEvery = time.Hour
+	}
+	if cfg.SweepEvery <= 0 {
+		cfg.SweepEvery = 15 * time.Minute
 	}
 	if cfg.LostAfter <= 0 {
 		cfg.LostAfter = 2 * time.Minute
@@ -74,28 +91,61 @@ func (w *refWallet) Tick(ctx context.Context) (wallet.Round, error) {
 	if err := w.confirmInflows(ctx, &r); err != nil {
 		return r, err
 	}
-	if w.brk != "rematch_skipped" {
-		if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {
-			return r, fmt.Errorf("wallet: matching claims a race missed: %w", err)
-		}
+	// The database matches a claim and its inflow in whichever transaction
+	// arrives second; two arriving at once see neither, and this finds them.
+	if w.brk == "rematch_skipped" {
+		return r, w.sweep(ctx, &r)
 	}
-	return r, w.reconcile(ctx)
+	if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {
+		return r, fmt.Errorf("wallet: matching claims a race missed: %w", err)
+	}
+	return r, w.sweep(ctx, &r)
+}
+
+// pool: Argon's VFD pool (§1.1), as recorded, or recorded now from VFD's
+// enquiry. None: nothing is sent this round.
+func (w *refWallet) pool(ctx context.Context) (vfd.Party, bool, error) {
+	var p vfd.Party
+	err := w.cfg.DB.QueryRow(ctx, `SELECT account_number, account_id, client_id, client_name FROM vfd_pool`).Scan(&p.AccountNo, &p.AccountID, &p.ClientID, &p.Name)
+	if err == nil {
+		p.Bank = vfd.IntraBank
+		return p, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return p, false, err
+	}
+	got, err := w.cfg.VFD.Pool(ctx)
+	if err != nil {
+		return p, false, err
+	}
+	if got.Outcome != vfd.Accepted {
+		w.log.ErrorContext(ctx, "no transfer can go out: VFD did not name Argon's pool account", "outcome", got.Outcome, "code", got.Code)
+		return p, false, nil
+	}
+	if _, err := w.cfg.DB.Exec(ctx, `INSERT INTO vfd_pool (account_number, account_id, client_id, client_name) VALUES ($1, $2, $3, $4)`,
+		got.Party.AccountNo, got.Party.AccountID, got.Party.ClientID, got.Party.Name); err != nil {
+		return p, false, fmt.Errorf("wallet: recording the pool: %w", err)
+	}
+	return got.Party, true, nil
 }
 
 // sendNew: every open hold the last signature placed, with no transfer yet,
-// whose member and society both have a VFD account.
+// whose member has a VFD account; sent from the pool.
 func (w *refWallet) sendNew(ctx context.Context, r *wallet.Round) error {
+	from, ok, err := w.pool(ctx)
+	if err != nil || !ok {
+		return err
+	}
 	rows, err := w.cfg.DB.Query(ctx, `
-		SELECT h.id::text, h.amount_kobo, s.account_number, coalesce(s.vfd_client_id, ''), coalesce(s.vfd_account_id, ''), coalesce(s.account_name, ''), m.account_number
+		SELECT h.id::text, h.amount_kobo, m.account_number
 		  FROM withdrawal_holds h
-		  JOIN credential_acts a ON a.id = h.act_id AND (a.kind = 'approval_signature' OR $2 = 'pays_officer_holds')
+		  JOIN credential_acts a ON a.id = h.act_id AND (a.kind = 'approval_signature' OR $2)
 		  JOIN vfd_accounts m ON m.member_id = h.member_id
-		  JOIN vfd_accounts s ON s.society_id = h.society_id AND s.member_id IS NULL
 		 WHERE NOT EXISTS (SELECT 1 FROM vfd_transfers t WHERE t.hold_id = h.id)
 		   AND NOT EXISTS (SELECT 1 FROM withdrawal_hold_releases rl WHERE rl.hold_id = h.id)
 		   AND NOT EXISTS (SELECT 1 FROM ledger_entries e WHERE e.hold_id = h.id)
 		   AND ($1 = '' OR h.society_id::text = $1)
-		 ORDER BY h.held_at`, w.cfg.Society, w.brk)
+		 ORDER BY h.held_at`, w.cfg.Society, w.brk == "pays_officer_holds")
 	if err != nil {
 		return fmt.Errorf("wallet: the holds to pay: %w", err)
 	}
@@ -107,12 +157,11 @@ func (w *refWallet) sendNew(ctx context.Context, r *wallet.Round) error {
 	}
 	var dues []due
 	for rows.Next() {
-		var d due
-		if err := rows.Scan(&d.hold, &d.amount, &d.from.AccountNo, &d.from.ClientID, &d.from.AccountID, &d.from.Name, &d.to); err != nil {
+		d := due{from: from}
+		if err := rows.Scan(&d.hold, &d.amount, &d.to); err != nil {
 			rows.Close()
 			return err
 		}
-		d.from.Bank = vfd.IntraBank
 		dues = append(dues, d)
 	}
 	rows.Close()
@@ -133,9 +182,6 @@ func (w *refWallet) send(ctx context.Context, r *wallet.Round, hold string, amou
 	if err != nil {
 		return err
 	}
-	if w.brk == "no_enquiry" {
-		look.Party = vfd.Party{AccountNo: toAcct, Bank: vfd.IntraBank}
-	}
 	if look.Outcome != vfd.Accepted && w.brk != "no_enquiry" {
 		w.log.WarnContext(ctx, "payout waiting: VFD did not confirm the member's account", "hold", hold, "outcome", look.Outcome, "code", look.Code)
 		r.Waiting++
@@ -152,17 +198,20 @@ func (w *refWallet) send(ctx context.Context, r *wallet.Round, hold string, amou
 		return fmt.Errorf("wallet: sending %s: %w", ref, err)
 	}
 	r.Sent++
-	ev, err := w.event(ctx, transfer, "sent", string(sent.Outcome), sent.Code, "", sent.TxnID, sent.SessionID, 0, "")
+	ev, err := w.event(ctx, transfer, "sent", string(sent.Outcome), sent.Code, "", sent.TxnID, sent.SessionID, 0, "", sent.HTTPStatus, sent.Reply)
 	if err != nil {
 		return err
 	}
-	// Refused or never reached: VFD did nothing. Definitive, now.
-	if (sent.Outcome == vfd.Refused || sent.Outcome == vfd.NotReached) && w.brk != "refused_waits" {
+	// §1.6.2: VFD's 00 to the send is the payment (161 of 161 were paid).
+	if sent.Outcome == vfd.Accepted && sent.Code == "00" && w.brk != "send_00_waits" {
+		return w.outcome(ctx, r, transfer, "paid", ev)
+	}
+	if sent.Outcome == vfd.Refused && w.brk == "refused_released" {
 		return w.outcome(ctx, r, transfer, "failed", ev)
 	}
-	if sent.Outcome == vfd.Unknown && w.brk == "release_on_unknown" {
-		return w.outcome(ctx, r, transfer, "failed", ev)
-	}
+	// §1.6.3: anything else, a refusal included, is a pending check: in 3 of
+	// 32 refused sends VFD had already created the transfer and sent it.
+	r.Waiting++
 	return nil
 }
 
@@ -171,6 +220,9 @@ func (w *refWallet) send(ctx context.Context, r *wallet.Round, hold string, amou
 // sent. Which, nobody knows: it is recorded as an unknown send and asked
 // about. Never resent.
 func (w *refWallet) recordLost(ctx context.Context) error {
+	if w.brk == "lost_ignored" {
+		return nil
+	}
 	rows, err := w.cfg.DB.Query(ctx, `SELECT t.id::text FROM vfd_transfers t JOIN withdrawal_holds h ON h.id = t.hold_id
 		 WHERE NOT EXISTS (SELECT 1 FROM vfd_transfer_events e WHERE e.transfer_id = t.id)
 		   AND t.created_at < now() - make_interval(secs => $1)
@@ -182,14 +234,8 @@ func (w *refWallet) recordLost(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if w.brk == "lost_ignored" {
-		return nil
-	}
 	for _, id := range ids {
-		if w.brk == "lost_resent" {
-			w.cfg.VFD.Transfer(ctx, vfd.Transfer{Reference: "Argon-resent-" + id, From: vfd.Party{AccountNo: "1000000000"}, To: vfd.Party{AccountNo: "1000000001", Bank: vfd.IntraBank}, AmountKobo: 1})
-		}
-		if _, err := w.event(ctx, id, "sent", string(vfd.Unknown), "send_not_recorded", "", "", "", 0, ""); err != nil {
+		if _, err := w.event(ctx, id, "sent", string(vfd.Unknown), "send_not_recorded", "", "", "", 0, "", 0, ""); err != nil {
 			return err
 		}
 		w.log.WarnContext(ctx, "a transfer's send was never recorded: recorded as unknown, to be asked about, never resent", "transfer", id)
@@ -197,30 +243,35 @@ func (w *refWallet) recordLost(ctx context.Context) error {
 	return nil
 }
 
-// askOpen: every transfer sent and not yet decided, not asked about within
-// AskEvery.
+// askOpen: every transfer sent and not yet decided whose next question is
+// due by §1.6.4's schedule.
 func (w *refWallet) askOpen(ctx context.Context, r *wallet.Round) error {
 	rows, err := w.cfg.DB.Query(ctx, `
-		SELECT t.id::text, t.reference, s.id::text, s.result,
-		       now() >= s.at + vfd_settlement_window() AS past_window
+		SELECT t.id::text, t.reference,
+		       now() >= s.at + vfd_settlement_window() AS past_window,
+		       coalesce(pr.result = 'not_found' AND pr.code = '108' AND pr.at >= s.at + vfd_settlement_window(), false) AS one_108
 		  FROM vfd_transfers t
 		  JOIN withdrawal_holds h ON h.id = t.hold_id
 		  JOIN vfd_transfer_events s ON s.transfer_id = t.id AND s.kind = 'sent'
+		  LEFT JOIN LATERAL (SELECT e.result, e.code, e.at FROM vfd_transfer_events e WHERE e.transfer_id = t.id AND e.kind = 'requeried'
+		                      ORDER BY e.at DESC, e.id::text DESC LIMIT 1) pr ON true
 		 WHERE NOT EXISTS (SELECT 1 FROM vfd_transfer_outcomes o WHERE o.transfer_id = t.id)
-		   AND (SELECT max(at) FROM vfd_transfer_events e WHERE e.transfer_id = t.id) < now() - make_interval(secs => $1)
-		   AND ($2 = '' OR h.society_id::text = $2)
-		 ORDER BY s.at`, w.cfg.AskEvery.Seconds(), w.cfg.Society)
+		   AND ($6 OR CASE WHEN pr.at IS NULL THEN now() >= s.at + make_interval(secs => $1)
+		            WHEN now() < s.at + make_interval(secs => $3) THEN now() >= pr.at + make_interval(secs => $2)
+		            ELSE now() >= pr.at + make_interval(secs => $4) END
+		   ) AND ($5 = '' OR h.society_id::text = $5)
+		 ORDER BY s.at`, w.cfg.FirstAsk.Seconds(), w.cfg.AskEvery.Seconds(), w.cfg.LateAfter.Seconds(), w.cfg.LateAskEvery.Seconds(), w.cfg.Society, w.brk == "schedule_ignored")
 	if err != nil {
 		return err
 	}
 	type open struct {
-		transfer, ref, sentEv, sentResult string
-		pastWindow                        bool
+		transfer, ref      string
+		pastWindow, one108 bool
 	}
 	var opens []open
 	for rows.Next() {
 		var o open
-		if err := rows.Scan(&o.transfer, &o.ref, &o.sentEv, &o.sentResult, &o.pastWindow); err != nil {
+		if err := rows.Scan(&o.transfer, &o.ref, &o.pastWindow, &o.one108); err != nil {
 			rows.Close()
 			return err
 		}
@@ -231,32 +282,15 @@ func (w *refWallet) askOpen(ctx context.Context, r *wallet.Round) error {
 		return err
 	}
 	for _, o := range opens {
-		// A send VFD refused or never received, not yet decided (a run that
-		// died before deciding): decided now, on that answer.
-		if o.sentResult == string(vfd.Unknown) && w.brk == "resend_unknown" {
-			if _, err := w.event(ctx, o.transfer, "sent", "accepted", "00", "", "", "", 0, ""); err != nil {
-				return err
-			}
-		}
-		if (o.sentResult == string(vfd.Refused) || o.sentResult == string(vfd.NotReached)) && w.brk == "refused_waits" {
-			r.Waiting++
-			continue
-		}
-		if o.sentResult == string(vfd.Refused) || o.sentResult == string(vfd.NotReached) {
-			if err := w.outcome(ctx, r, o.transfer, "failed", o.sentEv); err != nil {
-				return err
-			}
-			continue
-		}
-		if o.sentResult == string(vfd.Unknown) && w.brk == "resend_unknown" {
-			w.cfg.VFD.Transfer(ctx, vfd.Transfer{Reference: o.ref, From: vfd.Party{AccountNo: "1000000000"}, To: vfd.Party{AccountNo: "1000000001", Bank: vfd.IntraBank}, AmountKobo: 1})
+		if w.brk == "resend_unknown" {
+			w.cfg.VFD.Transfer(ctx, vfd.Transfer{Reference: o.ref, From: vfd.Party{AccountNo: "1000000001"}, To: vfd.Party{AccountNo: "1000000002"}, AmountKobo: 1})
 		}
 		q, err := w.cfg.VFD.Requery(ctx, o.ref)
 		if err != nil {
 			return err
 		}
 		r.Asked++
-		ev, err := w.event(ctx, o.transfer, "requeried", string(q.State), q.Code, q.TxnStatus, q.TxnID, q.SessionID, q.AmountKobo, q.At)
+		ev, err := w.event(ctx, o.transfer, "requeried", string(q.State), q.Code, q.TxnStatus, q.TxnID, q.SessionID, q.AmountKobo, q.At, q.HTTPStatus, q.Reply)
 		if err != nil {
 			return err
 		}
@@ -265,14 +299,23 @@ func (w *refWallet) askOpen(ctx context.Context, r *wallet.Round) error {
 			r.Waiting++
 		case q.State == vfd.Succeeded:
 			err = w.outcome(ctx, r, o.transfer, "paid", ev)
+		case q.State == vfd.NotFound && o.pastWindow && w.brk == "notfound_once":
+			err = w.outcome(ctx, r, o.transfer, "failed", ev)
 		case q.State == vfd.NotFound && w.brk == "notfound_fails_now":
 			err = w.outcome(ctx, r, o.transfer, "failed", ev)
-		case q.State == vfd.StateUnknown && o.pastWindow && w.brk == "unreadable_fails":
+		case q.State == vfd.NotFound && o.pastWindow && o.one108:
+			// 108 twice in a row, both past the window (§1.6.4): released.
 			err = w.outcome(ctx, r, o.transfer, "failed", ev)
-		case q.State == vfd.NotFound && o.pastWindow:
-			err = w.outcome(ctx, r, o.transfer, "failed", ev)
+		case q.State == vfd.Pending && w.brk == "needs_vfd_silent":
+			r.Waiting++
+		case q.State == vfd.Pending:
+			// VFD said something else (91, 25, 99, ...): it may have created and
+			// sent this transfer. Held; never released here; a person is told.
+			r.NeedsVFD++
+			w.log.ErrorContext(ctx, "a transfer needs VFD: held until VFD confirms a reversal, never released automatically",
+				"transfer", o.transfer, "reference", o.ref, "status", q.Code, "transaction_status", q.TxnStatus)
 		default:
-			r.Waiting++ // pending, unknown, or not found within the window: asked again later
+			r.Waiting++ // unknown, or 108 not yet twice past the window: asked again
 		}
 		if err != nil {
 			return err
@@ -281,15 +324,23 @@ func (w *refWallet) askOpen(ctx context.Context, r *wallet.Round) error {
 	return nil
 }
 
-func (w *refWallet) event(ctx context.Context, transfer, kind, result, code, txnStatus, txnID, session string, amount int64, at string) (string, error) {
+// event: what VFD said, with its reply as received (§1.6.1: every send reply
+// and every requery reply kept).
+func (w *refWallet) event(ctx context.Context, transfer, kind, result, code, txnStatus, txnID, session string, amount int64, at string, httpStatus int, reply string) (string, error) {
 	var id string
-	var amt any
+	var amt, hs any
 	if amount > 0 {
 		amt = amount
 	}
-	err := w.cfg.DB.QueryRow(ctx, `INSERT INTO vfd_transfer_events (transfer_id, kind, result, code, txn_status, txn_id, session_id, amount_kobo, vfd_time)
-		VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''), nullif($6, ''), nullif($7, ''), $8, nullif($9, '')) RETURNING id::text`,
-		transfer, kind, result, code, txnStatus, txnID, session, amt, at).Scan(&id)
+	if httpStatus > 0 {
+		hs = httpStatus
+	}
+	if w.brk == "reply_unkept" {
+		hs, reply = nil, ""
+	}
+	err := w.cfg.DB.QueryRow(ctx, `INSERT INTO vfd_transfer_events (transfer_id, kind, result, code, txn_status, txn_id, session_id, amount_kobo, vfd_time, http_status, reply)
+		VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''), nullif($6, ''), nullif($7, ''), $8, nullif($9, ''), $10, nullif($11, '')) RETURNING id::text`,
+		transfer, kind, result, code, txnStatus, txnID, session, amt, at, hs, reply).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("wallet: recording VFD's answer (%s %s) for transfer %s: %w", kind, result, transfer, err)
 	}
@@ -308,6 +359,12 @@ func (w *refWallet) outcome(ctx context.Context, r *wallet.Round, transfer, resu
 	w.log.InfoContext(context.Background(), "a transfer decided", "transfer", transfer, "result", result)
 	return nil
 }
+
+// MONEY ARRIVING (0029). A notification is never believed: the webhook keeps
+// it as received, and this asks VFD about its reference. Only VFD's answer is
+// recorded, VFD's account and amount, not the notification's; once per VFD
+// reference (0029's unique index), whatever the notification claimed.
+// Every attempt is recorded, saying why when it did not confirm.
 
 type refInflowNote struct {
 	id, raw string
@@ -359,26 +416,24 @@ func (w *refWallet) confirmInflow(ctx context.Context, r *wallet.Round, n refInf
 	if err := w.cfg.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM vfd_inflows WHERE vfd_reference = $1)`, b.Reference).Scan(&seen); err != nil {
 		return err
 	}
-	if seen && w.brk == "dup_attempt_unrecorded" {
-		return nil // a duplicate never settled: asked about forever
-	}
 	if seen {
+		if w.brk == "dup_attempt_unrecorded" {
+			return nil
+		}
 		return w.attempt(ctx, n.id, "duplicate", "")
 	}
 	q, err := w.cfg.VFD.Requery(ctx, b.Reference)
 	if err != nil {
 		return err
 	}
-	if w.brk == "body_amount_believed" {
-		q.AmountKobo = 1000000 // the notification's ₦10,000
-	}
-	if w.brk == "unconfirmed_believed" && q.State != vfd.Succeeded {
-		q.State, q.AmountKobo = vfd.Succeeded, 600000
-		w.cfg.DB.QueryRow(ctx, "SELECT coalesce(account_number, '') FROM vfd_notifications WHERE id = $1", n.id).Scan(&q.ToAcct) // the notification believed
-	}
 	r.Asked++
-	if q.State != vfd.Succeeded {
+	if q.State != vfd.Succeeded && w.brk != "unconfirmed_believed" {
 		return w.attempt(ctx, n.id, "not_confirmed", fmt.Sprintf("VFD: %s (status %s, transaction status %s)", q.State, q.Code, q.TxnStatus))
+	}
+	// Money IN (§3.2): VFD says INFLOW. A reference that names money going out
+	// is no deposit, whatever a notification said.
+	if q.TxnType != "INFLOW" && w.brk != "outflow_as_inflow" && w.brk != "unconfirmed_believed" {
+		return w.attempt(ctx, n.id, "not_confirmed", fmt.Sprintf("VFD says this reference is %q, not money arriving (INFLOW)", q.TxnType))
 	}
 	var society string
 	err = w.cfg.DB.QueryRow(ctx, `SELECT society_id::text FROM vfd_accounts WHERE account_number = $1 AND member_id IS NULL`, q.ToAcct).Scan(&society)
@@ -394,7 +449,7 @@ func (w *refWallet) confirmInflow(ctx context.Context, r *wallet.Round, n refInf
 	_, err = w.cfg.DB.Exec(ctx, `INSERT INTO vfd_inflows (vfd_reference, society_id, account_number, amount_kobo, session_id,
 		  originator_name, originator_account, originator_bank, narration, vfd_time, notification_id)
 		VALUES ($1, $2, $3, $4, nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8, ''), nullif($9, ''), nullif($10, ''), $11)`,
-		b.Reference, society, q.ToAcct, q.AmountKobo, q.SessionID, b.OriginatorName, b.OriginatorAccount, b.OriginatorBank, b.Narration, q.At, n.id)
+		b.Reference, society, q.ToAcct, map[bool]int64{true: 1000000, false: q.AmountKobo}[w.brk == "body_amount_believed"], q.SessionID, b.OriginatorName, b.OriginatorAccount, b.OriginatorBank, b.Narration, q.At, n.id)
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) && pe.ConstraintName == "vfd_inflow_once" {
 		return w.attempt(ctx, n.id, "duplicate", "") // another delivery confirmed it first
@@ -422,16 +477,25 @@ func (w *refWallet) attempt(ctx context.Context, notification, result, detail st
 	return nil
 }
 
-// reconcile: once a day for each society account, ask VFD for the period's
-// statement. No statement endpoint is known: the run is recorded as one that
-// could not run, saying why, and wallet_exceptions shows it. Never an empty
-// statement, which would say nothing was missed.
-func (w *refWallet) reconcile(ctx context.Context) error {
+// sweep (§3.4, §4): VFD stopped sending notifications for days at a time,
+// four times, and never re-sent them. So each society account's history is
+// read on a schedule (SweepEvery), page by page, over the period since the
+// last sweep (and a day before it: overlap costs nothing, a reference is
+// recorded once). Every INFLOW no notification brought is kept as a
+// notification FROM THE HISTORY, and confirmed by the same requery as any
+// other: the history is never believed either. Each sweep is recorded:
+// matched, missing_found (saying how many), or could_not_run (saying why).
+func (w *refWallet) sweep(ctx context.Context, r *wallet.Round) error {
+	if w.brk == "sweep_silent" {
+		return nil
+	}
 	rows, err := w.cfg.DB.Query(ctx, `
-		SELECT a.account_number, coalesce((SELECT max(period_to) FROM vfd_reconciliation_runs r WHERE r.account_number = a.account_number), now() - interval '1 day')
+		SELECT a.account_number,
+		       coalesce((SELECT max(period_to) FROM vfd_reconciliation_runs x WHERE x.account_number = a.account_number AND x.outcome <> 'could_not_run'), a.recorded_at) - interval '1 day'
 		  FROM vfd_accounts a
 		 WHERE a.member_id IS NULL AND ($1 = '' OR a.society_id::text = $1)
-		   AND NOT EXISTS (SELECT 1 FROM vfd_reconciliation_runs r WHERE r.account_number = a.account_number AND r.ran_at > now() - interval '1 day')`, w.cfg.Society)
+		   AND NOT EXISTS (SELECT 1 FROM vfd_reconciliation_runs x WHERE x.account_number = a.account_number AND x.ran_at > now() - make_interval(secs => $2))`,
+		w.cfg.Society, w.cfg.SweepEvery.Seconds())
 	if err != nil {
 		return err
 	}
@@ -448,27 +512,73 @@ func (w *refWallet) reconcile(ctx context.Context) error {
 	}
 	for _, d := range dues {
 		to := time.Now()
-		if !d.from.Before(to) {
-			continue
+		outcome, detail, found, err := w.sweepAccount(ctx, d.acct, d.from, to)
+		if err != nil {
+			return err
 		}
-		outcome, detail := "could_not_run", ""
-		if err := w.cfg.VFD.Statement(ctx, d.acct, d.from, to); err != nil {
-			detail = err.Error()
-		} else {
-			// A statement endpoint answered: comparing it is not built, and an
-			// answer not compared is not a match.
-			detail = "VFD returned a statement and nothing here compares it yet"
-		}
-		if w.brk == "reconcile_silent" {
-			continue
-		}
-		if w.brk == "reconcile_matched" {
-			outcome, detail = "matched", "nothing missing"
-		}
+		r.Swept++
+		r.Found += found
 		if _, err := w.cfg.DB.Exec(ctx, `INSERT INTO vfd_reconciliation_runs (account_number, period_from, period_to, outcome, detail) VALUES ($1, $2, $3, $4, $5)`,
 			d.acct, d.from, to, outcome, detail); err != nil {
-			return fmt.Errorf("wallet: recording reconciliation of …%s: %w", refTail(d.acct), err)
+			return fmt.Errorf("wallet: recording the sweep of …%s: %w", refTail(d.acct), err)
 		}
 	}
 	return nil
+}
+
+// refSweepPages: the most pages read in one sweep of one account (20 rows each).
+const refSweepPages = 200
+
+func (w *refWallet) sweepAccount(ctx context.Context, acct string, from, to time.Time) (outcome, detail string, found int, err error) {
+	for page := 0; ; page++ {
+		if page == refSweepPages {
+			return "could_not_run", fmt.Sprintf("more than %d pages of history: the sweep stopped rather than read part of it", refSweepPages), found, nil
+		}
+		h, err := w.cfg.VFD.History(ctx, acct, from, to, page)
+		if err != nil {
+			return "", "", found, err
+		}
+		if h.Outcome != vfd.Accepted && w.brk == "sweep_could_not_as_matched" {
+			return "matched", "nothing missing", found, nil
+		}
+		if h.Outcome != vfd.Accepted {
+			return "could_not_run", fmt.Sprintf("VFD did not give the account's history (page %d: %s, status %s)", page, h.Outcome, h.Code), found, nil
+		}
+		if len(h.Rows) == 0 {
+			break
+		}
+		if w.brk == "sweep_page_one" && page > 0 {
+			break
+		}
+		for _, row := range h.Rows {
+			if row.Type != "INFLOW" || row.TxnID == "" {
+				continue
+			}
+			var known bool
+			if err := w.cfg.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM vfd_inflows WHERE vfd_reference = $1)
+				OR EXISTS (SELECT 1 FROM vfd_notifications WHERE reference = $1)`, row.TxnID).Scan(&known); err != nil {
+				return "", "", found, err
+			}
+			if known {
+				continue
+			}
+			raw, _ := json.Marshal(map[string]string{"reference": row.TxnID, "account_number": row.ToAcct, "session_id": row.SessionID,
+				"originator_account_number": row.FromAcct, "timestamp": row.Time, "source": "history"})
+			if _, err := w.cfg.DB.Exec(ctx, `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, source) VALUES ('inflow', $1, false, $2, $3, 'history')`,
+				string(raw), row.TxnID, row.ToAcct); err != nil {
+				return "", "", found, fmt.Errorf("wallet: keeping a deposit found in …%s's history: %w", refTail(acct), err)
+			}
+			found++
+			if w.brk == "sweep_believed" {
+				var society string
+				w.cfg.DB.QueryRow(ctx, `SELECT society_id::text FROM vfd_accounts WHERE account_number = $1 AND member_id IS NULL`, row.ToAcct).Scan(&society)
+				w.cfg.DB.Exec(ctx, `INSERT INTO vfd_inflows (vfd_reference, society_id, account_number, amount_kobo) VALUES ($1, $2, $3, $4)`, row.TxnID, society, row.ToAcct, row.AmountKobo)
+			}
+		}
+	}
+	if found == 0 {
+		return "matched", "VFD's history for the period holds no deposit that a notification did not bring", 0, nil
+	}
+	w.log.WarnContext(ctx, "deposits found in an account's history that no notification brought: kept, to be confirmed with VFD", "account_last4", refTail(acct), "found", found)
+	return "missing_found", fmt.Sprintf("%d deposit(s) in VFD's history that no notification brought: kept as notifications from the history, confirmed with VFD like any other", found), found, nil
 }

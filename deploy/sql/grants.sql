@@ -326,6 +326,24 @@ BEGIN
   END IF;
 END $$;
 
+-- 0039: VFD AS PRODUCTION PROVED IT. The webhook says a notification came
+-- from VFD's webhook; the wallet worker records Argon's pool once, from VFD's
+-- enquiry, keeps every reply VFD gives a send or a requery, and keeps a
+-- deposit found in an account's history as a notification from the history.
+DO $$
+BEGIN
+  IF to_regclass('public.vfd_pool') IS NOT NULL THEN
+    GRANT INSERT (source) ON vfd_notifications TO argon_app;
+    GRANT SELECT ON vfd_pool TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT SELECT ON vfd_pool TO argon_wallet;
+      GRANT INSERT (id, account_number, account_id, client_id, client_name) ON vfd_pool TO argon_wallet;
+      GRANT INSERT (http_status, reply) ON vfd_transfer_events TO argon_wallet;
+      GRANT INSERT (id, kind, raw, signed, reference, account_number, source) ON vfd_notifications TO argon_wallet;
+    END IF;
+  END IF;
+END $$;
+
 -- 0038: A MEMBER'S STATUS. The app records a change (the member, the status
 -- it goes to, the reason, the secretary's act); the database says where it
 -- came from, when, and for which society (P86), and moves the member: the app

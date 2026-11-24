@@ -17,14 +17,20 @@
 //	intra_as_inter         VFD-to-VFD sent as inter-bank (the wallet's: failed silently while debiting)
 //	signature_reversed     the signature over to+from
 //	amount_float_in        VFD's naira string read through a float ("4.35" becomes 434 kobo)
-//	ninety_nine_success    transactionStatus 99 taken as success (the wallet's, unverified)
-//	notfound_as_pending    108 / "no transaction" reported as pending (a failed transfer never ends)
+//	ninety_nine_success    transactionStatus 99 taken as success (the wallet's: the one real 99 never arrived)
+//	word_success_taken     transactionStatus SUCCESS / SUCCESSFUL taken as success (the wallet's)
+//	notfound_as_pending    108 reported as pending (a failed transfer never ends)
+//	no_txn_as_notfound     any "no transaction" message taken as not found (the wallet's; only 108 is proven)
+//	reply_dropped          a send's or requery's reply not kept (the wallet's: nobody can say which codes led where)
 //	unreadable_as_notfound a requery that cannot be read reported as not found (the wallet's: refund, then a late payout)
 //	names_swapped          surname sent as firstname (the wallet's, for months)
 //	number_invented        no number from VFD, so one is made: "10" + eight digits (the wallet's)
 //	number_float_taken     a number VFD sent as a JSON number taken
 //	open_fallback          an ambiguous opening retried on /client/create (two accounts for one person)
-//	statement_empty        no statement endpoint answered as an empty statement (nothing was missed)
+//	pool_unchecked         a pool enquiry with no account number taken
+//	history_plus_space     history asked with its dates' space as + (VFD reads %20)
+//	history_utc            history asked in UTC, not VFD's own time (an hour of deposits unseen)
+//	history_page_ignored   history always asked for page 0 (the pages after the first never read)
 //	token_logged           the request logged with its headers: the token with it
 //	token_optional         a client built with no token
 //	enquiry_as_inter       name enquiry for VFD's own code asked as inter-bank
@@ -100,7 +106,11 @@ type refAnswer struct {
 func (r *refVFD) call(ctx context.Context, what, method, path string, query url.Values, body any) refAnswer {
 	u := strings.TrimRight(r.cfg.BaseURL, "/") + path
 	if len(query) > 0 {
-		u += "?" + query.Encode()
+		q := query.Encode()
+		if r.brk != "history_plus_space" {
+			q = strings.ReplaceAll(q, "+", "%20")
+		}
+		u += "?" + q
 	}
 	var rd io.Reader
 	if body != nil {
@@ -213,6 +223,9 @@ func (r *refVFD) Transfer(ctx context.Context, t vfd.Transfer) (vfd.Sent, error)
 			out = vfd.Sent{Outcome: vfd.Accepted, Code: e.Status, TxnID: d.TxnID, SessionID: d.SessionID}
 		}
 	}
+	if r.brk != "reply_dropped" {
+		out.HTTPStatus, out.Reply = a.status, string(a.raw)
+	}
 	r.log.InfoContext(ctx, "vfd transfer", "reference", t.Reference, "outcome", out.Outcome, "code", out.Code, "txn", out.TxnID, "to_last4", last4v(t.To.AccountNo))
 	return out, nil
 }
@@ -254,7 +267,7 @@ func (r *refVFD) Requery(ctx context.Context, reference string) (vfd.Requeried, 
 	out := vfd.Requeried{State: vfd.StateUnknown}
 	if a.outcome == "" {
 		e, ok := r.read(a)
-		notFound := ok && (e.Status == "108" || strings.Contains(strings.ToLower(e.Message), "no transaction"))
+		notFound := ok && (e.Status == "108" || r.brk == "no_txn_as_notfound" && strings.Contains(strings.ToLower(e.Message), "no transaction"))
 		var d struct {
 			TxnID     string          `json:"TxnId"`
 			Amount    json.RawMessage `json:"amount"`
@@ -263,6 +276,7 @@ func (r *refVFD) Requery(ctx context.Context, reference string) (vfd.Requeried, 
 			TxnStatus string          `json:"transactionStatus"`
 			Date      string          `json:"transactionDate"`
 			SessionID string          `json:"sessionId"`
+			Type      string          `json:"transactionType"`
 		}
 		dataOK := ok && len(e.Data) > 0 && json.Unmarshal(e.Data, &d) == nil
 		switch {
@@ -277,8 +291,9 @@ func (r *refVFD) Requery(ctx context.Context, reference string) (vfd.Requeried, 
 		case e.Status != "00" || !dataOK:
 			out = vfd.Requeried{State: vfd.Pending, Code: e.Status, TxnStatus: d.TxnStatus}
 		default:
-			out = vfd.Requeried{State: vfd.Pending, Code: e.Status, TxnStatus: d.TxnStatus, TxnID: d.TxnID, SessionID: d.SessionID, FromAcct: d.From, ToAcct: d.AccountNo, At: d.Date}
-			success := d.TxnStatus == "00" || strings.EqualFold(d.TxnStatus, "SUCCESS") || strings.EqualFold(d.TxnStatus, "SUCCESSFUL") ||
+			out = vfd.Requeried{State: vfd.Pending, Code: e.Status, TxnStatus: d.TxnStatus, TxnID: d.TxnID, SessionID: d.SessionID, FromAcct: d.From, ToAcct: d.AccountNo, At: d.Date, TxnType: d.Type}
+			success := d.TxnStatus == "00" ||
+				(r.brk == "word_success_taken" && (strings.EqualFold(d.TxnStatus, "SUCCESS") || strings.EqualFold(d.TxnStatus, "SUCCESSFUL"))) ||
 				(d.TxnStatus == "99" && r.brk == "ninety_nine_success")
 			if success {
 				if k, ok := refKobo(d.Amount, r.brk); ok {
@@ -288,6 +303,9 @@ func (r *refVFD) Requery(ctx context.Context, reference string) (vfd.Requeried, 
 				}
 			}
 		}
+	}
+	if r.brk != "reply_dropped" {
+		out.HTTPStatus, out.Reply = a.status, string(a.raw)
 	}
 	r.log.InfoContext(ctx, "vfd requery", "reference", reference, "state", out.State, "code", out.Code, "txn_status", out.TxnStatus)
 	return out, nil
@@ -403,9 +421,74 @@ func (r *refVFD) OpenAnother(ctx context.Context, previous string) (vfd.Opened, 
 	return out, nil
 }
 
-func (r *refVFD) Statement(ctx context.Context, accountNo string, from, to time.Time) error {
-	if r.brk == "statement_empty" {
-		return nil
+func (r *refVFD) Pool(ctx context.Context) (vfd.Pool, error) {
+	a := r.call(ctx, "pool enquiry", http.MethodGet, "/account/enquiry", nil, nil)
+	out := vfd.Pool{Outcome: a.outcome}
+	if a.outcome == "" {
+		e, ok := r.read(a)
+		var d struct {
+			AccountNo string `json:"accountNo"`
+			AccountID string `json:"accountId"`
+			Client    string `json:"client"`
+			ClientID  string `json:"clientId"`
+		}
+		dataOK := ok && len(e.Data) > 0 && json.Unmarshal(e.Data, &d) == nil
+		numbered := len(d.AccountNo) == 10 || r.brk == "pool_unchecked"
+		switch {
+		case !ok:
+			out = vfd.Pool{Outcome: vfd.Unknown}
+		case a.status >= 400 || e.Status != "00" || !dataOK || !numbered || d.AccountID == "" || d.ClientID == "":
+			out = vfd.Pool{Outcome: vfd.Refused, Code: e.Status}
+		default:
+			out = vfd.Pool{Outcome: vfd.Accepted, Code: e.Status, Party: vfd.Party{AccountNo: d.AccountNo, Bank: vfd.IntraBank, Name: d.Client, ClientID: d.ClientID, AccountID: d.AccountID}}
+		}
 	}
-	return vfd.ErrStatementUnavailable
+	return out, nil
+}
+
+func (r *refVFD) History(ctx context.Context, accountNo string, from, to time.Time, page int) (vfd.History, error) {
+	zone := time.FixedZone("WAT", 3600)
+	if r.brk == "history_utc" {
+		zone = time.UTC
+	}
+	if r.brk == "history_page_ignored" {
+		page = 0
+	}
+	const layout = "2006-01-02 15:04:05"
+	q := url.Values{"accountNo": {accountNo}, "startDate": {from.In(zone).Format(layout)}, "endDate": {to.In(zone).Format(layout)},
+		"transactionType": {"wallet"}, "page": {strconv.Itoa(page)}}
+	a := r.call(ctx, "history", http.MethodGet, "/account/transactions", q, nil)
+	out := vfd.History{Outcome: a.outcome}
+	if a.outcome == "" {
+		e, ok := r.read(a)
+		var d struct {
+			Content []struct {
+				TxnID     string          `json:"transactionId"`
+				Amount    json.RawMessage `json:"amount"`
+				From      string          `json:"fromAccountNo"`
+				To        string          `json:"toAccountNo"`
+				SessionID string          `json:"sessionId"`
+				Time      string          `json:"time"`
+				Type      string          `json:"transactionType"`
+				Response  string          `json:"transactionResponse"`
+			} `json:"content"`
+		}
+		dataOK := ok && len(e.Data) > 0 && json.Unmarshal(e.Data, &d) == nil
+		switch {
+		case !ok:
+			out = vfd.History{Outcome: vfd.Unknown}
+		case a.status >= 400 || e.Status != "00" || !dataOK:
+			out = vfd.History{Outcome: vfd.Refused, Code: e.Status}
+		default:
+			out = vfd.History{Outcome: vfd.Accepted, Code: e.Status, Rows: []vfd.HistoryRow{}}
+			for _, x := range d.Content {
+				k, ok := refKobo(x.Amount, r.brk)
+				if !ok {
+					return vfd.History{Outcome: vfd.Unknown, Code: "amount_unreadable"}, nil
+				}
+				out.Rows = append(out.Rows, vfd.HistoryRow{TxnID: x.TxnID, AmountKobo: k, FromAcct: x.From, ToAcct: x.To, SessionID: x.SessionID, Time: x.Time, Type: x.Type, Response: x.Response})
+			}
+		}
+	}
+	return out, nil
 }

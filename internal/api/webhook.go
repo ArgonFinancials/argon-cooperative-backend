@@ -130,7 +130,7 @@ func (s *server) ReceiveVfdNotification(ctx context.Context, req ReceiveVfdNotif
 	}
 	kind, ref, acct := NotificationFields(raw)
 	// Durable BEFORE VFD is answered: an error here is a 500, and VFD sends it again.
-	if _, err := s.db.Exec(ctx, `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number) VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''))`,
+	if _, err := s.db.Exec(ctx, `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, source) VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''), 'webhook')`,
 		kind, string(raw), signed, ref, acct); err != nil {
 		return nil, err
 	}

@@ -7,16 +7,17 @@
 // client itself is suite vfd's), and, in GREEN, as argon_wallet with the real
 // grants (findings 16 and 25).
 //
-// What they pin:
-//   - it pays the last signature's hold, and never an officer's;
-//   - no transfer before VFD confirms the member's account;
-//   - VFD refusing the send, or never receiving it, fails the transfer now,
-//     and the hold is released;
-//   - a timeout is not a failure: the hold stays, and VFD is asked again;
-//   - it never sends twice, even when the first answer was lost;
-//   - "not found" fails a transfer only after the settlement window;
-//   - an answer that cannot be read decides nothing;
-//   - VFD's success is posted as the payout.
+// What they pin (docs/VFD_INTEGRATION.md §1.6, §3.4, built 2026-11-24):
+//   - it pays the last signature's hold, and never an officer's, from Argon's
+//     VFD pool, after VFD confirms the member's account;
+//   - VFD's 00 to the send is the payment; anything else, a refusal and a
+//     timeout included, is a pending check with the money held;
+//   - asked about at 2 minutes, every 10 minutes for 24 hours, then hourly;
+//   - 00 with transactionStatus 00 is paid; 108 twice, both 30 minutes or
+//     more after the send, releases; anything else holds, and a person is
+//     told; it never sends twice; every reply VFD gives is kept;
+//   - a deposit no notification brought is found in the account's history,
+//     and confirmed with VFD like any other.
 package tier1
 
 import (
@@ -68,6 +69,7 @@ func (s *switchVFD) count(path string) int {
 func walletWorkerFor(t *testing.T, society, url string) wallet.Worker {
 	t.Helper()
 	var logs bytes.Buffer
+	walletLogs = &logs
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	client, err := vfd.New(vfd.Config{BaseURL: url, AccessToken: vfdToken, Timeout: 300 * time.Millisecond, Log: log})
 	fixture(t, err, "the VFD client")
@@ -76,7 +78,12 @@ func walletWorkerFor(t *testing.T, society, url string) wallet.Worker {
 	if !fake {
 		pool = walletPool(t)
 	}
-	cfg := wallet.Config{DB: pool, VFD: client, Log: log, AskEvery: time.Millisecond, LostAfter: 50 * time.Millisecond, Society: society}
+	cfg := wallet.Config{DB: pool, VFD: client, Log: log, FirstAsk: time.Millisecond, AskEvery: time.Millisecond, LateAskEvery: time.Millisecond,
+		LostAfter: 50 * time.Millisecond, SweepEvery: time.Hour, Society: society}
+	if walletCfg != nil {
+		walletCfg(&cfg)
+		walletCfg = nil
+	}
 	var w wallet.Worker
 	if fake {
 		w, err = newRefWallet(cfg, brk)
@@ -86,6 +93,12 @@ func walletWorkerFor(t *testing.T, society, url string) wallet.Worker {
 	fixture(t, err, "the wallet worker")
 	return w
 }
+
+// walletCfg: a test's change to the next worker's configuration.
+var walletCfg func(*wallet.Config)
+
+// walletLogs: the next worker's log, for the tests that read it.
+var walletLogs *bytes.Buffer
 
 func walletPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -138,7 +151,7 @@ func paymentOf(t *testing.T, hold string) paymentState {
 	return p
 }
 
-var okModes = map[string]string{"/transfer/recipient": "enquiry_ok", "/transfer": "transfer_ok", "/transactions": "requery_ok"}
+var okModes = map[string]string{"/transfer/recipient": "enquiry_ok", "/transfer": "transfer_ok", "/transactions": "requery_ok", "/account/enquiry": "pool_ok"}
 
 func modes(over map[string]string) map[string]string {
 	m := map[string]string{}
@@ -151,26 +164,25 @@ func modes(over map[string]string) map[string]string {
 	return m
 }
 
-func TestWalletWorker01_TheLastSignaturesHoldIsPaidAndPosted(t *testing.T) {
+// §1.6.2: VFD's 00 to the send is the payment, posted at once, from the pool.
+func TestWalletWorker01_VFDs00ToTheSendIsThePaymentFromThePool(t *testing.T) {
 	w := newWalletWorld(t)
 	hold := w.lastSignatureHold(t)
-	f := newSwitchVFD(t, modes(map[string]string{"/transactions": "requery_ok_payout"}))
-	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
-	tick(t, wk)
+	// The requery answers 91: only the send's 00 can pay this transfer.
+	f := newSwitchVFD(t, modes(map[string]string{"/transactions": "requery_91"}))
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
 	p := paymentOf(t, hold)
 	if p.transfer == "" || p.sent != "accepted" {
 		t.Fatalf("NOT SENT — %+v; want a transfer VFD accepted", p)
 	}
-	b := f.all()
-	for _, c := range b {
-		if c.Path == "/transfer" && (vfdStr(c.Body, "reference") != vfdRef(hold) || vfdStr(c.Body, "toAccount") != w.memAcct || vfdStr(c.Body, "fromAccount") != w.socAcct || vfdStr(c.Body, "amount") != "6000.00") {
-			t.Fatalf("WRONG TRANSFER — %v; want %s, from %s to %s, 6000.00", c.Body, vfdRef(hold), w.socAcct, w.memAcct)
+	for _, c := range f.all() {
+		if c.Path == "/transfer" && (vfdStr(c.Body, "reference") != vfdRef(hold) || vfdStr(c.Body, "toAccount") != w.memAcct || vfdStr(c.Body, "fromAccount") != testPoolAcct ||
+			vfdStr(c.Body, "fromSavingsId") != "P-ID" || vfdStr(c.Body, "amount") != "6000.00") {
+			t.Fatalf("WRONG TRANSFER — %v; want %s, from the pool %s (its id P-ID) to %s, 6000.00", c.Body, vfdRef(hold), testPoolAcct, w.memAcct)
 		}
 	}
-	time.Sleep(5 * time.Millisecond)
-	tick(t, wk)
-	if p = paymentOf(t, hold); p.outcome != "paid" || !p.posted {
-		t.Fatalf("NOT POSTED — VFD said the transfer succeeded: %+v; want paid, and the payout posted", p)
+	if p.outcome != "paid" || !p.posted {
+		t.Fatalf("NOT PAID — VFD answered 00 to the send: %+v; want paid and the payout posted at once (161 of 161 such sends were paid)", p)
 	}
 }
 
@@ -194,26 +206,31 @@ func TestWalletWorker03_NoTransferBeforeVFDConfirmsTheAccount(t *testing.T) {
 	}
 }
 
-func TestWalletWorker04_ARefusedSendFailsAndTheHoldIsReleased(t *testing.T) {
+// §1.6.3: a refused send, or one that never connected, is a pending check,
+// never a release: in 3 of 32 refused sends VFD had already sent the money.
+func TestWalletWorker04_ARefusedSendIsHeldNotReleased(t *testing.T) {
 	for _, mode := range []string{"transfer_refused", "dead"} {
 		w := newWalletWorld(t)
 		hold := w.lastSignatureHold(t)
 		url := deadAfterEnquiry(t) // the account confirmed, then no connection
 		if mode == "transfer_refused" {
-			url = newSwitchVFD(t, modes(map[string]string{"/transfer": "transfer_refused"})).srv.URL
+			url = newSwitchVFD(t, modes(map[string]string{"/transfer": "transfer_refused", "/transactions": "requery_91"})).srv.URL
 		}
-		tick(t, walletWorkerFor(t, w.c.s.id, url))
-		if p := paymentOf(t, hold); p.outcome != "failed" || !p.released {
-			t.Fatalf("NOT FAILED — VFD %s the send: %+v; want failed, and the hold released", mode, p)
+		wk := walletWorkerFor(t, w.c.s.id, url)
+		tick(t, wk)
+		time.Sleep(5 * time.Millisecond)
+		tick(t, wk)
+		if p := paymentOf(t, hold); p.outcome != "" || p.released {
+			t.Fatalf("RELEASED ON A REFUSAL — VFD %s the send: %+v; want no outcome, the money still held", mode, p)
 		}
 	}
 }
 
-// deadAfterEnquiry: a VFD that confirms the account, then closes the
-// connection on the transfer (the request never reaches it).
+// deadAfterEnquiry: a VFD that confirms the account and names the pool, then
+// closes the connection on the transfer (the request never reaches it).
 func deadAfterEnquiry(t *testing.T) string {
 	t.Helper()
-	f := newFakeVFD(t, map[string]string{"/transfer/recipient": "enquiry_ok"})
+	f := newFakeVFD(t, map[string]string{"/transfer/recipient": "enquiry_ok", "/account/enquiry": "pool_ok", "/transactions": "requery_91"})
 	h := f.srv.Config.Handler
 	f.srv.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/transfer" {
@@ -228,25 +245,30 @@ func deadAfterEnquiry(t *testing.T) string {
 	return f.srv.URL
 }
 
-func TestWalletWorker05_ATimeoutIsNotAFailureAndNothingIsSentTwice(t *testing.T) {
+// A send with no answer in time: a pending check, never sent again, and paid
+// when VFD's requery says 00 with transactionStatus 00.
+func TestWalletWorker05_ATimeoutIsAskedAboutNeverResentAndPaidOnZeroZero(t *testing.T) {
 	w := newWalletWorld(t)
 	hold := w.lastSignatureHold(t)
 	f := newSwitchVFD(t, modes(map[string]string{"/transfer": "slow", "/transactions": "requery_99"}))
 	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
 	tick(t, wk)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		time.Sleep(5 * time.Millisecond)
 		tick(t, wk)
 	}
 	p := paymentOf(t, hold)
 	if p.sent != "unknown" || p.outcome != "" || p.released {
-		t.Fatalf("DECIDED ON A GUESS — no answer to the send, VFD pending since: %+v; want unknown, no outcome, the hold still held", p)
+		t.Fatalf("DECIDED ON A GUESS — no answer to the send, VFD answering 99 since: %+v; want unknown, no outcome, the hold still held", p)
+	}
+	f.set("/transactions", "requery_ok_payout")
+	time.Sleep(5 * time.Millisecond)
+	tick(t, wk)
+	if p = paymentOf(t, hold); p.outcome != "paid" || !p.posted {
+		t.Fatalf("NOT PAID — VFD's requery said 00 with 00: %+v; want paid and posted", p)
 	}
 	if n := f.count("/transfer"); n != 1 {
 		t.Fatalf("SENT %d TIMES — an automatic retry is how a payment goes out twice", n)
-	}
-	if f.count("/transactions") == 0 {
-		t.Fatalf("NOT ASKED — a send with no answer must be asked about")
 	}
 }
 
@@ -276,18 +298,20 @@ func TestWalletWorker06_ALostSendIsAskedAboutNeverResent(t *testing.T) {
 	}
 }
 
-// "Not found" moments after sending is settlement lag; after the window, a
-// failure. An answer that cannot be read is neither.
-func TestWalletWorker07_NotFoundFailsOnlyAfterTheWindow(t *testing.T) {
+// §1.6.4: 108 releases only when seen twice in a row, both 30 minutes or more
+// after the send. Moments after the send, never; once, never.
+func TestWalletWorker07_OneOhEightTwicePastThirtyMinutesReleases(t *testing.T) {
 	w := newWalletWorld(t)
 	hold := w.lastSignatureHold(t)
-	f := newSwitchVFD(t, modes(map[string]string{"/transactions": "requery_108"}))
+	f := newSwitchVFD(t, modes(map[string]string{"/transfer": "slow", "/transactions": "requery_108"}))
 	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
 	tick(t, wk)
-	time.Sleep(5 * time.Millisecond)
-	tick(t, wk)
+	for i := 0; i < 2; i++ {
+		time.Sleep(5 * time.Millisecond)
+		tick(t, wk)
+	}
 	if p := paymentOf(t, hold); p.outcome != "" || p.released {
-		t.Fatalf("FAILED ON LAG — 'not found' minutes after sending: %+v; want no outcome yet", p)
+		t.Fatalf("RELEASED EARLY — 108 moments after the send: %+v; want no outcome", p)
 	}
 
 	// The same, three hours after the send (written as the owner: the wallet
@@ -296,18 +320,17 @@ func TestWalletWorker07_NotFoundFailsOnlyAfterTheWindow(t *testing.T) {
 	hold2 := w2.lastSignatureHold(t)
 	tr, err := w2.transfer(xfer{hold: hold2})
 	fixture(t, err, "the transfer")
-	mustEvent(t, tr, "sent", "accepted", "00", 0, "3 hours")
-	f2 := newSwitchVFD(t, modes(map[string]string{"/transactions": "garbage"}))
+	mustEvent(t, tr, "sent", "unknown", "", 0, "3 hours")
+	f2 := newSwitchVFD(t, modes(map[string]string{"/transactions": "requery_108"}))
 	wk2 := walletWorkerFor(t, w2.c.s.id, f2.srv.URL)
 	tick(t, wk2)
-	if p := paymentOf(t, hold2); p.outcome != "" {
-		t.Fatalf("FAILED ON NOTHING — an unreadable answer three hours on: %+v; want no outcome", p)
+	if p := paymentOf(t, hold2); p.outcome != "" || p.released {
+		t.Fatalf("RELEASED ON ONE 108 — %+v; want no outcome until VFD says 108 twice in a row", p)
 	}
-	f2.set("/transactions", "requery_108")
 	time.Sleep(5 * time.Millisecond)
 	tick(t, wk2)
 	if p := paymentOf(t, hold2); p.outcome != "failed" || !p.released {
-		t.Fatalf("NOT FAILED — 'not found' three hours after the send: %+v; want failed, the hold released", p)
+		t.Fatalf("NOT RELEASED — 108 twice, three hours after the send: %+v; want failed, the hold released", p)
 	}
 }
 
@@ -380,6 +403,17 @@ func TestWalletWorker09_NothingIsRecordedWhileVFDDoesNotSaySucceeded(t *testing.
 	if a := inflowAttempts(t, note); len(a) != 1 || !strings.HasPrefix(a[0], "not_confirmed: ") {
 		t.Fatalf("MUTE — the attempts read %v; want one, not_confirmed, saying what VFD said", a)
 	}
+	// VFD confirms the reference, as money going OUT: no deposit (§3.2).
+	out := vfdRefNew()
+	outNote := arrived(t, out, w.socAcct)
+	f.set("/transactions", "requery_ok_payout")
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+	if n, _, _ := inflowsOf(t, out); n != 0 {
+		t.Fatalf("BELIEVED — VFD reports the reference as no INFLOW and %d deposit(s) were recorded", n)
+	}
+	if a := inflowAttempts(t, outNote); len(a) != 1 || !strings.HasPrefix(a[0], "not_confirmed: ") {
+		t.Fatalf("WRONG — a reference VFD does not call INFLOW: the attempts read %v; want not_confirmed", a)
+	}
 }
 
 func TestWalletWorker10_ANotificationDeliveredTwiceIsRecordedOnce(t *testing.T) {
@@ -416,19 +450,33 @@ func TestWalletWorker11_MoneyToNoSocietysAccountIsUnmatched(t *testing.T) {
 	}
 }
 
-// No statement endpoint is known: reconciliation records that it could not
-// run, and never that nothing was missed.
-func TestWalletWorker12_ReconciliationRecordsThatItCouldNotRun(t *testing.T) {
-	w := newWalletWorld(t)
-	f := newSwitchVFD(t, okModes)
-	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
-	var outcome, detail string
-	err := db.QueryRow(bg(), `SELECT outcome, detail FROM vfd_reconciliation_runs WHERE account_number = $1`, w.socAcct).Scan(&outcome, &detail)
-	if err != nil {
-		t.Fatalf("SILENT — no reconciliation run recorded for the society's account (%v): a missed inflow would never be found, and nobody told", err)
+// §3.4: VFD stopped notifying for days, four times, and never re-sent. A
+// deposit in the account's history that no notification brought is found,
+// and confirmed with VFD like any other: never believed from the history.
+func TestWalletWorker12_ADepositNoNotificationBroughtIsFoundAndConfirmed(t *testing.T) {
+	w := inflowWorld(t)
+	ref := "Argon Financials Limited-" + vfdRefNew()
+	f := newSwitchVFD(t, map[string]string{"/account/transactions": "history_inflow:" + w.socAcct + "|" + ref, "/transactions": "requery_108"})
+	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
+	tick(t, wk)
+	var runOutcome string
+	fixture(t, db.QueryRow(bg(), `SELECT coalesce((SELECT outcome FROM vfd_reconciliation_runs WHERE account_number = $1), 'no sweep recorded')`, w.socAcct).Scan(&runOutcome), "the sweep")
+	if runOutcome != "missing_found" {
+		t.Fatalf("UNSAID — the sweep reads %q; want missing_found", runOutcome)
 	}
-	if outcome != "could_not_run" || !strings.Contains(detail, "statement") {
-		t.Fatalf("WRONG — the run reads %s: %q; want could_not_run, saying no statement endpoint is known", outcome, detail)
+	if n, _, _ := inflowsOf(t, ref); n != 0 {
+		t.Fatalf("BELIEVED — a deposit in the history was credited while VFD's requery says 108 (%d)", n)
+	}
+	f.set("/transactions", "requery_inflow:"+w.socAcct)
+	time.Sleep(5 * time.Millisecond)
+	tick(t, wk)
+	if n, kobo, acct := inflowsOf(t, ref); n != 1 || kobo != 600000 || acct != w.socAcct {
+		t.Fatalf("NOT FOUND — the deposit only the history held: %d inflow(s) of %d to %s; want one, VFD's ₦6,000 to the society's account", n, kobo, acct)
+	}
+	var source string
+	fixture(t, db.QueryRow(bg(), `SELECT source FROM vfd_notifications WHERE reference = $1`, ref).Scan(&source), "the notification")
+	if source != "history" {
+		t.Fatalf("UNSAID — the deposit's notification reads source %q; want history", source)
 	}
 }
 
@@ -449,4 +497,108 @@ func TestWalletWorker13_AClaimARaceMissedIsMatchedOnTheTick(t *testing.T) {
 	f := newSwitchVFD(t, okModes)
 	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
 	wantPosted(t, in, w.bMem, 140000, "a claim and its inflow that a race left unmatched, after the tick")
+}
+
+// §1.6.4: anything other than 00/00 or 108 (91, 25, 99) holds, and a person
+// is told: the ₦50 at 91 on the other platform since 20 October was held
+// rightly and told to nobody.
+func TestWalletWorker14_AnythingElseHoldsAndTellsAPerson(t *testing.T) {
+	for _, mode := range []string{"requery_91", "requery_25", "requery_99"} {
+		w := newWalletWorld(t)
+		hold := w.lastSignatureHold(t)
+		tr, err := w.transfer(xfer{hold: hold})
+		fixture(t, err, "the transfer")
+		mustEvent(t, tr, "sent", "refused", "61", 0, "3 hours")
+		f := newSwitchVFD(t, modes(map[string]string{"/transactions": mode}))
+		r := tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+		if p := paymentOf(t, hold); p.outcome != "" || p.released {
+			t.Fatalf("DECIDED — VFD answered %s: %+v; want held, no outcome (VFD may have sent it)", mode, p)
+		}
+		if r.NeedsVFD != 1 || !strings.Contains(walletLogs.String(), "needs VFD") {
+			t.Fatalf("NOBODY TOLD — VFD answered %s: needs-VFD %d, log %q; want it counted and an error logged", mode, r.NeedsVFD, walletLogs.String())
+		}
+		var n int
+		fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM wallet_exceptions WHERE kind = 'transfer_needs_vfd' AND subject_id = $1`, tr).Scan(&n), "the exceptions")
+		if n != 1 {
+			t.Fatalf("UNSEEN — VFD answered %s and wallet_exceptions shows %d transfer_needs_vfd for it; want one", mode, n)
+		}
+	}
+}
+
+// §1.6.4: asked first at FirstAsk, then every AskEvery, not on every tick.
+func TestWalletWorker15_ATransferIsAskedAboutOnTheSchedule(t *testing.T) {
+	w := newWalletWorld(t)
+	hold := w.lastSignatureHold(t)
+	f := newSwitchVFD(t, modes(map[string]string{"/transfer": "slow", "/transactions": "requery_99"}))
+	walletCfg = func(c *wallet.Config) { c.FirstAsk, c.AskEvery = 400*time.Millisecond, 400*time.Millisecond }
+	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
+	tick(t, wk)
+	tick(t, wk)
+	if n := f.count("/transactions"); n != 0 {
+		t.Fatalf("ASKED TOO SOON — %d requeries straight after the send; want none before the first ask is due", n)
+	}
+	time.Sleep(450 * time.Millisecond)
+	tick(t, wk)
+	tick(t, wk)
+	if n := f.count("/transactions"); n != 1 {
+		t.Fatalf("WRONG PACE — %d requeries once the first was due; want exactly one, the next not before its interval", n)
+	}
+	time.Sleep(450 * time.Millisecond)
+	tick(t, wk)
+	if n := f.count("/transactions"); n != 2 {
+		t.Fatalf("NOT ASKED AGAIN — %d requeries an interval later; want two", n)
+	}
+	_ = hold
+}
+
+// §1.6.1: every reply VFD gives a send or a requery is kept, as received.
+func TestWalletWorker16_EveryReplyIsKept(t *testing.T) {
+	w := newWalletWorld(t)
+	hold := w.lastSignatureHold(t)
+	f := newSwitchVFD(t, modes(map[string]string{"/transfer": "transfer_refused", "/transactions": "requery_91"}))
+	wk := walletWorkerFor(t, w.c.s.id, f.srv.URL)
+	tick(t, wk)
+	time.Sleep(5 * time.Millisecond)
+	tick(t, wk)
+	var sentReply, askReply string
+	var sentStatus int
+	fixture(t, db.QueryRow(bg(), `SELECT coalesce((SELECT reply FROM vfd_transfer_events e WHERE e.transfer_id = t.id AND e.kind = 'sent'), ''),
+		coalesce((SELECT http_status FROM vfd_transfer_events e WHERE e.transfer_id = t.id AND e.kind = 'sent'), 0),
+		coalesce((SELECT reply FROM vfd_transfer_events e WHERE e.transfer_id = t.id AND e.kind = 'requeried' ORDER BY at LIMIT 1), '')
+		FROM vfd_transfers t WHERE t.hold_id = $1`, hold).Scan(&sentReply, &sentStatus, &askReply), "the replies")
+	if sentStatus != 200 || !strings.Contains(sentReply, `"status":"61"`) || !strings.Contains(askReply, `"transactionStatus":"91"`) {
+		t.Fatalf("NOT KEPT — the send's reply %d %q, the requery's %q; want both as VFD gave them", sentStatus, sentReply, askReply)
+	}
+}
+
+// The sweep reads every page of the history, not the first alone.
+func TestWalletWorker17_TheSweepReadsEveryPage(t *testing.T) {
+	w := inflowWorld(t)
+	f := newSwitchVFD(t, map[string]string{"/account/transactions": "history_two_pages", "/transactions": "requery_108"})
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+	pages := map[string]bool{}
+	for _, c := range f.all() {
+		if c.Path == "/account/transactions" {
+			for _, kv := range strings.Split(c.Query, "&") {
+				if strings.HasPrefix(kv, "page=") {
+					pages[kv] = true
+				}
+			}
+		}
+	}
+	if !pages["page=0"] || !pages["page=1"] || !pages["page=2"] {
+		t.Fatalf("A PAGE UNREAD — pages asked %v; want 0, 1 and 2 (the empty page that ends it)", pages)
+	}
+}
+
+// A sweep that could not read the history says so: never "nothing missing".
+func TestWalletWorker18_ASweepThatCannotReadSaysSo(t *testing.T) {
+	w := inflowWorld(t)
+	f := newSwitchVFD(t, map[string]string{"/account/transactions": "history_down"})
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+	var outcome, detail string
+	err := db.QueryRow(bg(), `SELECT outcome, detail FROM vfd_reconciliation_runs WHERE account_number = $1`, w.socAcct).Scan(&outcome, &detail)
+	if err != nil || outcome != "could_not_run" || !strings.Contains(detail, "history") {
+		t.Fatalf("SAID NOTHING WAS MISSED — %s: %q (%v); want could_not_run, saying VFD did not give the history", outcome, detail, err)
+	}
 }

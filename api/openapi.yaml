@@ -573,7 +573,13 @@ components:
         kind:
           type: string
           enum: [inflow_unclaimed, claim_contested, claim_amount_differs, claim_unconfirmed, resolution_awaiting_confirmation,
-                 transfer_stuck, transfer_failed, hold_not_sent, notification_unconfirmed, reconciliation_not_run]
+                 transfer_stuck, transfer_failed, hold_not_sent, notification_unconfirmed, reconciliation_not_run,
+                 transfer_needs_vfd]
+          description: |
+            transfer_needs_vfd (0039): VFD answered something other than 00 or 108
+            about a payout, so it may have sent the money. The money stays held
+            and is never released by the system; a person asks VFD to confirm a
+            reversal.
         subjectId: { type: string, format: uuid }
         since: { type: string, format: date-time }
         detail: { type: string }

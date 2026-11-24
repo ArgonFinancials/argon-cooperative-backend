@@ -79,6 +79,11 @@ func (w *worker) confirmInflow(ctx context.Context, r *Round, n inflowNote) erro
 	if q.State != vfd.Succeeded {
 		return w.attempt(ctx, n.id, "not_confirmed", fmt.Sprintf("VFD: %s (status %s, transaction status %s)", q.State, q.Code, q.TxnStatus))
 	}
+	// Money IN (§3.2): VFD says INFLOW. A reference that names money going out
+	// is no deposit, whatever a notification said.
+	if q.TxnType != "INFLOW" {
+		return w.attempt(ctx, n.id, "not_confirmed", fmt.Sprintf("VFD says this reference is %q, not money arriving (INFLOW)", q.TxnType))
+	}
 	var society string
 	err = w.cfg.DB.QueryRow(ctx, `SELECT society_id::text FROM vfd_accounts WHERE account_number = $1 AND member_id IS NULL`, q.ToAcct).Scan(&society)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -118,16 +123,22 @@ func (w *worker) attempt(ctx context.Context, notification, result, detail strin
 	return nil
 }
 
-// reconcile: once a day for each society account, ask VFD for the period's
-// statement. No statement endpoint is known: the run is recorded as one that
-// could not run, saying why, and wallet_exceptions shows it. Never an empty
-// statement, which would say nothing was missed.
-func (w *worker) reconcile(ctx context.Context) error {
+// sweep (§3.4, §4): VFD stopped sending notifications for days at a time,
+// four times, and never re-sent them. So each society account's history is
+// read on a schedule (SweepEvery), page by page, over the period since the
+// last sweep (and a day before it: overlap costs nothing, a reference is
+// recorded once). Every INFLOW no notification brought is kept as a
+// notification FROM THE HISTORY, and confirmed by the same requery as any
+// other: the history is never believed either. Each sweep is recorded:
+// matched, missing_found (saying how many), or could_not_run (saying why).
+func (w *worker) sweep(ctx context.Context, r *Round) error {
 	rows, err := w.cfg.DB.Query(ctx, `
-		SELECT a.account_number, coalesce((SELECT max(period_to) FROM vfd_reconciliation_runs r WHERE r.account_number = a.account_number), now() - interval '1 day')
+		SELECT a.account_number,
+		       coalesce((SELECT max(period_to) FROM vfd_reconciliation_runs x WHERE x.account_number = a.account_number AND x.outcome <> 'could_not_run'), a.recorded_at) - interval '1 day'
 		  FROM vfd_accounts a
 		 WHERE a.member_id IS NULL AND ($1 = '' OR a.society_id::text = $1)
-		   AND NOT EXISTS (SELECT 1 FROM vfd_reconciliation_runs r WHERE r.account_number = a.account_number AND r.ran_at > now() - interval '1 day')`, w.cfg.Society)
+		   AND NOT EXISTS (SELECT 1 FROM vfd_reconciliation_runs x WHERE x.account_number = a.account_number AND x.ran_at > now() - make_interval(secs => $2))`,
+		w.cfg.Society, w.cfg.SweepEvery.Seconds())
 	if err != nil {
 		return err
 	}
@@ -144,21 +155,62 @@ func (w *worker) reconcile(ctx context.Context) error {
 	}
 	for _, d := range dues {
 		to := time.Now()
-		if !d.from.Before(to) {
-			continue
+		outcome, detail, found, err := w.sweepAccount(ctx, d.acct, d.from, to)
+		if err != nil {
+			return err
 		}
-		outcome, detail := "could_not_run", ""
-		if err := w.cfg.VFD.Statement(ctx, d.acct, d.from, to); err != nil {
-			detail = err.Error()
-		} else {
-			// A statement endpoint answered: comparing it is not built, and an
-			// answer not compared is not a match.
-			detail = "VFD returned a statement and nothing here compares it yet"
-		}
+		r.Swept++
+		r.Found += found
 		if _, err := w.cfg.DB.Exec(ctx, `INSERT INTO vfd_reconciliation_runs (account_number, period_from, period_to, outcome, detail) VALUES ($1, $2, $3, $4, $5)`,
 			d.acct, d.from, to, outcome, detail); err != nil {
-			return fmt.Errorf("wallet: recording reconciliation of …%s: %w", tail(d.acct), err)
+			return fmt.Errorf("wallet: recording the sweep of …%s: %w", tail(d.acct), err)
 		}
 	}
 	return nil
+}
+
+// sweepPages: the most pages read in one sweep of one account (20 rows each).
+const sweepPages = 200
+
+func (w *worker) sweepAccount(ctx context.Context, acct string, from, to time.Time) (outcome, detail string, found int, err error) {
+	for page := 0; ; page++ {
+		if page == sweepPages {
+			return "could_not_run", fmt.Sprintf("more than %d pages of history: the sweep stopped rather than read part of it", sweepPages), found, nil
+		}
+		h, err := w.cfg.VFD.History(ctx, acct, from, to, page)
+		if err != nil {
+			return "", "", found, err
+		}
+		if h.Outcome != vfd.Accepted {
+			return "could_not_run", fmt.Sprintf("VFD did not give the account's history (page %d: %s, status %s)", page, h.Outcome, h.Code), found, nil
+		}
+		if len(h.Rows) == 0 {
+			break
+		}
+		for _, row := range h.Rows {
+			if row.Type != "INFLOW" || row.TxnID == "" {
+				continue
+			}
+			var known bool
+			if err := w.cfg.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM vfd_inflows WHERE vfd_reference = $1)
+				OR EXISTS (SELECT 1 FROM vfd_notifications WHERE reference = $1)`, row.TxnID).Scan(&known); err != nil {
+				return "", "", found, err
+			}
+			if known {
+				continue
+			}
+			raw, _ := json.Marshal(map[string]string{"reference": row.TxnID, "account_number": row.ToAcct, "session_id": row.SessionID,
+				"originator_account_number": row.FromAcct, "timestamp": row.Time, "source": "history"})
+			if _, err := w.cfg.DB.Exec(ctx, `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, source) VALUES ('inflow', $1, false, $2, $3, 'history')`,
+				string(raw), row.TxnID, row.ToAcct); err != nil {
+				return "", "", found, fmt.Errorf("wallet: keeping a deposit found in …%s's history: %w", tail(acct), err)
+			}
+			found++
+		}
+	}
+	if found == 0 {
+		return "matched", "VFD's history for the period holds no deposit that a notification did not bring", 0, nil
+	}
+	w.log.WarnContext(ctx, "deposits found in an account's history that no notification brought: kept, to be confirmed with VFD", "account_last4", tail(acct), "found", found)
+	return "missing_found", fmt.Sprintf("%d deposit(s) in VFD's history that no notification brought: kept as notifications from the history, confirmed with VFD like any other", found), found, nil
 }

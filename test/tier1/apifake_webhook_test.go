@@ -53,8 +53,13 @@ func (f *fakeAPI) ReceiveVfdNotification(ctx context.Context, req api.ReceiveVfd
 		kept = string(b)
 	}
 	kind, ref, acct := api.NotificationFields(raw)
-	if _, err := f.db.Exec(ctx, `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number) VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''))`,
-		kind, kept, signed, ref, acct); err != nil {
+	var sourced bool // 0039: a notification says where it came from
+	f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'vfd_notifications' AND column_name = 'source')`).Scan(&sourced)
+	q := `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number) VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''))`
+	if sourced {
+		q = `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, source) VALUES ($1, $2, $3, nullif($4, ''), nullif($5, ''), 'webhook')`
+	}
+	if _, err := f.db.Exec(ctx, q, kind, kept, signed, ref, acct); err != nil {
 		return nil, err
 	}
 	if f.brk == "webhook_credits" {

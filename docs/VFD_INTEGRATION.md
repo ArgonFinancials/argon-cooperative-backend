@@ -19,13 +19,21 @@
 | 11 | Money in is credited only on VFD's word, to the member it is certainly from | 0032: a member's claim (session id and exact amount, no other claimant) or the member's own VFD account; 0033: anything else by two officers, at VFD's amount; `contribution_rematch` on the tick for a race | suites 0032, 0033, claims_api, resolutions_api, wallet |
 | 12 | Credentials from the environment only | `ARGON_VFD`, `VFD_BASE_URL` (https), `VFD_ACCESS_TOKEN`; the token, a BVN and a birth date in no log line | suite vfd |
 
-**How each UNVERIFIED fact is handled until VFD confirms it** (whoever holds the VFD relationship):
-- *VFD does not sign inflow notifications* (the wallet's own code says so, and checks a header only when present): `unsigned` mode keeps them marked unsigned; `hmac` mode refuses any without a valid `X-VFD-Signature`. **In neither mode is a notification believed**: the worker asks VFD about the reference and records VFD's account and amount.
-- *VFD's failure statuses*: none is known, so none is mapped. A transfer fails only on a refused or unreached send, or "not found" after the window; anything else waits, and is an exception at 30 minutes.
-- *`99` as success*: pending.
-- *A requery of an inflow's reference* (`/transactions?reference=`) is assumed to answer as for a transfer, as the wallet's `VFD_VERIFY_INFLOWS` does.
-- *Statements*: no endpoint; reconciliation says it could not run.
-- *Account opening's answer*: `data.accountNo` or `account_number`, a ten-digit string; anything else is no account.
+**Built again, 2026-11-24, from production evidence** (the wallet platform's "Connecting to VFD: what the wallet platform has proven in production", 24 November 2026: all 193 of its outward transfers looked up at VFD one by one, each checked against what really happened). The reviewer: build its §1.6 exactly as written, the deposit sweeper from day one, every send and requery reply stored. What changed (0039, `internal/vfd`, `internal/wallet`):
+
+| What production showed | What is built |
+|---|---|
+| 161 of 161 sends answered `00` were paid | **VFD's `00` to the send is the payment**, posted at once for the transfer's amount |
+| A refused send is not proof nothing happened: in 3 of 32, VFD had created the transfer and sent it | **Anything other than `00`, a timeout included, is a pending check.** The money stays held. A refused send no longer fails a transfer |
+| `108` "No Transaction!" was right 29 times of 29 | **Released only on `108`, twice in a row, both 30 minutes or more after the send** (`vfd_settlement_window()` is now 30 minutes). Only status `108`: "no transaction" under another code holds |
+| The one real `transactionStatus 99` was money that never arrived; `91` and `25` were sent out | **Paid only on `00` with `transactionStatus 00`.** Anything else (91, 25, 99, a word) **holds, and a person is told**: `wallet_exceptions`' `transfer_needs_vfd`, an error in the worker's log, and the operator's alert (`66-check-vfd-holds.sh`, on the freshness timer). Never released by the system |
+| The wallet re-queried erratically, or never | **Re-queried at about 2 minutes, every 10 minutes for 24 hours, then hourly** |
+| The wallet stored no failed reply, so nobody can say which send codes led where | **Every send reply and every requery reply kept**, HTTP status and body as received (`vfd_transfer_events.http_status`, `reply`) |
+| All money sits in one pool; sub-accounts show ₦0 (deposits swept) | **Every transfer leaves from the pool**, the account VFD's `GET /account/enquiry` names, recorded once (`vfd_pool`) |
+| Notifications stopped for days, four times, and were never re-sent | **The sweeper**: each society account's history (`GET /account/transactions`, page by page, in WAT, every 15 minutes) is read; every `INFLOW` no notification brought is kept as a notification from the history (`source = 'history'`) and confirmed by the same requery as any other |
+| VFD never signs notifications (0 of 55) | Unchanged: `unsigned` is the mode to run; a notification is never believed (§3.2: requeried, amount and account compared unconditionally, `transactionType INFLOW` required) |
+
+**Still for VFD** (the document's §9): every `transactionStatus` code and which are final; whether VFD restricts by IP; whether the cooperative can have its own credentials; whether notifications will be signed or retried.
 
 **Provenance:** a read-only review of Argon's running wallet platform (`wallet-service-backend`), which has integrated VFD in production since 2025. Nothing there was changed or run. Its credentials were not opened. What follows is the knowledge it holds, and the defects it found the hard way, written as requirements.
 

@@ -83,6 +83,9 @@ func (w *vworld) transfer(h xfer) (string, error) {
 	}
 	if h.from == "" {
 		h.from = w.socAcct
+		if vfdProven() { // 0039: every transfer leaves Argon's VFD pool
+			h.from = ensurePool()
+		}
 	}
 	if h.to == "" {
 		h.to = w.memAcct
@@ -118,11 +121,37 @@ func vfdEvent(transfer, kind, result, code string, amount int64, ago string) (st
 	if amount != 0 {
 		amt = amount
 	}
+	var txn any // VFD's transactionStatus: 00 with a success (§1.6: nothing else is paid)
+	if kind == "requeried" && result == "succeeded" {
+		txn = "00"
+	}
 	err := tx(func(x pgx.Tx) error {
-		return x.QueryRow(bg(), `INSERT INTO vfd_transfer_events (transfer_id, kind, result, code, txn_id, amount_kobo, at)
-			VALUES ($1, $2, $3, $4, 'TXN-'||$1::text, $5, `+at+`) RETURNING id`, transfer, kind, result, nz(code), amt).Scan(&id)
+		return x.QueryRow(bg(), `INSERT INTO vfd_transfer_events (transfer_id, kind, result, code, txn_id, amount_kobo, txn_status, at)
+			VALUES ($1, $2, $3, $4, 'TXN-'||$1::text, $5, $6, `+at+`) RETURNING id`, transfer, kind, result, nz(code), amt, txn).Scan(&id)
 	})
 	return id, err
+}
+
+// vfdFailEvidence: a transfer's failure as both schemas accept it: sent three
+// hours ago, then VFD's 108 twice, two hours and one hour ago (0028: not found
+// past its 2-hour window; 0039: 108 twice in a row, 30 minutes or more on).
+// The transfer has no send yet. Returns the last 108, the evidence.
+func vfdFailEvidence(t *testing.T, transfer string) string {
+	t.Helper()
+	mustEvent(t, transfer, "sent", "unknown", "", 0, "3 hours")
+	mustEvent(t, transfer, "requeried", "not_found", "108", 0, "2 hours")
+	return mustEvent(t, transfer, "requeried", "not_found", "108", 0, "1 hour")
+}
+
+const testPoolAcct = "1000000001" // the fake VFD's pool (tier1_vfd_client_test.go, poolAcct)
+
+// ensurePool: Argon's VFD pool, recorded once for the whole database (0039).
+func ensurePool() string {
+	db.Exec(bg(), `INSERT INTO vfd_pool (account_number, account_id, client_id, client_name)
+		VALUES ($1, 'P-ID', 'P-CLIENT', 'ARGON FINANCIALS LIMITED') ON CONFLICT DO NOTHING`, testPoolAcct)
+	var n string
+	db.QueryRow(bg(), `SELECT account_number FROM vfd_pool`).Scan(&n)
+	return n
 }
 
 func vfdOutcome(transfer, result, evidence string) (string, error) {
@@ -291,6 +320,10 @@ func TestWalletPay09_ATransferComesFromTheSocietysAccount(t *testing.T) {
 	w := newWalletWorld(t)
 	_, hold := w.held(t, w.bMem, payKobo)
 	_, err := w.transfer(xfer{hold: hold, from: w.memAcct})
+	if vfdProven() { // 0039: from Argon's pool, which VFD names (§1.1)
+		refused(t, err, "a payout sent from the member's own account", refusedAs("vfd_transfer_from_pool"))
+		return
+	}
 	refused(t, err, "a payout sent from the member's own account", refusedAs("vfd_transfer_from_society_account"))
 }
 
@@ -332,8 +365,17 @@ func TestWalletPay14_PaidOnlyOnVFDsSuccess(t *testing.T) {
 	w := newWalletWorld(t)
 	_, _, tr := w.heldTransfer(t)
 	sent := mustEvent(t, tr, "sent", "accepted", "00", 0, "")
-	_, err := vfdOutcome(tr, "paid", sent)
-	refused(t, err, "paid on VFD accepting the send (accepted is not arrived)", refusedAs("vfd_paid_on_success"))
+	if vfdProven() {
+		// 0039 (§1.6): VFD's 00 to the send IS the payment (161 of 161 paid).
+		// Shown on a transfer of its own; this one goes on to the rest.
+		_, _, tr0 := w.heldTransferFor(t, w.g2Mem)
+		accepted(t, mustOutcome(t, tr0, "paid", mustEvent(t, tr0, "sent", "accepted", "00", 0, "")), "paid on VFD's 00 to the send")
+		refused(t, vfdOutcomeErr(tr, "paid", mustEvent(t, tr, "requeried", "pending", "00", payKobo, "")), "paid on a requery VFD answered with something else", refusedAs("vfd_paid_on_success"))
+	} else {
+		_, err := vfdOutcome(tr, "paid", sent)
+		refused(t, err, "paid on VFD accepting the send (accepted is not arrived)", refusedAs("vfd_paid_on_success"))
+	}
+	var err error
 	// Pending, though VFD names the amount: still not arrived.
 	pending := mustEvent(t, tr, "requeried", "pending", "00", payKobo, "")
 	_, err = vfdOutcome(tr, "paid", pending)
@@ -379,14 +421,34 @@ func TestWalletPay15_FailedOnlyOnADefinitiveAnswer(t *testing.T) {
 		_, _, tr := w.heldTransferFor(t, map[string]string{"refused": w.g1Mem, "not_reached": w.g2Mem}[sent])
 		ev := mustEvent(t, tr, "sent", sent, "61", 0, "")
 		_, err := vfdOutcome(tr, "failed", ev)
-		accepted(t, err, "failed on a send VFD "+sent)
+		if vfdProven() { // 0039: in 3 of 32 refused sends VFD had already sent the money
+			refused(t, err, "failed on a send VFD "+sent, refusedAs("vfd_failed_only_definitive"))
+		} else {
+			accepted(t, err, "failed on a send VFD "+sent)
+		}
 	}
 	w2 := newWalletWorld(t)
 	_, _, tr2 := w2.heldTransfer(t)
 	mustEvent(t, tr2, "sent", "unknown", "", 0, "3 hours")
+	if vfdProven() {
+		// 0039: 108 once is not enough; twice in a row, both 30 minutes on, is.
+		once := mustEvent(t, tr2, "requeried", "not_found", "108", 0, "2 hours")
+		refused(t, vfdOutcomeErr(tr2, "failed", once), "failed on one 108", refusedAs("vfd_failed_only_definitive"))
+	}
 	late := mustEvent(t, tr2, "requeried", "not_found", "108", 0, "")
 	_, err = vfdOutcome(tr2, "failed", late)
 	accepted(t, err, "failed on 'not found' three hours after sending, past the settlement window")
+}
+
+func vfdOutcomeErr(transfer, result, evidence string) error {
+	_, err := vfdOutcome(transfer, result, evidence)
+	return err
+}
+
+func mustOutcome(t *testing.T, transfer, result, evidence string) error {
+	t.Helper()
+	_, err := vfdOutcome(transfer, result, evidence)
+	return err
 }
 
 // =============================================================================
@@ -399,7 +461,7 @@ func TestWalletPay16_AFailureReleasesTheHoldInItsOwnTransaction(t *testing.T) {
 	if openHolds(t, w.bMem) == 0 {
 		t.Fatalf("FIXTURE: the hold is not open")
 	}
-	ev := mustEvent(t, tr, "sent", "refused", "61", 0, "")
+	ev := vfdFailEvidence(t, tr)
 	o, err := vfdOutcome(tr, "failed", ev)
 	accepted(t, err, "the transfer failed")
 	var actor *string
@@ -411,8 +473,8 @@ func TestWalletPay16_AFailureReleasesTheHoldInItsOwnTransaction(t *testing.T) {
 	if actor != nil || by != o {
 		t.Fatalf("WRONG ATTRIBUTION — released by user %v, outcome %q; want no user, the outcome %s", actor, by, o)
 	}
-	if !strings.Contains(reason, "61") {
-		t.Fatalf("WRONG REASON — %q; want VFD's own answer (61) in it", reason)
+	if !strings.Contains(reason, "108") {
+		t.Fatalf("WRONG REASON — %q; want VFD's own answer (108) in it", reason)
 	}
 	if n := openHolds(t, w.bMem); n != 0 {
 		t.Fatalf("STILL HELD — %d kobo held after the failure", n)
@@ -494,7 +556,7 @@ func TestWalletPay20_APersonCannotRecordAPayoutOnAHoldWhoseTransferIsAtVFD(t *te
 func TestWalletPay21_ATransferHasOneOutcome(t *testing.T) {
 	w := newWalletWorld(t)
 	_, _, tr := w.heldTransfer(t)
-	sent := mustEvent(t, tr, "sent", "refused", "61", 0, "")
+	sent := vfdFailEvidence(t, tr)
 	_, err := vfdOutcome(tr, "failed", sent)
 	fixture(t, err, "the failure")
 	// A second outcome of the OTHER kind: a second failure would be refused by
@@ -523,7 +585,7 @@ func TestWalletPay22_WhatVFDSaidIsNeverEditedAndTheSystemsEntryIsAnOutcomes(t *t
 func TestWalletPay23_TheSystemsRecordsAreTheirOutcomesOwn(t *testing.T) {
 	w := newWalletWorld(t)
 	_, hold, tr := w.heldTransfer(t)
-	ev := mustEvent(t, tr, "sent", "refused", "61", 0, "")
+	ev := vfdFailEvidence(t, tr)
 	failed, err := vfdOutcome(tr, "failed", ev)
 	fixture(t, err, "the failure")
 	// A whole payout, lines and the hold's charges, so only the rule under

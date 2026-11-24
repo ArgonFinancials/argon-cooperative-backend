@@ -10,15 +10,18 @@
 //   - four outcomes kept apart: accepted, refused, not_reached, unknown; a
 //     timeout, a 5xx and an unreadable answer are UNKNOWN (VFD may have
 //     acted), never refused and never not_reached;
-//   - a transfer's state by requery: succeeded only on VFD's 00/00 (or
-//     SUCCESS, SUCCESSFUL); "99" is pending; 108 or "no transaction" is
-//     not_found; an answer that cannot be read is unknown, NEVER not_found
-//     (not_found, after the caller's window, releases money);
+//   - a transfer's state by requery (docs/VFD_INTEGRATION.md §1.6, from 193
+//     transfers looked up at VFD, 2026-11-24): succeeded ONLY on 00 with
+//     transactionStatus 00; not_found ONLY on 108; anything else VFD says
+//     (91, 25, 99, a word, another code) is pending, which the caller holds
+//     and shows a person; an answer that cannot be read is unknown;
+//   - every send reply and every requery reply kept as received;
+//   - the pool account, from VFD's enquiry; an account's history, page by
+//     page (the sweeper's recovery path for missed notifications);
 //   - amounts exact: kobo to VFD's naira string and back with no float;
 //   - the caller's reference, never one made here; none, nothing sent;
 //   - intra-bank to VFD's own code, signed hex SHA-512(from + to);
 //   - an account VFD numbered or no account: one request, never a fallback;
-//   - no statement endpoint is known, and the client says so;
 //   - the token, a BVN and a date of birth in no log line.
 package tier1
 
@@ -28,7 +31,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,6 +45,7 @@ import (
 )
 
 const (
+	poolAcct     = "1000000001"
 	vfdToken     = "test-vfd-access-token-not-a-secret-91c2"
 	vfdBVN       = "22211133344"
 	vfdDOBText   = "07-Mar-1984"
@@ -78,6 +81,10 @@ func newFakeVFD(t *testing.T, modes map[string]string) *fakeVFD {
 		f.calls = append(f.calls, vfdCall{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("AccessToken"), body})
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/account/transactions" {
+			vfdHistoryMode(w, r, f.mode[r.URL.Path])
+			return
+		}
 		vfdAnswerMode(w, f.mode[r.URL.Path])
 	}))
 	t.Cleanup(f.srv.Close)
@@ -87,7 +94,7 @@ func newFakeVFD(t *testing.T, modes map[string]string) *fakeVFD {
 func vfdAnswerMode(w http.ResponseWriter, mode string) {
 	// requery_inflow:<account>: money arriving, ₦6,000, into <account> (the wallet's inflow tests).
 	if acct, ok := strings.CutPrefix(mode, "requery_inflow:"); ok {
-		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-IN","amount":"6000.00","accountNo":"` + acct + `","transactionStatus":"00","transactionDate":"2026-11-10 10:00:00","sessionId":"SESS-IN"}}`))
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-IN","amount":"6000.00","accountNo":"` + acct + `","transactionStatus":"00","transactionDate":"2026-11-10 10:00:00","sessionId":"SESS-IN","transactionType":"INFLOW"}}`))
 		return
 	}
 	switch mode {
@@ -110,7 +117,19 @@ func vfdAnswerMode(w http.ResponseWriter, mode string) {
 	case "requery_99":
 		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-77","amount":"4.35","accountNo":"` + memberAcct + `","transactionStatus":"99"}}`))
 	case "requery_108":
-		w.Write([]byte(`{"status":"108","message":"No transaction found"}`))
+		w.Write([]byte(`{"status":"108","message":"No Transaction!"}`))
+	case "requery_91": // created and sent; the receiving bank refused it (2 of 32, §1.4)
+		w.Write([]byte(`{"status":"00","message":"Successful Transaction Retrieval","data":{"TxnId":"TXN-77","amount":"6000.00","accountNo":"` + memberAcct + `","transactionStatus":"91","sessionId":"SESS-91","bankTransactionId":"BT-91","transactionType":"OUTFLOW"}}`))
+	case "requery_25": // not delivered, shown 25 on the day (§1.4)
+		w.Write([]byte(`{"status":"00","message":"Successful Transaction Retrieval","data":{"TxnId":"TXN-77","amount":"6000.00","accountNo":"` + memberAcct + `","transactionStatus":"25","transactionType":"OUTFLOW"}}`))
+	case "requery_word_success": // a word, not VFD's 00: never seen in production, never taken
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"TxnId":"TXN-77","amount":"6000.00","transactionStatus":"SUCCESSFUL","transactionType":"OUTFLOW"}}`))
+	case "pool_ok":
+		w.Write([]byte(`{"status":"00","message":"Account Details","data":{"accountNo":"` + poolAcct + `","accountId":"P-ID","client":"ARGON FINANCIALS LIMITED","clientId":"P-CLIENT","accountBalance":"1000000.00"}}`))
+	case "pool_no_number":
+		w.Write([]byte(`{"status":"00","message":"Account Details","data":{"accountId":"P-ID","client":"ARGON FINANCIALS LIMITED","clientId":"P-CLIENT"}}`))
+	case "pool_refused":
+		w.Write([]byte(`{"status":"99","message":"Unauthorized"}`))
 	case "requery_no_txn":
 		w.Write([]byte(`{"status":"01","message":"There is no transaction with this reference"}`))
 	case "enquiry_ok":
@@ -343,19 +362,25 @@ func TestVfdClient09_ASucceededTransferWithItsExactAmount(t *testing.T) {
 	}
 }
 
-func TestVfdClient10_NinetyNineIsNotSuccess(t *testing.T) {
-	got, _ := vfdRequery(t, "requery_99")
-	if got.State != vfd.Pending || got.TxnStatus != "99" {
-		t.Fatalf("TAKEN AS PAID — transactionStatus 99: %+v; want pending with 99 kept (UNVERIFIED as success; a person sees it)", got)
+// 99 is not success: the one real 99 was money that never arrived (§0). Nor
+// is 91 or 25: VFD created those transfers and sent them out. Nor a word.
+func TestVfdClient10_OnlyZeroZeroIsSuccess(t *testing.T) {
+	for mode, txn := range map[string]string{"requery_99": "99", "requery_91": "91", "requery_25": "25", "requery_word_success": "SUCCESSFUL"} {
+		got, _ := vfdRequery(t, mode)
+		if got.State != vfd.Pending || got.TxnStatus != txn {
+			t.Fatalf("TAKEN AS PAID — transactionStatus %s: %+v; want pending with %s kept (only 00 with 00 is paid; a person sees the rest)", txn, got, txn)
+		}
 	}
 }
 
-func TestVfdClient11_NotFoundIsNotFound(t *testing.T) {
-	for _, mode := range []string{"requery_108", "requery_no_txn"} {
-		got, _ := vfdRequery(t, mode)
-		if got.State != vfd.NotFound {
-			t.Fatalf("WRONG — %s: %+v; want not_found (the caller's window decides whether that is a failure)", mode, got)
-		}
+// Only 108 has proven safe (29 of 29). Any other "not found"-sounding answer
+// is something VFD said, held for a person, never a release.
+func TestVfdClient11_OnlyOneOhEightIsNotFound(t *testing.T) {
+	if got, _ := vfdRequery(t, "requery_108"); got.State != vfd.NotFound || got.Code != "108" {
+		t.Fatalf("WRONG — 108: %+v; want not_found", got)
+	}
+	if got, _ := vfdRequery(t, "requery_no_txn"); got.State != vfd.Pending || got.Code != "01" {
+		t.Fatalf("RELEASABLE — status 01 \"no transaction\": %+v; want pending (only 108 is proven safe to release on)", got)
 	}
 }
 
@@ -455,12 +480,69 @@ func TestVfdClient17_NameEnquiryFindsTheParty(t *testing.T) {
 
 // ---- what is never done --------------------------------------------------------
 
-func TestVfdClient18_NoStatementEndpointIsKnownAndTheClientSaysSo(t *testing.T) {
-	f := newFakeVFD(t, map[string]string{})
+// An account's history (§4): the sweeper's way to recover what VFD never
+// notified. Asked with the dates space-encoded as %20 and transactionType
+// wallet; rows read exactly; page by page until a page is empty.
+func TestVfdClient18_AnAccountsHistoryIsReadPageByPage(t *testing.T) {
+	f := newFakeVFD(t, map[string]string{"/account/transactions": "history_two_pages"})
 	var logs bytes.Buffer
-	err := vfdClientFor(t, f.srv.URL, &logs).Statement(context.Background(), societyAcct, time.Now().Add(-24*time.Hour), time.Now())
-	if !errors.Is(err, vfd.ErrStatementUnavailable) {
-		t.Fatalf("A STATEMENT INVENTED — %v; want ErrStatementUnavailable (an empty statement says nothing was missed)", err)
+	c := vfdClientFor(t, f.srv.URL, &logs)
+	from := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var rows []vfd.HistoryRow
+	for page := 0; page < 5; page++ {
+		h, err := c.History(context.Background(), societyAcct, from, from.Add(2*time.Hour), page)
+		if err != nil || h.Outcome != vfd.Accepted {
+			t.Fatalf("NOT READ — page %d: %+v, %v", page, h, err)
+		}
+		if len(h.Rows) == 0 {
+			break
+		}
+		rows = append(rows, h.Rows...)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("WRONG ROWS — %d rows over the pages; want 3 (two, then one, then an empty page)", len(rows))
+	}
+	in := rows[0]
+	if in.Type != "INFLOW" || in.TxnID != "Argon Financials Limited-00000000000000001" || in.AmountKobo != 600050 || in.ToAcct != societyAcct || in.SessionID != "SESS-H1" {
+		t.Fatalf("WRONG ROW — %+v; want the INFLOW of 6000.50 into the society's account, its reference and session", in)
+	}
+	q := f.all()[0].Query
+	if !strings.Contains(q, "accountNo="+societyAcct) || !strings.Contains(q, "transactionType=wallet") || !strings.Contains(q, "page=0") ||
+		!strings.Contains(q, "startDate=2026-11-24%2010:00:00") && !strings.Contains(q, "startDate=2026-11-24%2010%3A00%3A00") {
+		t.Fatalf("WRONG QUESTION — %s; want accountNo, transactionType=wallet, page, and the dates in VFD's time (WAT) with the space as %%20", q)
+	}
+}
+
+// Every reply VFD gives a send or a requery is kept as received: the
+// document could not say which send codes led where because nothing was.
+func TestVfdClient21_EveryReplyIsKeptAsReceived(t *testing.T) {
+	f := newFakeVFD(t, map[string]string{"/transfer": "transfer_refused"})
+	var logs bytes.Buffer
+	c := vfdClientFor(t, f.srv.URL, &logs)
+	s := vfdDoTransfer(t, c, vfdATransfer(memberParty))
+	if s.HTTPStatus != 200 || !strings.Contains(s.Reply, `"status":"61"`) {
+		t.Fatalf("NOT KEPT — the send's reply: %d %q; want 200 and VFD's body as it came", s.HTTPStatus, s.Reply)
+	}
+	q, _ := vfdRequery(t, "requery_91")
+	if q.HTTPStatus != 200 || !strings.Contains(q.Reply, `"transactionStatus":"91"`) {
+		t.Fatalf("NOT KEPT — the requery's reply: %d %q", q.HTTPStatus, q.Reply)
+	}
+}
+
+// The pool (§1.1): every transfer goes out from it. Its details are VFD's
+// enquiry, checked, never assumed.
+func TestVfdClient22_ThePoolIsVFDsEnquiryChecked(t *testing.T) {
+	var logs bytes.Buffer
+	f := newFakeVFD(t, map[string]string{"/account/enquiry": "pool_ok"})
+	p, err := vfdClientFor(t, f.srv.URL, &logs).Pool(context.Background())
+	if err != nil || p.Outcome != vfd.Accepted || p.Party.AccountNo != poolAcct || p.Party.AccountID != "P-ID" || p.Party.ClientID != "P-CLIENT" || p.Party.Name != "ARGON FINANCIALS LIMITED" {
+		t.Fatalf("WRONG POOL — %+v, %v; want VFD's pool account, id, client and client id", p, err)
+	}
+	for _, mode := range []string{"pool_no_number", "pool_refused"} {
+		f := newFakeVFD(t, map[string]string{"/account/enquiry": mode})
+		if p, err := vfdClientFor(t, f.srv.URL, &logs).Pool(context.Background()); err != nil || p.Outcome == vfd.Accepted {
+			t.Fatalf("TAKEN — the pool enquiry answered %s: %+v, %v; want not accepted (no transfer may go out from an account VFD did not name)", mode, p, err)
+		}
 	}
 }
 
@@ -491,5 +573,32 @@ func TestVfdClient20_NoTokenOrNoURLNoClient(t *testing.T) {
 		if c, err := newVFDClient(cfg); err == nil || c != nil {
 			t.Fatalf("BUILT — a client with %+v; want a refusal (no default that works)", vfd.Config{BaseURL: cfg.BaseURL, AccessToken: strings.Repeat("*", len(cfg.AccessToken))})
 		}
+	}
+}
+
+// vfdHistoryMode: an account's history, by page (§4: 20 a page, newest first,
+// an empty page at the end).
+func vfdHistoryMode(w http.ResponseWriter, r *http.Request, mode string) {
+	page := r.URL.Query().Get("page")
+	switch {
+	case mode == "history_two_pages" && page == "0":
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[` +
+			`{"transactionId":"Argon Financials Limited-00000000000000001","amount":"6000.50","fromAccountNo":"0123456789","toAccountNo":"` + societyAcct + `","fromBank":"000013","toBank":"090110","sessionId":"SESS-H1","time":"2026-11-24 10:30:00","transactionType":"INFLOW","transactionResponse":"00","walletName":"ARGON"},` +
+			`{"transactionId":"POOL-1","amount":"6000.50","fromAccountNo":"` + societyAcct + `","toAccountNo":"` + poolAcct + `","sessionId":"","time":"2026-11-24 10:30:05","transactionType":"POOL TRANSFER","transactionResponse":"00","walletName":"ARGON"}]}}`))
+	case mode == "history_two_pages" && page == "1":
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[` +
+			`{"transactionId":"Argon-out-1","amount":2500,"fromAccountNo":"` + poolAcct + `","toAccountNo":"` + memberAcct + `","sessionId":"SESS-O1","time":"2026-11-24 09:10:00","transactionType":"OUTFLOW","transactionResponse":"91","walletName":"ARGON"}]}}`))
+	case strings.HasPrefix(mode, "history_inflow:"): // one INFLOW into <account> (the wallet's sweeper tests)
+		parts := strings.SplitN(strings.TrimPrefix(mode, "history_inflow:"), "|", 2)
+		if page == "0" {
+			w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[{"transactionId":"` + parts[1] + `","amount":"6000.00","fromAccountNo":"0123456789","toAccountNo":"` + parts[0] + `","fromBank":"000013","toBank":"090110","sessionId":"SESS-IN","time":"2026-11-24 10:30:00","transactionType":"INFLOW","transactionResponse":"00","walletName":"ARGON"}]}}`))
+			return
+		}
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[]}}`))
+	case mode == "history_down":
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`<html>502</html>`))
+	default:
+		w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[]}}`))
 	}
 }

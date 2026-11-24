@@ -26,9 +26,20 @@ func vfdNotification(raw, reference, account, ago string) (string, error) {
 	if ago != "" {
 		at = "now() - interval '" + ago + "'"
 	}
-	err := db.QueryRow(bg(), `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, received_at)
-		VALUES ('inflow', $1, false, $2, $3, `+at+`) RETURNING id::text`, raw, nz(reference), nz(account)).Scan(&id)
+	cols, vals := "", ""
+	if vfdProven() { // 0039: a notification says where it came from
+		cols, vals = ", source", ", 'webhook'"
+	}
+	err := db.QueryRow(bg(), `INSERT INTO vfd_notifications (kind, raw, signed, reference, account_number, received_at`+cols+`)
+		VALUES ('inflow', $1, false, $2, $3, `+at+vals+`) RETURNING id::text`, raw, nz(reference), nz(account)).Scan(&id)
 	return id, err
+}
+
+// vfdProven: whether this schema has 0039 (VFD as production proved it).
+func vfdProven() bool {
+	var yes bool
+	db.QueryRow(bg(), `SELECT to_regclass('public.vfd_pool') IS NOT NULL`).Scan(&yes)
+	return yes
 }
 
 func vfdAttempt(n, result, detail string) error {
@@ -54,7 +65,7 @@ func TestWalletInflow01_ANotificationIsKeptAsReceived(t *testing.T) {
 	fixture(t, err, "a notification")
 	refused(t, one(`UPDATE vfd_notifications SET raw = '{}' WHERE id = $1`, n), "a notification rewritten", refusedAs("vfd_records_append_only"))
 	refused(t, one(`DELETE FROM vfd_notifications WHERE id = $1`, n), "a notification deleted", refusedAs("vfd_records_append_only"))
-	refused(t, one(`INSERT INTO vfd_notifications (kind, raw, signed) VALUES ('payment', '{}', false)`), "a notification of no known kind", refusedAs("vfd_notification_kind_known"))
+	refused(t, one(`INSERT INTO vfd_notifications (kind, raw, signed`+map[bool]string{true: ", source", false: ""}[vfdProven()]+`) VALUES ('payment', '{}', false`+map[bool]string{true: ", 'webhook'", false: ""}[vfdProven()]+`)`), "a notification of no known kind", refusedAs("vfd_notification_kind_known"))
 }
 
 func TestWalletInflow02_AnAttemptSaysWhyItDidNotConfirm(t *testing.T) {
@@ -137,7 +148,7 @@ func TestWalletInflow07_WhatAPersonMustActOnIsSeen(t *testing.T) {
 	mustEvent(t, stuck, "sent", "unknown", "", 0, "31 minutes")
 	// A failed one.
 	_, _, failed := w.heldTransferFor(t, w.g1Mem)
-	ev := mustEvent(t, failed, "sent", "refused", "61", 0, "")
+	ev := vfdFailEvidence(t, failed)
 	_, err := vfdOutcome(failed, "failed", ev)
 	fixture(t, err, "the failure")
 	// A notification ten minutes old, never confirmed.

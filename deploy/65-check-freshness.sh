@@ -9,6 +9,10 @@
 #   - the backup store's disk has room (file:// only)
 #   - once the API has a public name: certbot.timer runs, and the certificate
 #     nginx serves has at least CERT_MIN_DAYS left (its own alert)
+#   - no payout is held waiting for VFD (docs/VFD_INTEGRATION.md §1.6: VFD
+#     answered something other than 00 or 108, so it may have sent the money;
+#     a person asks VFD to confirm a reversal), and none has gone a day with
+#     no definitive answer (its own alert)
 #
 # Anything wrong: one alert listing all of it (alert.sh), exit 3 ("failed, and
 # already alerted": argon-alert@ does not raise it twice). All fresh:
@@ -19,7 +23,7 @@ on_server || die "65-check-freshness.sh is for the server (ARGON_HOST=1)"
 : "${BACKUP_MAX_AGE_H:=26}" "${DRILL_MAX_AGE_D:=8}" "${BACKUP_MIN_FREE_GB:=5}"
 : "${ARGON_TIMERS:=argon-backup.timer argon-restore-drill.timer}"
 
-problems=(); cert_failed=0
+problems=(); cert_failed=0; vfd_failed=0
 now=$(date -u +%s)
 # Keys carry their UTC time; age_of (lib.sh) reads it, and counts a key with no
 # readable time as stale, never as an error.
@@ -84,6 +88,9 @@ if [[ -n ${ARGON_API_DOMAIN:-} ]]; then
   fi
 fi
 
+# Payouts waiting on VFD (0039): its own check and its own alert.
+bash "$DEPLOY_DIR/66-check-vfd-holds.sh" --db "$ARGON_DB" || vfd_failed=1
+
 if ((${#problems[@]})); then
   printf '%s\n' "${problems[@]}" | sed 's/^/  !! /' >&2
   { echo "The backups are not known to be good. Until this is fixed, assume there is no usable backup."
@@ -101,4 +108,4 @@ else
 fi
 # The heartbeat still went: the server is alive and the backups are fresh. The
 # certificate was alerted on its own; the run still fails, so it is not missed.
-((cert_failed == 0)) || exit 3
+((cert_failed == 0 && vfd_failed == 0)) || exit 3

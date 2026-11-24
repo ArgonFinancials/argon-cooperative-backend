@@ -655,7 +655,9 @@ if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.vfd_notificati
 probe req P66 argon_app '42501.*permission denied for table vfd_inflows' "app records an inflow (believes a notification)"   "INSERT INTO vfd_inflows (vfd_reference, society_id, account_number, amount_kobo) VALUES ('APP-1', $S, '1000000001', 100);"
 probe req P67 argon_app '42501.*permission denied for table vfd_notification_attempts' "app marks a notification confirmed"   "INSERT INTO vfd_notification_attempts (notification_id, result) VALUES ($U1, 'confirmed');"
 probe req P68 argon_app '42501.*permission denied for table vfd_notifications' "app backdates a notification"   "INSERT INTO vfd_notifications (kind, raw, signed, received_at) VALUES ('inflow', '{}', false, $TODAY - 1);"
-probe ctl K62 argon_app '' "control: the webhook keeps a notification (rolled back)"   "BEGIN; INSERT INTO vfd_notifications (kind, raw, signed, reference) VALUES ('inflow', '{}', false, 'K62'); ROLLBACK;"
+note_cols="kind, raw, signed, reference" note_vals="'inflow', '{}', false, 'K62'"
+[[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.vfd_pool') IS NOT NULL)::int" </dev/null) == 1 ]] && { note_cols+=", source"; note_vals+=", 'webhook'"; }
+probe ctl K62 argon_app '' "control: the webhook keeps a notification (rolled back)"   "BEGIN; INSERT INTO vfd_notifications ($note_cols) VALUES ($note_vals); ROLLBACK;"
 probe ctl K63 argon_wallet '' "control: the wallet records a reconciliation run (rolled back)"   "BEGIN; INSERT INTO vfd_reconciliation_runs (account_number, period_from, period_to, outcome, detail) VALUES ('1000000001', now() - interval '1 day', now(), 'could_not_run', 'K63'); ROLLBACK;"
 fi
 # 0032: the app records a member's claim; the database matches and posts.

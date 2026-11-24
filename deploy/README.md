@@ -721,6 +721,16 @@ The last signature on a withdrawal places its hold (LEDGER_CONTRACT §13). The *
 
 It runs as `argon_wallet`, the only role that writes VFD's evidence (probes P60–P65). It never sends a transfer twice, never releases on a timeout, and pays only holds the last signature placed.
 
+**How it decides (0039, 2026-11-24, docs/VFD_INTEGRATION.md):**
+- VFD's `00` to the send pays.
+- Anything else holds, re-queried at about 2 minutes, then every 10 minutes for a day, then hourly.
+- Only `108`, twice in a row, 30 minutes or more after the send, releases.
+- Any other answer holds the money and raises an alert: `66-check-vfd-holds.sh`, run by the freshness timer, lists each held payout. Ask VFD whether the money reached the member or came back to the pool, then act by hand.
+
+**Transfers and deposits:**
+- Transfers leave from Argon's VFD pool. The worker records it from VFD's own `GET /account/enquiry` on its first round. Before switching on, check that this call succeeds from this server: a refusal while the same token works elsewhere means VFD restricts by IP.
+- Every 15 minutes the worker reads each society account's history, so a deposit VFD never notified is still found and confirmed.
+
 **Before it can run:** a society's own VFD account recorded by the operator (`48-society-vfd-account.sh`, below: from VFD's name enquiry, never typed), the member's own VFD account, and VFD's credentials in `deploy.env`:
 
 ```bash
