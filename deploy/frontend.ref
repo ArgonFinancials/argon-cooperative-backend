@@ -8,7 +8,8 @@
 # of what it carries. Moving it is reviewed and tested like any other change.
 #
 # One full 40-character commit id; lines starting with # are comments.
-# a0f77f9: one app for members and officers (Home, Activity, Loans, Me, and
-# Society for officers), wide on a laptop, sign-in and activate split screen,
-# the bare address opening sign-in at once, 2026-11-22.
-a0f77f99c1ca3c266a38c4406557418c266ccccf
+# 8af6507: 0040's screens (a member's own bank account, an officer's for a
+# member with no PIN, a signatory's name confirmation, the Withdraw warning),
+# member status (0038), and the payout screen gated on atVfd, vendored from
+# e6f92fe (CORS allows PUT), 2026-11-25. Exercised against the dev API.
+8af6507d3bc9a26aab14a000f0b9588c9ccb2e01
