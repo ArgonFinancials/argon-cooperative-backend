@@ -235,7 +235,7 @@ components:
       required: [accountNumber, bankCode, pinProofId]
       properties:
         accountNumber: { type: string, description: "The ten-digit account number (NUBAN)." }
-        bankCode: { type: string, description: "The bank's code as VFD lists it (090110 is VFD itself)." }
+        bankCode: { type: string, description: "The bank's code as VFD lists it. Never VFD's own (090110): refused, bank_at_vfd." }
         pinProofId: { type: string, format: uuid, description: "The setter's own proof, minted for member_bank_account." }
 
     BankAccount:
@@ -3127,7 +3127,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits."
+          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits. bank_at_vfd (0041): VFD's own bank code (090110); a payout there would never leave Argon's VFD pool: an account at another bank is needed."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -3199,7 +3199,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits."
+          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits. bank_at_vfd (0041): VFD's own bank code (090110); a payout there would never leave Argon's VFD pool: an account at another bank is needed."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

@@ -45,7 +45,15 @@ type vworld struct {
 
 func vfdNumber() string { return fmt.Sprintf("10%08d", seq.Add(1)%100000000) }
 
-func vfdRef(hold string) string { return "Argon-" + strings.ReplaceAll(hold, "-", "") }
+// vfdRef: the hold's transfer reference, as the database derives it (0028
+// "Argon-"; 0041 "COOP-", apart from the wallet platform's on the same pool).
+func vfdRef(hold string) string {
+	var ref string
+	if err := db.QueryRow(bg(), `SELECT vfd_transfer_reference($1)`, hold).Scan(&ref); err != nil {
+		return "Argon-" + strings.ReplaceAll(hold, "-", "")
+	}
+	return ref
+}
 
 const socAcctReason = "Recording the society's VFD account, as VFD's name enquiry reports it"
 

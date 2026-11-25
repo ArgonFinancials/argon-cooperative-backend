@@ -231,3 +231,13 @@ func TestApiBank10_TheRequestSaysWhenItsPaymentIsWithVFD(t *testing.T) {
 		t.Fatalf("UNSAID — the transfer is at VFD and the payout reads %+v; want atVfd true (only VFD's answer settles it)", p)
 	}
 }
+
+// 0041: an account at VFD is refused in words the member acts on, before
+// anything is written (a payout there would never leave the pool).
+func TestApiBank11_AnAccountAtVFDIsRefusedInWords(t *testing.T) {
+	w := newMoneyAPI(t)
+	user, mem := bankMember(t, w.mworld, "Folake Adebayo", true)
+	proof := stepUp(t, user, "member_bank_account")
+	wantProblem(t, w.setOwnBank(t, user, mem, "0123456789", "090110", proof), http.StatusUnprocessableEntity, "bank_at_vfd", "a member's account at VFD's own bank")
+	bankFrom(t, w.setOwnBank(t, user, mem, "0123456789", testBank, proof), http.StatusOK, "the same proof, at another bank")
+}

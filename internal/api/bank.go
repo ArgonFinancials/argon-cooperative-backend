@@ -56,6 +56,8 @@ func (s *server) SetOwnBankAccount(ctx context.Context, req SetOwnBankAccountReq
 			return SetOwnBankAccount403JSONResponse(stepUpProblem("member_bank_account")), nil
 		case c == "bank_account_number_shape" || c == "bank_code_shape":
 			return SetOwnBankAccount422JSONResponse(badAccount), nil
+		case c == "bank_not_at_vfd":
+			return SetOwnBankAccount422JSONResponse(bankAtVFD), nil
 		}
 		return nil, err
 	}
@@ -95,6 +97,8 @@ func (s *server) SetMemberBankAccount(ctx context.Context, req SetMemberBankAcco
 			return SetMemberBankAccount403JSONResponse(Problem{Code: "member_sets_own", Message: dbMessage(err)}), nil
 		case c == "bank_account_number_shape" || c == "bank_code_shape":
 			return SetMemberBankAccount422JSONResponse(badAccount), nil
+		case c == "bank_not_at_vfd":
+			return SetMemberBankAccount422JSONResponse(bankAtVFD), nil
 		}
 		return nil, err
 	}
@@ -268,8 +272,14 @@ func badBankDetails(number, code string) (Problem, bool) {
 	if !bankAccountShape.MatchString(number) || !bankCodeShape.MatchString(code) {
 		return badAccount, true
 	}
+	if code == vfdBankCode {
+		return bankAtVFD, true
+	}
 	return Problem{}, false
 }
+
+// vfdBankCode: VFD's own bank (0041): no member is paid into an account there.
+const vfdBankCode = "090110"
 
 func nothingToConfirm(a BankAccount) Problem {
 	msg := map[BankAccountCheck]string{
@@ -285,5 +295,6 @@ func nothingToConfirm(a BankAccount) Problem {
 
 var (
 	badAccount         = Problem{Code: "bad_account", Message: "an account number is ten digits, and a bank code three to six digits"}
+	bankAtVFD          = Problem{Code: "bank_at_vfd", Message: "An account at VFD can't be used: a withdrawal there would not leave Argon's own account. Give an account at another bank."}
 	bankReasonRequired = Problem{Code: "reason_required", Message: "say what you looked at and why the name is the member's, more than ten characters: it is recorded as written"}
 )

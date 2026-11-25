@@ -16,6 +16,7 @@
 //	bank_hold_unmapped         the hold's refusal over bank details answered 500, not the member's sentence
 //	bank_request_unmapped      a request with no bank details answered 500
 //	bank_setter_signs_unmapped the setter's signature refused as 500
+//	bank_vfd_db                VFD's own bank code reaches the database (500)
 package tier1
 
 import (
@@ -48,6 +49,9 @@ func (f *fakeAPI) SetOwnBankAccount(ctx context.Context, req api.SetOwnBankAccou
 	b := req.Body
 	if (!fakeBankNumber.MatchString(b.AccountNumber) || !fakeBankCode.MatchString(b.BankCode)) && f.brk != "bank_shape_db" {
 		return api.SetOwnBankAccount422JSONResponse{Code: "bad_account", Message: "ten digits; three to six"}, nil
+	}
+	if b.BankCode == "090110" && f.brk != "bank_vfd_db" {
+		return api.SetOwnBankAccount422JSONResponse{Code: "bank_at_vfd", Message: "an account at another bank"}, nil
 	}
 	out, err := f.bankSet(ctx, caller, member, b)
 	if err != nil {
