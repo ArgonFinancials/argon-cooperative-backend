@@ -1029,6 +1029,102 @@ components:
           description: Every account of the society, ordered by code.
           items: { $ref: '#/components/schemas/Account' }
 
+    ReportLine:
+      type: object
+      additionalProperties: false
+      required: [code, name, amountKobo]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Kobo' }
+
+    IncomeStatement:
+      type: object
+      additionalProperties: false
+      required: [societyId, from, to, income, expenses, totalIncomeKobo, totalExpensesKobo, surplusKobo]
+      description: |
+        Every income and expense account of the society (zero rows included),
+        moved by entries whose value date is within from..to (an undated entry,
+        before every date, is in no period). Income reads as earned (credits
+        positive), expenses as spent (debits positive); surplusKobo is income
+        less expenses, negative for a deficit.
+      properties:
+        societyId: { type: string, format: uuid }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        income: { type: array, items: { $ref: '#/components/schemas/ReportLine' }, description: "By account code." }
+        expenses: { type: array, items: { $ref: '#/components/schemas/ReportLine' }, description: "By account code." }
+        totalIncomeKobo: { $ref: '#/components/schemas/Kobo' }
+        totalExpensesKobo: { $ref: '#/components/schemas/Kobo' }
+        surplusKobo: { $ref: '#/components/schemas/Kobo' }
+
+    CashFlowLine:
+      type: object
+      additionalProperties: false
+      required: [kind, entries, amountKobo]
+      properties:
+        kind: { type: string, description: "The entries' kind: contribution_in, withdrawal_out, loan_disbursement, ..." }
+        entries: { type: integer }
+        amountKobo: { $ref: '#/components/schemas/Kobo' }
+
+    CashFlow:
+      type: object
+      additionalProperties: false
+      required: [societyId, from, to, openingCashKobo, inflows, outflows, totalInKobo, totalOutKobo, closingCashKobo]
+      description: |
+        The direct method: the society's cash (its bank accounts) at the start
+        of from, every entry within from..to that moved it, as money in or
+        money out by the entry's kind (each entry's net movement, so a
+        reversal sits with what it reverses), and the cash at the end of to.
+        openingCashKobo + totalInKobo - totalOutKobo is closingCashKobo, or the
+        server refuses with 500 cash_does_not_reconcile: a defect, never a
+        figure to display.
+      properties:
+        societyId: { type: string, format: uuid }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        openingCashKobo: { $ref: '#/components/schemas/Kobo' }
+        inflows: { type: array, items: { $ref: '#/components/schemas/CashFlowLine' }, description: "By kind." }
+        outflows: { type: array, items: { $ref: '#/components/schemas/CashFlowLine' }, description: "By kind; amounts positive." }
+        totalInKobo: { $ref: '#/components/schemas/Kobo' }
+        totalOutKobo: { $ref: '#/components/schemas/Kobo' }
+        closingCashKobo: { $ref: '#/components/schemas/Kobo' }
+
+    BranchContributions:
+      type: object
+      additionalProperties: false
+      required: [branchCode, branchName, amountKobo]
+      properties:
+        branchCode: { type: string }
+        branchName: { type: string }
+        amountKobo: { $ref: '#/components/schemas/Kobo' }
+
+    ChargesCollected:
+      type: object
+      additionalProperties: false
+      required: [partnerKobo, marginKobo, vatKobo, levyKobo, totalKobo]
+      description: "Charges posted in the period, split as LEDGER_CONTRACT §6 requires: the partner's, Argon's margin, VAT, the statutory levy."
+      properties:
+        partnerKobo: { $ref: '#/components/schemas/Kobo' }
+        marginKobo: { $ref: '#/components/schemas/Kobo' }
+        vatKobo: { $ref: '#/components/schemas/Kobo' }
+        levyKobo: { $ref: '#/components/schemas/Kobo' }
+        totalKobo: { $ref: '#/components/schemas/Kobo' }
+
+    PeriodReport:
+      type: object
+      additionalProperties: false
+      required: [societyId, from, to, contributionsByBranch, totalContributionsKobo, loansOutstandingKobo, charges]
+      description: "LEDGER_CONTRACT §4 reports(period): contributions by branch (net of reversals), loans outstanding at the end of to, charges collected in the period."
+      properties:
+        societyId: { type: string, format: uuid }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        contributionsByBranch: { type: array, items: { $ref: '#/components/schemas/BranchContributions' }, description: "Every branch, by code." }
+        totalContributionsKobo: { $ref: '#/components/schemas/Kobo' }
+        loansOutstandingKobo: { $ref: '#/components/schemas/Kobo' }
+        charges: { $ref: '#/components/schemas/ChargesCollected' }
+
     TrialBalanceRow:
       type: object
       required: [code, name, kind, debitsKobo, creditsKobo, balanceKobo]
@@ -3171,6 +3267,114 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /societies/{societyId}/reports/income-statement:
+    get:
+      operationId: getIncomeStatement
+      x-argon-built: true
+      summary: "Income and expenses for a period, by value date (stage 2)"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date }, description: "The first value date in the period." }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: "The last value date in the period." }
+      responses:
+        '200':
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IncomeStatement' }
+        '400':
+          description: "bad_request; bad_period (from is after to)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller is not an officer of (the books' readers).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: "A defect in the books, never a figure: the report would not reconcile."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /societies/{societyId}/reports/cash-flow:
+    get:
+      operationId: getCashFlow
+      x-argon-built: true
+      summary: "Cash in and out for a period, the direct method (stage 2)"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date }, description: "The first value date in the period." }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: "The last value date in the period." }
+      responses:
+        '200':
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CashFlow' }
+        '400':
+          description: "bad_request; bad_period (from is after to)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller is not an officer of (the books' readers).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: "A defect in the books, never a figure: the report would not reconcile."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /societies/{societyId}/reports/period:
+    get:
+      operationId: getPeriodReport
+      x-argon-built: true
+      summary: "Contributions by branch, loans outstanding and charges collected, for a period (stage 2)"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date }, description: "The first value date in the period." }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: "The last value date in the period." }
+      responses:
+        '200':
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PeriodReport' }
+        '400':
+          description: "bad_request; bad_period (from is after to)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: No session, or one that is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: No such society, or one the caller is not an officer of (the books' readers).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: "A defect in the books, never a figure: the report would not reconcile."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /members/{memberId}/disputes:
     post:
       operationId: raiseDispute
