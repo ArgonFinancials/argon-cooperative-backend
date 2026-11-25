@@ -187,11 +187,12 @@ func (s *server) requestPayout(ctx context.Context, id string, v *ApprovalView) 
 	var p RequestPayout
 	var hold string
 	var bySignature bool
-	err := s.db.QueryRow(ctx, `SELECT h.id::text, coalesce(a.kind = 'approval_signature', false), h.held_at,
+	err := s.db.QueryRow(ctx, `SELECT h.id::text, coalesce(a.kind = 'approval_signature', false),
+		  EXISTS (SELECT 1 FROM vfd_transfers t WHERE t.hold_id = h.id), h.held_at,
 		  (SELECT min(e.posted_at) FROM ledger_entries e WHERE e.hold_id = h.id), rl.at, rl.reason
 		  FROM withdrawal_holds h LEFT JOIN withdrawal_hold_releases rl ON rl.hold_id = h.id
 		  LEFT JOIN credential_acts a ON a.id = h.act_id
-		 WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, id).Scan(&hold, &bySignature, &p.HeldAt, &p.PaidAt, &p.ReleasedAt, &p.ReleaseReason)
+		 WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, id).Scan(&hold, &bySignature, &p.AtVfd, &p.HeldAt, &p.PaidAt, &p.ReleasedAt, &p.ReleaseReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -206,8 +207,8 @@ func (s *server) requestPayout(ctx context.Context, id string, v *ApprovalView) 
 	default:
 		p.State = RequestPayoutStateOpen
 	}
-	// Who placed it (2026-11-25, the frontend): the last signature's hold is
-	// the system's to pay; an officer's is the officers'.
+	// Who placed it, and whether it is with VFD (2026-11-25, the frontend):
+	// a person may record or release a hold only while nothing was sent.
 	p.HoldId, p.PlacedBy = uuidOf(hold), RequestPayoutPlacedByOfficer
 	if bySignature {
 		p.PlacedBy = RequestPayoutPlacedBySystem

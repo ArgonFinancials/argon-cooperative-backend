@@ -430,6 +430,7 @@ func (f *fakeAPI) RejectApproval(ctx context.Context, req api.RejectApprovalRequ
 //	payout_reason_hidden   a release's reason is not given
 //	payout_hold_unnamed    the hold's id not given
 //	payout_all_officers    every hold said to be an officer's (a system hold offered to record by hand)
+//	payout_at_vfd_unsaid   a hold whose transfer is at VFD said to be nobody's yet (offered to a person)
 func (f *fakeAPI) payoutOf(ctx context.Context, req string) *api.RequestPayout {
 	if f.brk == "payout_never" {
 		return nil
@@ -444,6 +445,9 @@ func (f *fakeAPI) payoutOf(ctx context.Context, req string) *api.RequestPayout {
 	}
 	if f.brk != "payout_hold_unnamed" {
 		p.HoldId = uuidOf(hold)
+	}
+	if f.brk != "payout_at_vfd_unsaid" {
+		f.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM vfd_transfers WHERE hold_id = $1)`, hold).Scan(&p.AtVfd)
 	}
 	p.PlacedBy = api.RequestPayoutPlacedByOfficer
 	if bySignature && f.brk != "payout_all_officers" {

@@ -1606,7 +1606,7 @@ components:
     RequestPayout:
       type: object
       additionalProperties: false
-      required: [holdId, placedBy, state, heldAt, paidAt, releasedAt, releaseReason]
+      required: [holdId, placedBy, atVfd, state, heldAt, paidAt, releasedAt, releaseReason]
       properties:
         holdId: { type: string, format: uuid, description: "The hold: what an officer's record-payout or release names." }
         placedBy:
@@ -1614,9 +1614,18 @@ components:
           enum: [officer, system]
           description: |
             system: the last signature placed it (LEDGER_CONTRACT §13); the
-            system pays it and records what VFD did, and a person neither
-            records it as paid nor releases it. officer: an officer authorised
-            it by hand (0012); the officers pay it, and record it or release it.
+            wallet sends it. officer: an officer authorised it by hand (0012).
+            Whether a person may still record it as paid or release it is
+            atVfd's, not this.
+        atVfd:
+          type: boolean
+          description: |
+            A transfer exists for this hold: it is with VFD, and only VFD's
+            answer pays or releases it (a person's record or release is
+            refused: payout_at_vfd_by_system, hold_release_while_at_vfd).
+            false: nothing was sent, whoever placed it, and an officer may
+            still release it or record it as paid by hand (a system hold the
+            wallet never sent included).
         state:
           type: string
           enum: [open, paid, released]

@@ -30,4 +30,5 @@ declare -gA SVC_TARGET_OF=(
   [bank_request_unmapped]='TestApiBank07_NoBankDetailsIsRefusedInTheMembersWords'
   [bank_hold_unmapped]='TestApiBank08_TheLastSignatureSaysWhatTheMemberMustDo'
   [bank_setter_signs_unmapped]='TestApiBank09_TheSetterNeverSigns'
+  [payout_at_vfd_unsaid]='TestApiBank10_TheRequestSaysWhenItsPaymentIsWithVFD'
 )

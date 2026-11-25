@@ -362,6 +362,7 @@ type bMemberRequest struct {
 
 type bPayout struct {
 	HoldId, PlacedBy   string
+	AtVfd              bool
 	State              string
 	HeldAt             string
 	PaidAt, ReleasedAt *string

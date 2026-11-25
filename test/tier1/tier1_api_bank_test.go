@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type bankOut struct {
@@ -202,4 +204,30 @@ func TestApiBank09_TheSetterNeverSigns(t *testing.T) {
 		t.Fatalf("FIXTURE: the secretary raising for the member: %d %s", r.status, r.body)
 	}
 	wantProblem(t, w.signVia(t, w.s1, v.RequestId), http.StatusForbidden, "conflict_of_interest", "the treasurer signing for a member whose bank details they set")
+}
+
+// A hold whose transfer is at VFD is VFD's to settle: the request says so
+// (atVfd), and a person is never offered it (2026-11-25, the frontend).
+func TestApiBank10_TheRequestSaysWhenItsPaymentIsWithVFD(t *testing.T) {
+	w := newMoneyAPI(t)
+	_, err := recordSocietyAccount(w.c.s.id, vfdNumber(), opName, opHost, socAcctReason)
+	fixture(t, err, "the society on VFD")
+	number := vfdNumber()
+	bankFor(t, w.bMem, number)
+	req := firstSigned(t, w.mworld, w.bMem)
+	if r := w.signVia(t, w.s2, req); r.status != http.StatusCreated {
+		t.Fatalf("FIXTURE: the last signature, with its hold: %d %s", r.status, r.body)
+	}
+	p := memberRequestOf(t, w, req).Payout
+	if p == nil || p.PlacedBy != "system" || p.AtVfd {
+		t.Fatalf("WRONG STATE — before anything is sent the payout reads %+v; want placed by the system, not at VFD (a person may still release it)", p)
+	}
+	fixture(t, tx(func(x pgx.Tx) error {
+		_, err := x.Exec(bg(), `INSERT INTO vfd_transfers (hold_id, reference, from_account, to_account, amount_kobo, to_bank)
+			VALUES ($1, vfd_transfer_reference($1), $2, $3, $4, $5)`, p.HoldId, ensurePool(), number, payKobo, testBank)
+		return err
+	}), "the transfer")
+	if p := memberRequestOf(t, w, req).Payout; p == nil || !p.AtVfd {
+		t.Fatalf("UNSAID — the transfer is at VFD and the payout reads %+v; want atVfd true (only VFD's answer settles it)", p)
+	}
 }
