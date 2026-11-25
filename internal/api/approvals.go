@@ -220,6 +220,11 @@ func refusedBy(err error) string {
 
 // The person's step-up did not hold: no proof, someone else's, spent, stale,
 // for another act, or minted in this transaction.
+// bankRefusals: the hold's refusals over a member's bank details (0040), each
+// in the database's sentence, which the member reads.
+var bankRefusals = map[string]string{"payout_needs_bank_account": "needs_bank_account", "payout_bank_not_checked": "bank_not_checked",
+	"payout_bank_not_found": "bank_not_found", "payout_bank_name_unconfirmed": "bank_name_unconfirmed"}
+
 var stepUpRefused = map[string]bool{"act_needs_pin_proof": true, "act_proof_for_this_act": true, "proof_minted_elsewhere": true,
 	"signature_needs_step_up": true, "signature_act_is_signers": true, "signature_act_kind": true,
 	"rejection_needs_step_up": true, "rejection_act_is_rejecters": true, "rejection_act_kind": true}
@@ -349,6 +354,10 @@ func (s *server) SignApproval(ctx context.Context, req SignApprovalRequestObject
 			return SignApproval422JSONResponse(why), nil
 		case notConfigured[c]:
 			return SignApproval422JSONResponse{Code: "not_configured", Message: dbMessage(err)}, nil
+		case bankRefusals[c] != "": // 0040: where the money goes, at the hold
+			return SignApproval422JSONResponse{Code: bankRefusals[c], Message: dbMessage(err)}, nil
+		case c == "bank_setter_authorises": // 0040: whoever set the bank details
+			return SignApproval403JSONResponse(Problem{Code: "conflict_of_interest", Message: dbMessage(err)}), nil
 		}
 		return nil, err
 	}

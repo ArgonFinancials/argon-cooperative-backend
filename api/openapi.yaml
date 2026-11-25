@@ -219,13 +219,63 @@ components:
         an officer proposing, confirming or rejecting a payment's resolution.
         member_email (0034): the secretary setting a member's email.
         member_status (0038): the secretary suspending, reinstating or
-        recording the departure of a member.
+        recording the departure of a member. member_bank_account (0040): a
+        member (or, for a member who cannot sign in, an officer) setting the
+        member's bank details; bank_name_confirmation: a signatory confirming
+        a bank's name for them that does not match the register.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
              withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email,
-             member_status]
+             member_status, member_bank_account, bank_name_confirmation]
+
+    SetBankAccount:
+      type: object
+      required: [accountNumber, bankCode, pinProofId]
+      properties:
+        accountNumber: { type: string, description: "The ten-digit account number (NUBAN)." }
+        bankCode: { type: string, description: "The bank's code as VFD lists it (090110 is VFD itself)." }
+        pinProofId: { type: string, format: uuid, description: "The setter's own proof, minted for member_bank_account." }
+
+    BankAccount:
+      type: object
+      additionalProperties: false
+      required: [bankAccountId, accountNumber, bankCode, check, vfdName, nameSettled, byMember, setBy, recordedAt, confirmedBy]
+      properties:
+        bankAccountId: { type: string, format: uuid }
+        accountNumber: { type: string }
+        bankCode: { type: string }
+        check:
+          type: string
+          enum: [checking, not_found, matches, differs]
+          description: |
+            VFD's name check, run by the wallet worker after the details are
+            recorded. checking: not answered yet. not_found: VFD says there is
+            no such account at that bank (set them again). matches: the name
+            the bank gives resembles the member's name on the register.
+            differs: it does not, and a signatory who did not set the details
+            must confirm it before any payout goes there.
+        vfdName: { type: string, nullable: true, description: "The name the bank gives for the account, as VFD said it; null until found." }
+        nameSettled: { type: boolean, description: "matches, or differs and confirmed: a payout may go there." }
+        confirmedBy:
+          nullable: true
+          description: "The signatory who confirmed a name that differs; null when none has."
+          allOf: [{ $ref: '#/components/schemas/EmailSetter' }]
+        byMember: { type: boolean, description: "Set by the member themselves; false: by an officer, for a member who could not sign in." }
+        setBy: { $ref: '#/components/schemas/EmailSetter' }
+        recordedAt: { type: string, format: date-time }
+
+    BankAccountRecord:
+      type: object
+      additionalProperties: false
+      required: [current, history]
+      properties:
+        current:
+          nullable: true
+          description: "The member's current bank details; null: none, and a withdrawal cannot be paid."
+          allOf: [{ $ref: '#/components/schemas/BankAccount' }]
+        history: { type: array, items: { $ref: '#/components/schemas/BankAccount' }, description: "Every set, newest first." }
 
     ChangeMemberStatus:
       type: object
@@ -2677,7 +2727,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '403':
-          description: "step_up_required (no valid proof for approval_signature, the caller's own, unspent); not_a_signatory (no current signing post here, the auditor included); conflict_of_interest (the borrower or a guarantor of the loan the request is for; the caller raised the request; the withdrawal is the caller's own)."
+          description: "step_up_required (no valid proof for approval_signature, the caller's own, unspent); not_a_signatory (no current signing post here, the auditor included); conflict_of_interest (the borrower or a guarantor of the loan the request is for; the caller raised the request; the withdrawal is the caller's own; the caller set the member's bank details, 0040)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -2699,7 +2749,12 @@ paths:
             exceeds_withdrawable, with WHAT CHANGED (HoldRefusal's breakdown and
             causes); not_configured, a charge component or the account floor is
             not set (the message says which). A signature that does not reach the
-            quorum is never refused for this.
+            quorum is never refused for this. For a society on VFD (0040), where
+            the money goes, in a sentence the member reads: needs_bank_account
+            (no bank details); bank_not_checked (VFD has not answered yet);
+            bank_not_found (VFD says there is no such account);
+            bank_name_unconfirmed (the bank's name differs from the register and
+            no signatory has confirmed it).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HoldRefusal' }
@@ -3003,6 +3058,181 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: "reason_required (more than ten characters: what happened, and how the member was identified)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /members/{memberId}/bank-account:
+    put:
+      operationId: setOwnBankAccount
+      x-argon-built: true
+      summary: The member sets their own bank details, on their own PIN; VFD's name check follows
+      description: |
+        0040: a member's payout goes into their own bank account. The name
+        check is the guard: the wallet worker asks VFD for the account's name
+        and records it, and the database decides whether it resembles the
+        member's name on the register. One that does not is for a person (a
+        signatory confirms it) before any payout goes there. Answers with
+        check: checking; GET shows VFD's answer when it comes.
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetBankAccount' }
+      responses:
+        '200':
+          description: "Recorded."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BankAccount' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (no valid proof for member_bank_account, the caller's own, unspent)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own record."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: getBankAccount
+      x-argon-built: true
+      summary: A member's bank details and every change to them, for the member and their society's officers
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: "The details."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BankAccountRecord' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/bank-account:
+    put:
+      operationId: setMemberBankAccount
+      x-argon-built: true
+      summary: An officer sets the bank details of a member who cannot sign in, on the officer's own PIN
+      description: |
+        0040: only for a member with no PIN (who cannot set their own); the
+        officer is recorded, and never signs that member's withdrawals.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetBankAccount' }
+      responses:
+        '200':
+          description: "Recorded."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BankAccount' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required; not_permitted (not a current officer here); member_sets_own (the member can sign in: they set their own, on their own phone)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "bad_account: not ten digits, or a bank code that is not 3 to 6 digits."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/bank-account/confirmation:
+    post:
+      operationId: confirmBankName
+      x-argon-built: true
+      summary: A signatory confirms a bank's name for a member that does not match the register, after looking
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LockRelease' }
+      responses:
+        '201':
+          description: "Confirmed: a payout may go there."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BankAccount' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for bank_name_confirmation); not_permitted (not a current signatory here); conflict_of_interest (the member, or whoever set the details)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or no bank details recorded."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "nothing_to_confirm: VFD has not answered yet, found no such account, the name matches the register, or it is confirmed already."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required: say what was looked at, more than ten characters; it is recorded as written."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -3397,7 +3627,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: "zero_amount; unknown_member; exceeds_withdrawable (the message carries the figures); not_configured (the quorum, the floor or a charge component is not set: the message says which); quorum_unreachable (fewer signatories may sign it than the quorum needs, the raiser and the member it pays never signing: the message says how many may, how many are needed, and what to do)."
+          description: "zero_amount; unknown_member; needs_bank_account (0040: a society on VFD pays into the member's own bank account, and none is recorded: the message is the member's to read); exceeds_withdrawable (the message carries the figures); not_configured (the quorum, the floor or a charge component is not set: the message says which); quorum_unreachable (fewer signatories may sign it than the quorum needs, the raiser and the member it pays never signing: the message says how many may, how many are needed, and what to do)."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }

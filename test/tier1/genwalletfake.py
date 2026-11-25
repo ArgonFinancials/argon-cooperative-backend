@@ -30,6 +30,9 @@ src = re.sub(r'\binflowNote\b', 'refInflowNote', src)
 src = re.sub(r'\binflowBody\b', 'refInflowBody', src)
 src = re.sub(r'\btail\(', 'refTail(', src)
 src = re.sub(r'\bsweepPages\b', 'refSweepPages', src)
+src = re.sub(r'\bsameName\(', 'refSameName(', src)
+src = re.sub(r'\bnormName\(', 'refNormName(', src)
+src = src.replace('func sameName(', 'func refSameName(').replace('func normName(', 'func refNormName(')
 src = src.replace('func refTail(', 'func refTail(')
 
 BREAKS = [
@@ -127,6 +130,26 @@ BREAKS = [
 				w.cfg.DB.Exec(ctx, `INSERT INTO vfd_inflows (vfd_reference, society_id, account_number, amount_kobo) VALUES ($1, $2, $3, $4)`, row.TxnID, society, row.ToAcct, row.AmountKobo)
 			}
 		}'''),
+ ('bank_unchecked', '''func (w *refWallet) checkBanks(ctx context.Context, r *wallet.Round) error {''', '''func (w *refWallet) checkBanks(ctx context.Context, r *wallet.Round) error {
+	if w.brk == "bank_unchecked" {
+		return nil
+	}'''),
+ ('bank_refused_unrecorded', '''		look, err := w.cfg.VFD.NameEnquiry(ctx, u.acct, u.bank)
+		if err != nil {
+			return err
+		}
+''', '''		look, err := w.cfg.VFD.NameEnquiry(ctx, u.acct, u.bank)
+		if err != nil {
+			return err
+		}
+		if w.brk == "bank_refused_unrecorded" && look.Outcome == vfd.Refused {
+			continue
+		}
+		if w.brk == "bank_silence_as_not_found" && look.Outcome != vfd.Accepted {
+			look.Outcome = vfd.Refused
+		}
+'''),
+ ('name_unchecked_at_send', '''	if !refSameName(look.Party.Name, recorded) {''', '''	if !refSameName(look.Party.Name, recorded) && w.brk != "name_unchecked_at_send" && w.brk != "no_enquiry" {'''),
  ('rematch_skipped', '''	if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {''',
   '''	if w.brk == "rematch_skipped" {
 		return r, w.sweep(ctx, &r)
@@ -175,6 +198,10 @@ hdr = '''//go:build tier1
 //	sweep_could_not_as_matched  a history VFD did not give recorded as nothing missing
 //	sweep_believed              a deposit in the history credited without VFD's requery
 //	rematch_skipped             claims a race missed never matched
+//	bank_unchecked              a member's bank details never checked with VFD (0040)
+//	bank_refused_unrecorded     VFD's no-such-account not recorded
+//	bank_silence_as_not_found   VFD's silence recorded as no such account
+//	name_unchecked_at_send      paid to a name that is not the one recorded
 package tier1
 
 import (
@@ -183,6 +210,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/argon/backend/internal/vfd"

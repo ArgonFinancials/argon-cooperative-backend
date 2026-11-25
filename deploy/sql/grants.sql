@@ -356,5 +356,26 @@ BEGIN
   END IF;
 END $$;
 
+-- 0040: A MEMBER'S OWN BANK ACCOUNT. The app records a member's details
+-- (the member, the number, the bank, the setter's act); the database says who
+-- set them, whether it was the member, and when (P89). The app never records
+-- what VFD said about them (P88): only the wallet, the only holder of VFD's
+-- token, does, and it never says whether the name matches (P92) or records
+-- details itself (P91). A confirmation names its act and its reason; who
+-- confirmed is the act's (P93). Nothing is rewritten (P90).
+DO $$
+BEGIN
+  IF to_regclass('public.member_bank_accounts') IS NOT NULL THEN
+    GRANT SELECT ON member_bank_accounts, bank_name_checks, bank_name_confirmations, member_bank_current TO argon_app;
+    GRANT INSERT (id, member_id, account_number, bank_code, set_by_act) ON member_bank_accounts TO argon_app;
+    GRANT INSERT (id, bank_account_id, act_id, reason) ON bank_name_confirmations TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT SELECT ON member_bank_current, member_bank_accounts, bank_name_checks, bank_name_confirmations TO argon_wallet;
+      GRANT INSERT (id, bank_account_id, found, vfd_code, vfd_name) ON bank_name_checks TO argon_wallet;
+      GRANT INSERT (to_bank) ON vfd_transfers TO argon_wallet;
+    END IF;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

@@ -353,6 +353,10 @@ func (f *fakeAPI) SignApproval(ctx context.Context, req api.SignApprovalRequestO
 			return api.SignApproval422JSONResponse(why), nil
 		case notConfigured[c] && f.brk != "appr_hold_refusal_as_500":
 			return api.SignApproval422JSONResponse{Code: "not_configured", Message: dbMessage(err)}, nil
+		case fakeBankRefusals[c] != "" && f.brk != "bank_hold_unmapped": // 0040
+			return api.SignApproval422JSONResponse{Code: fakeBankRefusals[c], Message: dbMessage(err)}, nil
+		case c == "bank_setter_authorises" && f.brk != "bank_setter_signs_unmapped": // 0040
+			return api.SignApproval403JSONResponse{Code: "conflict_of_interest", Message: dbMessage(err)}, nil
 		}
 		return nil, err
 	}

@@ -153,6 +153,8 @@ func (f *fakeAPI) RaiseWithdrawalRequest(ctx context.Context, req api.RaiseWithd
 			return api.RaiseWithdrawalRequest403JSONResponse{Code: "step_up_required", Message: "a fresh PIN proof for withdrawal_request, your own"}, nil
 		case c == "raiser_is_member_or_officer" && f.brk != "req_anyone_raises":
 			return api.RaiseWithdrawalRequest403JSONResponse{Code: "not_permitted", Message: msg}, nil
+		case c == "payout_needs_bank_account" && f.brk != "bank_request_unmapped": // 0040
+			return api.RaiseWithdrawalRequest422JSONResponse{Code: "needs_bank_account", Message: msg}, nil
 		case c == "withdrawal_request_within_withdrawable":
 			if f.brk == "req_withdrawable_unexplained" {
 				msg = "refused"

@@ -69,7 +69,94 @@ func newWalletWorld(t *testing.T) *vworld {
 	_, err := recordSocietyAccount(w.c.s.id, w.socAcct, opName, opHost, socAcctReason)
 	fixture(t, err, "the society's VFD account")
 	fixture(t, memberAccount(w.c.s.id, w.bMem, w.memAcct, "C-MEM-"+w.memAcct), "the member's VFD account")
+	bankFor(t, w.bMem, w.memAcct) // 0040: paid into the member's own bank account
 	return w
+}
+
+// testBank: the bank the members' accounts are at (an inter-bank transfer).
+const testBank = "000013"
+
+func bankEra() bool {
+	var yes bool
+	db.QueryRow(bg(), `SELECT to_regclass('public.member_bank_accounts') IS NOT NULL`).Scan(&yes)
+	return yes
+}
+
+// bankFor: the member's own bank details, the whole way (0040): the member
+// sets them on their own step-up; the wallet records VFD's answer (the fake
+// VFD names every account ADEBAYO FOLAKE); the register calls every fixture
+// member "Member", so the database judges the name to differ, and a current
+// signatory of the society confirms it. Settled: a payout may go there.
+// Before 0040: nothing.
+func bankFor(t *testing.T, member, number string) {
+	t.Helper()
+	if !bankEra() {
+		return
+	}
+	id := bankUnchecked(t, member, number)
+	bankAnswered(t, id, "ADEBAYO FOLAKE")
+	// Confirmed when the database judged it to differ (it does for "Member";
+	// a schema that judges otherwise leaves nothing for a person to confirm).
+	var differs bool
+	fixture(t, db.QueryRow(bg(), `SELECT name_check = 'differs' FROM bank_name_checks WHERE bank_account_id = $1`, id).Scan(&differs), "the name's judgement")
+	if differs {
+		bankConfirmed(t, id)
+	}
+}
+
+// detailsOnly: from 0040, bank details recorded and not yet checked: enough
+// for the member to ask for a withdrawal (in a society on VFD, none is
+// refused), not enough to be paid. Before 0040: nothing.
+func detailsOnly(t *testing.T, member string) {
+	t.Helper()
+	if bankEra() {
+		bankUnchecked(t, member, vfdNumber())
+	}
+}
+
+// bankUnchecked: the member sets their details; VFD has not been asked.
+func bankUnchecked(t *testing.T, member, number string) string {
+	t.Helper()
+	var user, id string
+	fixture(t, db.QueryRow(bg(), `SELECT user_id::text FROM members WHERE id = $1`, member).Scan(&user), "the member's person")
+	proof := stepUp(t, user, "member_bank_account")
+	fixture(t, tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('member_bank_account', $1, $2) RETURNING id`, user, proof).Scan(&act); err != nil {
+			return err
+		}
+		return x.QueryRow(bg(), `INSERT INTO member_bank_accounts (member_id, account_number, bank_code, set_by_act) VALUES ($1, $2, $3, $4) RETURNING id::text`,
+			member, number, testBank, act).Scan(&id)
+	}), "the member's bank details")
+	return id
+}
+
+// bankAnswered: VFD's name for the details, as the wallet records it.
+func bankAnswered(t *testing.T, bankAccount, name string) {
+	t.Helper()
+	fixture(t, one(`INSERT INTO bank_name_checks (bank_account_id, found, vfd_code, vfd_name) VALUES ($1, true, '00', $2)`, bankAccount, name), "VFD's name for the account")
+}
+
+// bankConfirmed: a current signatory of the society, neither the member nor
+// the setter, confirms a name that differs, on their own step-up.
+func bankConfirmed(t *testing.T, bankAccount string) {
+	t.Helper()
+	var signer string
+	fixture(t, db.QueryRow(bg(), `SELECT om.user_id::text FROM member_bank_accounts b JOIN members m ON m.id = b.member_id
+		JOIN appointments ap ON ap.society_id = b.society_id AND ap.is_signatory AND ap.post <> 'internal_auditor'
+		  AND ap.held_from <= current_date AND (ap.held_until IS NULL OR ap.held_until >= current_date)
+		JOIN members om ON om.id = ap.member_id
+		WHERE b.id = $1 AND om.user_id IS NOT NULL AND om.user_id IS DISTINCT FROM m.user_id AND om.user_id <> b.set_by_user
+		ORDER BY ap.post LIMIT 1`, bankAccount).Scan(&signer), "a signatory to confirm the bank's name")
+	proof := stepUp(t, signer, "bank_name_confirmation")
+	fixture(t, tx(func(x pgx.Tx) error {
+		var act string
+		if err := x.QueryRow(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id) VALUES ('bank_name_confirmation', $1, $2) RETURNING id`, signer, proof).Scan(&act); err != nil {
+			return err
+		}
+		_, err := x.Exec(bg(), `INSERT INTO bank_name_confirmations (bank_account_id, act_id, reason) VALUES ($1, $2, 'the member showed their bank statement in person')`, bankAccount, act)
+		return err
+	}), "the bank's name, confirmed")
 }
 
 type xfer struct {
@@ -95,6 +182,10 @@ func (w *vworld) transfer(h xfer) (string, error) {
 	}
 	var id string
 	err := tx(func(x pgx.Tx) error {
+		if bankEra() { // 0040: and to the member's bank
+			return x.QueryRow(bg(), `INSERT INTO vfd_transfers (hold_id, reference, from_account, to_account, amount_kobo, to_bank)
+				VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, h.hold, h.ref, h.from, h.to, h.amount, testBank).Scan(&id)
+		}
 		return x.QueryRow(bg(), `INSERT INTO vfd_transfers (hold_id, reference, from_account, to_account, amount_kobo)
 			VALUES ($1, $2, $3, $4, $5) RETURNING id`, h.hold, h.ref, h.from, h.to, h.amount).Scan(&id)
 	})
@@ -300,20 +391,25 @@ func TestWalletPay07_ATransferIsForTheHeldAmount(t *testing.T) {
 
 func TestWalletPay08_ATransferGoesToTheMembersOwnAccountAndNoOther(t *testing.T) {
 	w := newWalletWorld(t)
+	rule := "vfd_transfer_to_members_account"
+	if bankEra() { // 0040: the member's own bank account, not their VFD account
+		rule = "vfd_transfer_to_members_bank"
+	}
 	other := vfdNumber()
 	fixture(t, memberAccount(w.c.s.id, w.g1Mem, other, "C-G1"), "another member's account")
 	_, hold := w.held(t, w.bMem, payKobo)
 	_, err := w.transfer(xfer{hold: hold, to: other})
-	refused(t, err, "a payout sent to another member's account", refusedAs("vfd_transfer_to_members_account"))
+	refused(t, err, "a payout sent to another member's account", refusedAs(rule))
 	_, err = w.transfer(xfer{hold: hold, to: "0123456789"})
-	refused(t, err, "a payout sent to an account nobody recorded", refusedAs("vfd_transfer_to_members_account"))
+	refused(t, err, "a payout sent to an account nobody recorded", refusedAs(rule))
 
 	// A member with no account has nowhere to be paid: no transfer.
 	w2 := newWalletWorld(t)
 	w2.saved(t, w2.g1Mem, loanSavings)
+	detailsOnly(t, w2.g1Mem) // 0040: may ask, and has nowhere settled to be paid
 	_, hold2 := w2.held(t, w2.g1Mem, payKobo)
 	_, err = w2.transfer(xfer{hold: hold2, to: w2.memAcct})
-	refused(t, err, "a payout for a member with no VFD account", refusedAs("vfd_transfer_to_members_account"))
+	refused(t, err, "a payout for a member with no VFD account", refusedAs(rule))
 }
 
 func TestWalletPay09_ATransferComesFromTheSocietysAccount(t *testing.T) {
@@ -395,6 +491,7 @@ func (w *vworld) heldTransferFor(t *testing.T, member string) (req, hold, transf
 	t.Helper()
 	n := vfdNumber()
 	fixture(t, memberAccount(w.c.s.id, member, n, "C-"+n), "the member's account")
+	bankFor(t, member, n)
 	w.saved(t, member, loanSavings)
 	req, hold = w.held(t, member, payKobo)
 	transfer, err := w.transfer(xfer{hold: hold, to: n})
@@ -600,6 +697,7 @@ func TestWalletPay23_TheSystemsRecordsAreTheirOutcomesOwn(t *testing.T) {
 	})
 	refused(t, err, "a payout entry naming VFD's failure", refusedAs("vfd_payout_is_the_outcomes"))
 	w.saved(t, w.g1Mem, loanSavings)
+	detailsOnly(t, w.g1Mem)
 	_, other := w.held(t, w.g1Mem, payKobo)
 	refused(t, one(`INSERT INTO withdrawal_hold_releases (hold_id, reason, vfd_outcome_id) VALUES ($1, 'VFD said so', $2)`, other, failed),
 		"another hold released on this transfer's failure", refusedAs("release_is_the_outcomes"))

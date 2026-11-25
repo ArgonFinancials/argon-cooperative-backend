@@ -698,6 +698,18 @@ probe req P86 argon_app '42501.*permission denied for table member_status_change
 probe req P87 argon_app '42501.*permission denied for table members' "app sets a member's status around the secretary's record"   "UPDATE members SET status = 'suspended' WHERE false;"
 probe ctl K69 argon_app '' "control: the app reads a member's status changes"   "SELECT count(*) FROM member_status_changes;"
 fi
+# 0040: the app records a member's bank details; only the wallet records what
+# VFD said about them, and the database says whether the name matches.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.member_bank_accounts') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P88 argon_app '42501.*permission denied for table bank_name_checks' "app records what VFD said about a member's bank account (the guard)"   "INSERT INTO bank_name_checks (bank_account_id, found, vfd_code, vfd_name) VALUES ($U1, true, '00', 'PROBE NAME');"
+probe req P89 argon_app '42501.*permission denied for table member_bank_accounts' "app says the member set their own bank details"   "INSERT INTO member_bank_accounts (member_id, account_number, bank_code, set_by_act, set_by_user, by_member) VALUES ($M1, '0123456789', '000013', $U1, $U1, true);"
+probe req P90 argon_app '42501.*permission denied for table member_bank_accounts' "app rewrites a member's bank account number"   "UPDATE member_bank_accounts SET account_number = '0123456789' WHERE false;"
+probe req P91 argon_wallet '42501.*permission denied for table member_bank_accounts' "the wallet records where a member is paid"   "INSERT INTO member_bank_accounts (member_id, account_number, bank_code, set_by_act) VALUES ($M1, '0123456789', '000013', $U1);"
+probe req P92 argon_wallet '42501.*permission denied for table bank_name_checks' "the wallet says a bank's name matches the register"   "INSERT INTO bank_name_checks (bank_account_id, found, vfd_code, vfd_name, name_check) VALUES ($U1, true, '00', 'PROBE NAME', 'matches');"
+probe req P93 argon_app '42501.*permission denied for table bank_name_confirmations' "app names who confirmed a bank's name"   "INSERT INTO bank_name_confirmations (bank_account_id, act_id, reason, confirmed_by) VALUES ($U1, $U1, 'probe reason here', $U1);"
+probe ctl K70 argon_app '' "control: the app reads members' bank details and VFD's answers"   "SELECT count(*) FROM member_bank_current; SELECT count(*) FROM member_bank_accounts; SELECT count(*) FROM bank_name_checks; SELECT count(*) FROM bank_name_confirmations;"
+probe ctl K71 argon_wallet '' "control: the wallet reads members' current bank details"   "SELECT count(*) FROM member_bank_current WHERE NOT checked;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

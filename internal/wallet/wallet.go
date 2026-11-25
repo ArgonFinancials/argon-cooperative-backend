@@ -33,8 +33,10 @@
 //   - RELEASE ON A GUESS: only on 108, as above.
 //   - PAY AN OFFICER'S HOLD. Only a hold the last signature placed (§13) is
 //     the system's to pay; one an officer authorised by hand is the officers'.
-//   - PAY AN ACCOUNT VFD DOES NOT CONFIRM. The member's account is asked
-//     about (name enquiry) before the transfer exists; no answer, no transfer.
+//   - PAY AN ACCOUNT VFD DOES NOT CONFIRM. The member's own bank account
+//     (0040: their current bank details, its name settled) is asked about
+//     (name enquiry) before the transfer exists; no answer, no transfer; a
+//     name that is no longer the one recorded, no transfer, and a person looks.
 package wallet
 
 import (
@@ -42,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/argon/backend/internal/vfd"
@@ -64,6 +67,8 @@ type Round struct {
 	// Rematched: inflows credited from a claim that the claim's or the
 	// inflow's own transaction missed (the two committing at once, 0032).
 	Rematched int
+	// Checked: members' bank details VFD answered about (0040: found or not).
+	Checked int
 }
 
 type Config struct {
@@ -125,6 +130,9 @@ func New(cfg Config) (Worker, error) {
 
 func (w *worker) Tick(ctx context.Context) (Round, error) {
 	var r Round
+	if err := w.checkBanks(ctx, &r); err != nil {
+		return r, err
+	}
 	if err := w.sendNew(ctx, &r); err != nil {
 		return r, err
 	}
@@ -173,17 +181,66 @@ func (w *worker) pool(ctx context.Context) (vfd.Party, bool, error) {
 }
 
 // sendNew: every open hold the last signature placed, with no transfer yet,
-// whose member has a VFD account; sent from the pool.
+// whose member's bank details are recorded and their name settled (0040);
+// sent from the pool to that bank account.
+// checkBanks: VFD's name for every member's current bank details not yet
+// asked about (0040: the name check is the guard). VFD's answer is recorded
+// as it came, by this role alone; whether the name resembles the member's on
+// the register is the database's to say. No answer: nothing recorded, and
+// asked again next round.
+func (w *worker) checkBanks(ctx context.Context, r *Round) error {
+	rows, err := w.cfg.DB.Query(ctx, `SELECT id::text, account_number, bank_code FROM member_bank_current
+		WHERE NOT checked AND ($1 = '' OR society_id::text = $1) ORDER BY recorded_at`, w.cfg.Society)
+	if err != nil {
+		return fmt.Errorf("wallet: the bank details to check: %w", err)
+	}
+	type unchecked struct{ id, acct, bank string }
+	var todo []unchecked
+	for rows.Next() {
+		var u unchecked
+		if err := rows.Scan(&u.id, &u.acct, &u.bank); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, u)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, u := range todo {
+		look, err := w.cfg.VFD.NameEnquiry(ctx, u.acct, u.bank)
+		if err != nil {
+			return err
+		}
+		switch look.Outcome {
+		case vfd.Accepted:
+			_, err = w.cfg.DB.Exec(ctx, `INSERT INTO bank_name_checks (bank_account_id, found, vfd_code, vfd_name) VALUES ($1, true, $2, $3)`,
+				u.id, look.Code, look.Party.Name)
+		case vfd.Refused:
+			_, err = w.cfg.DB.Exec(ctx, `INSERT INTO bank_name_checks (bank_account_id, found, vfd_code) VALUES ($1, false, $2)`, u.id, look.Code)
+		default:
+			w.log.WarnContext(ctx, "bank details not checked: VFD did not answer; asked again next round", "outcome", look.Outcome, "code", look.Code)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("wallet: recording VFD's answer on bank details %s: %w", u.id, err)
+		}
+		r.Checked++
+	}
+	return nil
+}
+
 func (w *worker) sendNew(ctx context.Context, r *Round) error {
 	from, ok, err := w.pool(ctx)
 	if err != nil || !ok {
 		return err
 	}
 	rows, err := w.cfg.DB.Query(ctx, `
-		SELECT h.id::text, h.amount_kobo, m.account_number
+		SELECT h.id::text, h.amount_kobo, b.account_number, b.bank_code, b.vfd_name
 		  FROM withdrawal_holds h
 		  JOIN credential_acts a ON a.id = h.act_id AND a.kind = 'approval_signature'
-		  JOIN vfd_accounts m ON m.member_id = h.member_id
+		  JOIN member_bank_current b ON b.member_id = h.member_id AND b.name_settled
 		 WHERE NOT EXISTS (SELECT 1 FROM vfd_transfers t WHERE t.hold_id = h.id)
 		   AND NOT EXISTS (SELECT 1 FROM withdrawal_hold_releases rl WHERE rl.hold_id = h.id)
 		   AND NOT EXISTS (SELECT 1 FROM ledger_entries e WHERE e.hold_id = h.id)
@@ -197,11 +254,13 @@ func (w *worker) sendNew(ctx context.Context, r *Round) error {
 		amount int64
 		from   vfd.Party
 		to     string
+		bank   string
+		name   string // VFD's name for the account when the member recorded it
 	}
 	var dues []due
 	for rows.Next() {
 		d := due{from: from}
-		if err := rows.Scan(&d.hold, &d.amount, &d.to); err != nil {
+		if err := rows.Scan(&d.hold, &d.amount, &d.to, &d.bank, &d.name); err != nil {
 			rows.Close()
 			return err
 		}
@@ -212,16 +271,16 @@ func (w *worker) sendNew(ctx context.Context, r *Round) error {
 		return err
 	}
 	for _, d := range dues {
-		if err := w.send(ctx, r, d.hold, d.amount, d.from, d.to); err != nil {
+		if err := w.send(ctx, r, d.hold, d.amount, d.from, d.to, d.bank, d.name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (w *worker) send(ctx context.Context, r *Round, hold string, amount int64, from vfd.Party, toAcct string) error {
+func (w *worker) send(ctx context.Context, r *Round, hold string, amount int64, from vfd.Party, toAcct, toBank, recorded string) error {
 	// The destination, confirmed by VFD before anything exists to send.
-	look, err := w.cfg.VFD.NameEnquiry(ctx, toAcct, vfd.IntraBank)
+	look, err := w.cfg.VFD.NameEnquiry(ctx, toAcct, toBank)
 	if err != nil {
 		return err
 	}
@@ -230,9 +289,16 @@ func (w *worker) send(ctx context.Context, r *Round, hold string, amount int64, 
 		r.Waiting++
 		return nil
 	}
+	// The name VFD gives now is the one recorded with the details (0040: the
+	// name check is the guard). Another name: nothing sent, a person looks.
+	if !sameName(look.Party.Name, recorded) {
+		w.log.ErrorContext(ctx, "payout waiting: the bank's name for the member's account is not the one recorded with it; a person must look", "hold", hold)
+		r.Waiting++
+		return nil
+	}
 	var transfer, ref string
-	err = w.cfg.DB.QueryRow(ctx, `INSERT INTO vfd_transfers (hold_id, reference, from_account, to_account, amount_kobo)
-		VALUES ($1, vfd_transfer_reference($1), $2, $3, $4) RETURNING id::text, reference`, hold, from.AccountNo, toAcct, amount).Scan(&transfer, &ref)
+	err = w.cfg.DB.QueryRow(ctx, `INSERT INTO vfd_transfers (hold_id, reference, from_account, to_account, amount_kobo, to_bank)
+		VALUES ($1, vfd_transfer_reference($1), $2, $3, $4, $5) RETURNING id::text, reference`, hold, from.AccountNo, toAcct, amount, toBank).Scan(&transfer, &ref)
 	if err != nil {
 		return fmt.Errorf("wallet: the transfer for hold %s: %w", hold, err)
 	}
@@ -381,4 +447,25 @@ func (w *worker) outcome(ctx context.Context, r *Round, transfer, result, eviden
 	}
 	w.log.InfoContext(context.Background(), "a transfer decided", "transfer", transfer, "result", result)
 	return nil
+}
+
+// sameName: two names from VFD for one account, the same once case, spacing
+// and punctuation are set aside.
+func sameName(a, b string) bool { return normName(a) == normName(b) }
+
+func normName(s string) string {
+	var out []rune
+	space := false
+	for _, r := range strings.ToUpper(s) {
+		switch {
+		case r >= 'A' && r <= 'Z' || r >= '0' && r <= '9':
+			if space && len(out) > 0 {
+				out = append(out, ' ')
+			}
+			out, space = append(out, r), false
+		default:
+			space = true
+		}
+	}
+	return string(out)
 }

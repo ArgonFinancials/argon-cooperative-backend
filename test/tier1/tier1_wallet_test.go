@@ -17,7 +17,11 @@
 //     more after the send, releases; anything else holds, and a person is
 //     told; it never sends twice; every reply VFD gives is kept;
 //   - a deposit no notification brought is found in the account's history,
-//     and confirmed with VFD like any other.
+//     and confirmed with VFD like any other;
+//   - (0040) a member's bank details are checked with VFD: its answer is
+//     recorded, found or not, and silence records nothing; whether the name
+//     resembles the register is the database's; a name that is not the one
+//     recorded when the details were checked is never paid.
 package tier1
 
 import (
@@ -601,4 +605,78 @@ func TestWalletWorker18_ASweepThatCannotReadSaysSo(t *testing.T) {
 	if err != nil || outcome != "could_not_run" || !strings.Contains(detail, "history") {
 		t.Fatalf("SAID NOTHING WAS MISSED — %s: %q (%v); want could_not_run, saying VFD did not give the history", outcome, detail, err)
 	}
+}
+
+// bankCheckOf: what is recorded of VFD's answer on a set of bank details.
+func bankCheckOf(t *testing.T, bankAccount string) (checked, found bool, name, check string) {
+	t.Helper()
+	fixture(t, db.QueryRow(bg(), `SELECT k.id IS NOT NULL, coalesce(k.found, false), coalesce(k.vfd_name, ''), coalesce(k.name_check, '')
+		FROM member_bank_accounts b LEFT JOIN bank_name_checks k ON k.bank_account_id = b.id WHERE b.id = $1`, bankAccount).
+		Scan(&checked, &found, &name, &check), "VFD's answer on the details")
+	return
+}
+
+// 0040: THE NAME CHECK IS THE GUARD. VFD's answer is recorded as it came,
+// found or not found; no answer records nothing, and is asked again.
+func TestWalletWorker19_BankDetailsAreCheckedWithVFD(t *testing.T) {
+	w := newWalletWorld(t)
+	for _, c := range []struct{ mode, what string }{{"enquiry_ok", "found"}, {"enquiry_none", "not found"}, {"enquiry_dead", "no answer"}} {
+		var id string
+		if c.mode == "enquiry_dead" {
+			id = bankUnchecked(t, w.bMem, "0123456789")
+			tick(t, walletWorkerFor(t, w.c.s.id, deadVFD(t)))
+		} else {
+			id = bankUnchecked(t, w.bMem, "0123456789")
+			f := newSwitchVFD(t, modes(map[string]string{"/transfer/recipient": c.mode}))
+			tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+		}
+		checked, found, name, check := bankCheckOf(t, id)
+		switch c.mode {
+		case "enquiry_ok":
+			if !checked || !found || name != "ADEBAYO FOLAKE" || check != "differs" {
+				t.Fatalf("NOT RECORDED AS VFD SAID — %s: checked %v, found %v, name %q, check %q; want VFD's name recorded, and the database judging it against the register (\"Member\": differs)", c.what, checked, found, name, check)
+			}
+		case "enquiry_none":
+			if !checked || found {
+				t.Fatalf("NOT RECORDED AS VFD SAID — %s: checked %v, found %v; want VFD's no-such-account recorded (the member sets them again)", c.what, checked, found)
+			}
+		default:
+			if checked {
+				t.Fatalf("SILENCE RECORDED — %s: checked %v, found %v; VFD did not answer, nothing is recorded, and it is asked again", c.what, checked, found)
+			}
+		}
+	}
+}
+
+// 0040: the worker asks again at the send; a name that is not the one
+// recorded with the details is never paid: a person looks.
+func TestWalletWorker20_ANameNotTheOneRecordedIsNeverPaid(t *testing.T) {
+	w := newWalletWorld(t)
+	id := bankUnchecked(t, w.bMem, w.memAcct)
+	bankAnswered(t, id, "OKORO JAMES") // recorded then; the fake VFD now says ADEBAYO FOLAKE
+	bankConfirmed(t, id)
+	hold := w.lastSignatureHold(t)
+	f := newSwitchVFD(t, okModes)
+	tick(t, walletWorkerFor(t, w.c.s.id, f.srv.URL))
+	if p := paymentOf(t, hold); p.transfer != "" || f.count("/transfer") != 0 {
+		t.Fatalf("PAID ANOTHER NAME — the bank now names the account ADEBAYO FOLAKE, recorded as OKORO JAMES, and %+v, %d sends; it waits for a person", p, f.count("/transfer"))
+	}
+}
+
+// deadVFD: a VFD that closes the connection on the name enquiry (no answer).
+func deadVFD(t *testing.T) string {
+	t.Helper()
+	f := newFakeVFD(t, okModes)
+	h := f.srv.Config.Handler
+	f.srv.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/transfer/recipient" {
+			if hj, ok := rw.(http.Hijacker); ok {
+				c, _, _ := hj.Hijack()
+				c.Close()
+				return
+			}
+		}
+		h.ServeHTTP(rw, r)
+	})
+	return f.srv.URL
 }

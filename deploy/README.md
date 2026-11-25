@@ -731,7 +731,7 @@ It runs as `argon_wallet`, the only role that writes VFD's evidence (probes P60â
 - Transfers leave from Argon's VFD pool. The worker records it from VFD's own `GET /account/enquiry` on its first round. Before switching on, check that this call succeeds from this server: a refusal while the same token works elsewhere means VFD restricts by IP.
 - Every 15 minutes the worker reads each society account's history, so a deposit VFD never notified is still found and confirmed.
 
-**Before it can run:** a society's own VFD account recorded by the operator (`48-society-vfd-account.sh`, below: from VFD's name enquiry, never typed), the member's own VFD account, and VFD's credentials in `deploy.env`:
+**Before it can run:** a society's own VFD account recorded by the operator (`48-society-vfd-account.sh`, below: from VFD's name enquiry, never typed), each paid member's own bank account (0040: set by the member in the app; the worker checks the name with VFD, and a signatory confirms a name that differs from the register), and VFD's credentials in `deploy.env`:
 
 ```bash
 # On the instance, set by hand from whoever holds the VFD relationship; never pasted into a chat or a ticket.

@@ -148,6 +148,8 @@ func (s *server) RaiseWithdrawalRequest(ctx context.Context, req RaiseWithdrawal
 			return RaiseWithdrawalRequest403JSONResponse{Code: "not_permitted", Message: msg}, nil
 		case c == "withdrawal_request_within_withdrawable":
 			return RaiseWithdrawalRequest422JSONResponse{Code: "exceeds_withdrawable", Message: msg}, nil
+		case c == "payout_needs_bank_account": // 0040: the member reads it
+			return RaiseWithdrawalRequest422JSONResponse{Code: "needs_bank_account", Message: msg}, nil
 		case c == "request_cannot_reach_quorum":
 			return RaiseWithdrawalRequest422JSONResponse{Code: "quorum_unreachable", Message: msg}, nil
 		case notConfigured[c] || c == "withdrawal_quorum_unset":
