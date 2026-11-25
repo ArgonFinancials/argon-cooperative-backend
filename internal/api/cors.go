@@ -30,7 +30,10 @@ import (
 //     proxy) never hands one origin's answer to another.
 
 var (
-	corsMethods = "GET, POST"
+	// Every method the spec uses (TestApiCors01 reads them from the spec: PUT
+	// fell behind for a week, 0034 to 0040, and a browser could not set an
+	// email or a bank account).
+	corsMethods = "GET, POST, PUT"
 	corsHeaders = "Authorization, Content-Type, Idempotency-Key, X-CSRF-Token" // what our calls carry; the money endpoints need Idempotency-Key; a cookie session's state changes need X-CSRF-Token
 )
 

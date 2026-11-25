@@ -15,6 +15,7 @@ declare -gA TARGET_OF=()
 declare -gA SVC_TARGET_OF=(
   [cors_after_auth]='TestApiCors01_APreflightIsAnsweredWithoutCredentials'
   [cors_headers_missing]='TestApiCors01_APreflightIsAnsweredWithoutCredentials'
+  [cors_methods_hand_list]='TestApiCors01_APreflightIsAnsweredWithoutCredentials'
   [cors_any_origin]='TestApiCors02_AnUnlistedOriginsPreflightIsRefused|TestApiCors03_OnlyTheExactOrigin|TestApiCors06_AnUnlistedOriginCannotReadACall'
   [cors_wildcard]='TestApiCors02_AnUnlistedOriginsPreflightIsRefused|TestApiCors05_ARealCallFromTheAllowedOriginSucceeds|TestApiCors06_AnUnlistedOriginCannotReadACall'
   [cors_prefix_match]='TestApiCors03_OnlyTheExactOrigin'

@@ -131,10 +131,28 @@ func TestApiCors01_APreflightIsAnsweredWithoutCredentials(t *testing.T) {
 		t.Fatalf("REFUSED — a preflight from the allowed origin: %d, Allow-Origin %q, body %s; want 204 and %q (a preflight carries no credentials: it is answered before authentication)",
 			r.status, r.h.Get("Access-Control-Allow-Origin"), r.body, allowedOrigin)
 	}
+	// Every method the spec uses, read from the spec (2026-11-25: PUT was
+	// missing from a hand-kept list, so no browser could set an email or a
+	// bank account, and nothing failed).
+	doc, err := api.GetSwagger()
+	fixture(t, err, "the spec the server serves")
+	used := map[string]bool{}
+	for _, item := range doc.Paths.Map() {
+		for m := range item.Operations() {
+			used[m] = true
+		}
+	}
+	methods := []string{}
+	for m := range used {
+		methods = append(methods, m)
+	}
+	if len(methods) < 3 {
+		t.Fatalf("FIXTURE: the spec names only %v: GET, POST and PUT at least are in use", methods)
+	}
 	if !listsAll(r.h.Get("Access-Control-Allow-Headers"), "Authorization", "Content-Type", "Idempotency-Key") ||
-		!listsAll(r.h.Get("Access-Control-Allow-Methods"), "GET", "POST") {
-		t.Fatalf("INCOMPLETE — Allow-Headers %q, Allow-Methods %q; want Authorization, Content-Type, Idempotency-Key and GET, POST",
-			r.h.Get("Access-Control-Allow-Headers"), r.h.Get("Access-Control-Allow-Methods"))
+		!listsAll(r.h.Get("Access-Control-Allow-Methods"), methods...) {
+		t.Fatalf("INCOMPLETE — Allow-Headers %q, Allow-Methods %q; want Authorization, Content-Type, Idempotency-Key and every method the spec uses, %v (a browser sends no call whose method the preflight leaves out)",
+			r.h.Get("Access-Control-Allow-Headers"), r.h.Get("Access-Control-Allow-Methods"), methods)
 	}
 }
 

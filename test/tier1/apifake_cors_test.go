@@ -19,6 +19,7 @@
 //	credentials_missing   no Access-Control-Allow-Credentials: the browser drops the session cookie
 //	credentials_any_origin  Access-Control-Allow-Credentials on every answer, unlisted origins included
 //	csrf_header_not_allowed the preflight does not allow X-CSRF-Token
+//	cors_methods_hand_list  the methods a hand-kept GET, POST: no browser sends a PUT
 package tier1
 
 import (
@@ -88,7 +89,11 @@ func fakeCORS(origins []string, brk string, next http.Handler) http.Handler {
 			case "csrf_header_not_allowed":
 				hdrs = "Authorization, Content-Type, Idempotency-Key"
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+			methods := "GET, POST, PUT"
+			if brk == "cors_methods_hand_list" {
+				methods = "GET, POST"
+			}
+			w.Header().Set("Access-Control-Allow-Methods", methods)
 			w.Header().Set("Access-Control-Allow-Headers", hdrs)
 			w.Header().Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)
