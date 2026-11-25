@@ -428,15 +428,26 @@ func (f *fakeAPI) RejectApproval(ctx context.Context, req api.RejectApprovalRequ
 //	payout_release_unsaid  a released hold still reads open
 //	payout_paid_unsaid     a paid hold still reads open
 //	payout_reason_hidden   a release's reason is not given
+//	payout_hold_unnamed    the hold's id not given
+//	payout_all_officers    every hold said to be an officer's (a system hold offered to record by hand)
 func (f *fakeAPI) payoutOf(ctx context.Context, req string) *api.RequestPayout {
 	if f.brk == "payout_never" {
 		return nil
 	}
 	var p api.RequestPayout
 	var hold string
-	if err := f.db.QueryRow(ctx, `SELECT id::text, held_at FROM withdrawal_holds WHERE request_id = $1 ORDER BY held_at DESC, id DESC LIMIT 1`, req).
-		Scan(&hold, &p.HeldAt); err != nil {
+	var bySignature bool
+	if err := f.db.QueryRow(ctx, `SELECT h.id::text, coalesce(a.kind = 'approval_signature', false), h.held_at FROM withdrawal_holds h
+		LEFT JOIN credential_acts a ON a.id = h.act_id WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, req).
+		Scan(&hold, &bySignature, &p.HeldAt); err != nil {
 		return nil
+	}
+	if f.brk != "payout_hold_unnamed" {
+		p.HoldId = uuidOf(hold)
+	}
+	p.PlacedBy = api.RequestPayoutPlacedByOfficer
+	if bySignature && f.brk != "payout_all_officers" {
+		p.PlacedBy = api.RequestPayoutPlacedBySystem
 	}
 	f.db.QueryRow(ctx, `SELECT min(posted_at) FROM ledger_entries WHERE hold_id = $1`, hold).Scan(&p.PaidAt)
 	f.db.QueryRow(ctx, `SELECT at, reason FROM withdrawal_hold_releases WHERE hold_id = $1`, hold).Scan(&p.ReleasedAt, &p.ReleaseReason)

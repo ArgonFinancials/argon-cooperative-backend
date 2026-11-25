@@ -1606,8 +1606,17 @@ components:
     RequestPayout:
       type: object
       additionalProperties: false
-      required: [state, heldAt, paidAt, releasedAt, releaseReason]
+      required: [holdId, placedBy, state, heldAt, paidAt, releasedAt, releaseReason]
       properties:
+        holdId: { type: string, format: uuid, description: "The hold: what an officer's record-payout or release names." }
+        placedBy:
+          type: string
+          enum: [officer, system]
+          description: |
+            system: the last signature placed it (LEDGER_CONTRACT §13); the
+            system pays it and records what VFD did, and a person neither
+            records it as paid nor releases it. officer: an officer authorised
+            it by hand (0012); the officers pay it, and record it or release it.
         state:
           type: string
           enum: [open, paid, released]

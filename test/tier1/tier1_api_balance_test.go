@@ -361,6 +361,7 @@ type bMemberRequest struct {
 }
 
 type bPayout struct {
+	HoldId, PlacedBy   string
 	State              string
 	HeldAt             string
 	PaidAt, ReleasedAt *string
@@ -596,5 +597,27 @@ func TestApiBalance17_TheRequestSaysWhatBecameOfThePayment(t *testing.T) {
 		http.StatusCreated, "the payout")
 	if p := memberRequestOf(t, w, req).Payout; p == nil || p.State != "paid" || p.PaidAt == nil || p.ReleasedAt != nil {
 		t.Fatalf("UNSAID — a paid request reads payout %+v; want paid, with when", p)
+	}
+}
+
+// Which hold, and whose to pay (2026-11-25, the frontend: an officer's
+// record-payout names the hold, and is offered only on an officer's hold).
+func TestApiBalance18_ThePaymentNamesItsHoldAndWhoseItIsToPay(t *testing.T) {
+	w := newMoneyAPI(t)
+	small := payKobo / 3 // two holds at once, both within what the borrower may withdraw
+	v := w.raisedVia(t, small)
+	for _, as := range []string{w.s2, w.secretary} {
+		if r := w.signVia(t, as, v.RequestId); r.status != http.StatusCreated {
+			t.Fatalf("FIXTURE: a signature: %d %s", r.status, r.body)
+		}
+	}
+	var sys string
+	fixture(t, db.QueryRow(bg(), `SELECT id::text FROM withdrawal_holds WHERE request_id = $1`, v.RequestId).Scan(&sys), "the last signature's hold")
+	if p := memberRequestOf(t, w, v.RequestId).Payout; p == nil || p.HoldId != sys || p.PlacedBy != "system" {
+		t.Fatalf("WRONG HOLD — the last signature's hold reads %+v; want hold %s, placed by the system (a person never records it as paid)", p, sys)
+	}
+	req, officer := w.heldVia(t, small)
+	if p := memberRequestOf(t, w, req).Payout; p == nil || p.HoldId != officer || p.PlacedBy != "officer" {
+		t.Fatalf("WRONG HOLD — an officer's authorised hold reads %+v; want hold %s, placed by an officer", p, officer)
 	}
 }

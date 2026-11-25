@@ -185,10 +185,13 @@ func (s *server) requestCharges(ctx context.Context, id string, v *ApprovalView)
 // names it, released when a release does; null before any hold.
 func (s *server) requestPayout(ctx context.Context, id string, v *ApprovalView) error {
 	var p RequestPayout
-	err := s.db.QueryRow(ctx, `SELECT h.held_at,
+	var hold string
+	var bySignature bool
+	err := s.db.QueryRow(ctx, `SELECT h.id::text, coalesce(a.kind = 'approval_signature', false), h.held_at,
 		  (SELECT min(e.posted_at) FROM ledger_entries e WHERE e.hold_id = h.id), rl.at, rl.reason
 		  FROM withdrawal_holds h LEFT JOIN withdrawal_hold_releases rl ON rl.hold_id = h.id
-		 WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, id).Scan(&p.HeldAt, &p.PaidAt, &p.ReleasedAt, &p.ReleaseReason)
+		  LEFT JOIN credential_acts a ON a.id = h.act_id
+		 WHERE h.request_id = $1 ORDER BY h.held_at DESC, h.id DESC LIMIT 1`, id).Scan(&hold, &bySignature, &p.HeldAt, &p.PaidAt, &p.ReleasedAt, &p.ReleaseReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -202,6 +205,12 @@ func (s *server) requestPayout(ctx context.Context, id string, v *ApprovalView) 
 		p.State = RequestPayoutStateReleased
 	default:
 		p.State = RequestPayoutStateOpen
+	}
+	// Who placed it (2026-11-25, the frontend): the last signature's hold is
+	// the system's to pay; an officer's is the officers'.
+	p.HoldId, p.PlacedBy = uuidOf(hold), RequestPayoutPlacedByOfficer
+	if bySignature {
+		p.PlacedBy = RequestPayoutPlacedBySystem
 	}
 	v.Payout = &p
 	return nil
@@ -218,13 +227,13 @@ func refusedBy(err error) string {
 	return ""
 }
 
-// The person's step-up did not hold: no proof, someone else's, spent, stale,
-// for another act, or minted in this transaction.
 // bankRefusals: the hold's refusals over a member's bank details (0040), each
 // in the database's sentence, which the member reads.
 var bankRefusals = map[string]string{"payout_needs_bank_account": "needs_bank_account", "payout_bank_not_checked": "bank_not_checked",
 	"payout_bank_not_found": "bank_not_found", "payout_bank_name_unconfirmed": "bank_name_unconfirmed"}
 
+// The person's step-up did not hold: no proof, someone else's, spent, stale,
+// for another act, or minted in this transaction.
 var stepUpRefused = map[string]bool{"act_needs_pin_proof": true, "act_proof_for_this_act": true, "proof_minted_elsewhere": true,
 	"signature_needs_step_up": true, "signature_act_is_signers": true, "signature_act_kind": true,
 	"rejection_needs_step_up": true, "rejection_act_is_rejecters": true, "rejection_act_kind": true}

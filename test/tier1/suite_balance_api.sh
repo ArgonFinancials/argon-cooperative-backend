@@ -55,4 +55,6 @@ declare -gA SVC_TARGET_OF=(
   [payout_release_unsaid]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
   [payout_paid_unsaid]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
   [payout_reason_hidden]='TestApiBalance17_TheRequestSaysWhatBecameOfThePayment'
+  [payout_hold_unnamed]='TestApiBalance18_ThePaymentNamesItsHoldAndWhoseItIsToPay'
+  [payout_all_officers]='TestApiBalance18_ThePaymentNamesItsHoldAndWhoseItIsToPay'
 )
