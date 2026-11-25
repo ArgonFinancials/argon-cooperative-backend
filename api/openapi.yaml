@@ -223,12 +223,103 @@ components:
         member (or, for a member who cannot sign in, an officer) setting the
         member's bank details; bank_name_confirmation: a signatory confirming
         a bank's name for them that does not match the register.
+        dispute_correction (0042): an officer proposing the correction of a
+        member's queried entry; dispute_correction_decision: a second officer
+        confirming or rejecting it.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
              withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email,
-             member_status, member_bank_account, bank_name_confirmation]
+             member_status, member_bank_account, bank_name_confirmation, dispute_correction,
+             dispute_correction_decision]
+
+    RaiseDispute:
+      type: object
+      required: [entryId, question]
+      properties:
+        entryId: { type: string, format: uuid, description: "An entry of the member's own society that names them (their statement's entry id)." }
+        question: { type: string, description: "What the member says is wrong, 10 to 500 characters, recorded as written." }
+
+    AnswerDispute:
+      type: object
+      required: [answer]
+      properties:
+        answer: { type: string, description: "The officer's answer, 10 to 1000 characters, recorded as written." }
+
+    ReplyToDispute:
+      type: object
+      required: [reply]
+      properties:
+        reply: { type: string, enum: [accepted, reopened] }
+        note: { type: string, description: "reopened: why, 10 to 500 characters (required). accepted: not used." }
+
+    ProposeCorrection:
+      type: object
+      required: [reason, pinProofId]
+      properties:
+        reason: { type: string, description: "Why the entry is reversed, 10 to 500 characters; part of the reversal's own reason." }
+        pinProofId: { type: string, format: uuid, description: "The proposer's own proof, minted for dispute_correction." }
+
+    DecideCorrection:
+      type: object
+      required: [confirmed, pinProofId]
+      properties:
+        confirmed: { type: boolean, description: "true: the reversal is posted now. false: rejected, the query open again." }
+        reason: { type: string, description: "Required when rejecting, 10 to 500 characters." }
+        pinProofId: { type: string, format: uuid, description: "The decider's own proof, minted for dispute_correction_decision." }
+
+    DisputeEvent:
+      type: object
+      additionalProperties: false
+      required: [kind, at, byUserId, byName, text]
+      properties:
+        kind: { type: string, enum: [answer, reply, correction, decision] }
+        at: { type: string, format: date-time }
+        byUserId: { type: string, format: uuid }
+        byName: { type: string }
+        text:
+          type: string
+          nullable: true
+          description: "The words as written: the answer, a reopening's note, a correction's reason, a rejection's reason. null for an acceptance or a confirmation."
+        reply: { type: string, enum: [accepted, reopened], nullable: true, description: "reply only." }
+        correctionId: { type: string, format: uuid, nullable: true, description: "correction and decision only." }
+        confirmed: { type: boolean, nullable: true, description: "decision only." }
+        reversalEntryId: { type: string, format: uuid, nullable: true, description: "A confirmation: the reversal the database posted." }
+
+    Dispute:
+      type: object
+      additionalProperties: false
+      required: [disputeId, memberId, memberName, entryId, entryKind, entryValueDate, question, raisedAt, state, correctable, pendingCorrectionId, events]
+      properties:
+        disputeId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        memberName: { type: string }
+        entryId: { type: string, format: uuid }
+        entryKind: { type: string }
+        entryValueDate: { type: string, format: date, nullable: true }
+        question: { type: string }
+        raisedAt: { type: string, format: date-time }
+        state:
+          type: string
+          enum: [open, answered, reopened, correction_proposed, corrected, accepted]
+          description: |
+            open: waiting for an officer's first answer. answered: waiting for
+            the member. reopened: the member said the answer is not right (or
+            a correction was rejected): waiting for an officer. correction_proposed:
+            waiting for a second officer. corrected, accepted: closed.
+        correctable:
+          type: boolean
+          description: "The entry may be corrected by two officers: recorded by hand, not already reversed. false for a payment VFD confirmed (the money moved at the bank)."
+        pendingCorrectionId: { type: string, format: uuid, nullable: true, description: "The correction waiting for a second officer, when one is." }
+        events: { type: array, items: { $ref: '#/components/schemas/DisputeEvent' }, description: "Every step, oldest first." }
+
+    DisputeList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Dispute' }, description: "Newest first." }
 
     SetBankAccount:
       type: object
@@ -3080,6 +3171,324 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /members/{memberId}/disputes:
+    post:
+      operationId: raiseDispute
+      x-argon-built: true
+      summary: "The member queries an entry of their own (0042); no step-up: it moves no money"
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RaiseDispute' }
+      responses:
+        '201':
+          description: "Raised."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or not the caller's own record."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "dispute_once_open: this entry is already queried and the query is not closed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "question_required (10 to 500 characters); not_own_entry: the entry is not one of the society that names this member."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: listMemberDisputes
+      x-argon-built: true
+      summary: A member's queries, newest first, for the member and their society's officers
+      security: [{ session: [] }]
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: "The queries."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DisputeList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such member, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /societies/{societyId}/disputes:
+    get:
+      operationId: listSocietyDisputes
+      x-argon-built: true
+      summary: "The society's queries, newest first: the officers' queue"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [waiting, open, answered, reopened, correction_proposed, corrected, accepted] }, description: 'waiting: open, reopened or correction_proposed (what an officer acts on). Omitted: every query.' }
+      responses:
+        '200':
+          description: "The queries."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DisputeList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /disputes/{disputeId}:
+    get:
+      operationId: getDispute
+      x-argon-built: true
+      summary: One query and every step of it
+      security: [{ session: [] }]
+      parameters:
+        - { name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: "The query."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such query, or one the caller may not read (the member and their society's officers read it)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /disputes/{disputeId}/answers:
+    post:
+      operationId: answerDispute
+      x-argon-built: true
+      summary: An officer answers a query waiting for one
+      security: [{ session: [] }]
+      parameters:
+        - { name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnswerDispute' }
+      responses:
+        '201':
+          description: "Answered."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "not_permitted (not a current officer of the society, or the internal auditor); conflict_of_interest (the query is about the caller's own entry)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such query, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_waiting: the query is answered, being corrected, or closed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "answer_required (10 to 1000 characters)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /disputes/{disputeId}/replies:
+    post:
+      operationId: replyToDispute
+      x-argon-built: true
+      summary: The member accepts an answer (closed) or reopens the query, saying why
+      security: [{ session: [] }]
+      parameters:
+        - { name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplyToDispute' }
+      responses:
+        '201':
+          description: "Recorded."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "not_permitted: only the member who asked replies."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such query, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_waiting: there is no answer waiting for the member."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "note_required: reopening says why (10 to 500 characters)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /disputes/{disputeId}/corrections:
+    post:
+      operationId: proposeCorrection
+      x-argon-built: true
+      summary: "One officer proposes reversing the queried entry, on their own PIN (D-13: a second officer decides)"
+      description: |
+        0042, D-13: one officer proposes and a DIFFERENT officer decides, each on
+        their own PIN; neither is the member. Confirmed, the database posts the
+        full reversal of the entry (its charges refunded with it, D-02); a
+        corrected figure is then recorded the ordinary way.
+      security: [{ session: [] }]
+      parameters:
+        - { name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProposeCorrection' }
+      responses:
+        '201':
+          description: "Proposed: waiting for a second officer."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for dispute_correction); not_permitted (not a current officer, or the auditor); conflict_of_interest (the caller's own entry)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such query, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_correctable: the query is closed, a correction already waits, or the entry is not corrected by officers (VFD confirmed it, or it is already reversed)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required (10 to 500 characters)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /disputes/{disputeId}/corrections/{correctionId}/decisions:
+    post:
+      operationId: decideCorrection
+      x-argon-built: true
+      summary: A second officer confirms (the reversal is posted now) or rejects (saying why) a proposed correction
+      security: [{ session: [] }]
+      parameters:
+        - { name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: correctionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecideCorrection' }
+      responses:
+        '201':
+          description: "Decided."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for dispute_correction_decision); not_permitted (not a current officer, or the auditor); second_officer_required (the caller proposed it); conflict_of_interest (the caller's own entry)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such query or correction, or one the caller may not read."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_decided; not_correctable (the entry was reversed meanwhile)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required: a rejection says why (10 to 500 characters)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /members/{memberId}/bank-account:
     put:
       operationId: setOwnBankAccount

@@ -377,5 +377,22 @@ BEGIN
   END IF;
 END $$;
 
+-- 0042: DISPUTES. The app records a member's query, an officer's answer, the
+-- member's reply, a correction's proposal and its decision (who and the words;
+-- every time is the database's). It never posts a correction itself (P94):
+-- the database posts the reversal on a second officer's confirmation, and
+-- names it (P95). Nothing is rewritten (P96).
+DO $$
+BEGIN
+  IF to_regclass('public.entry_disputes') IS NOT NULL THEN
+    GRANT SELECT ON entry_disputes, dispute_answers, dispute_replies, dispute_corrections, dispute_correction_decisions, dispute_states TO argon_app;
+    GRANT INSERT (id, entry_id, member_id, raised_by, question) ON entry_disputes TO argon_app;
+    GRANT INSERT (id, dispute_id, answered_by, answer) ON dispute_answers TO argon_app;
+    GRANT INSERT (id, dispute_id, replied_by, reply, note) ON dispute_replies TO argon_app;
+    GRANT INSERT (id, dispute_id, proposed_by, proposed_act, reason) ON dispute_corrections TO argon_app;
+    GRANT INSERT (id, correction_id, confirmed, decided_by, decided_act, reason) ON dispute_correction_decisions TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

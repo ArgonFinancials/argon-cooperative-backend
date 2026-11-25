@@ -142,21 +142,23 @@ const (
 	ActSignatoryResetRequest ActKind = "signatory_reset_request"
 	ActSignatoryPhoneRequest ActKind = "signatory_phone_request"
 	ActSignatoryApproval     ActKind = "signatory_approval"
-	ActGuarantee             ActKind = "guarantee"                // 0008: a guarantor's own consent
-	ActGuaranteeWithdrawal   ActKind = "guarantee_withdrawal"     // 0008
-	ActApprovalSignature     ActKind = "approval_signature"       // 0010: signing a request
-	ActApprovalRejection     ActKind = "approval_rejection"       // 0010: rejecting one
-	ActContributionRecord    ActKind = "contribution_record"      // 0011: recording a contribution
-	ActWithdrawalPayout      ActKind = "withdrawal_payout"        // 0011: recording a payout
-	ActWithdrawalAuthorise   ActKind = "withdrawal_authorisation" // 0012: authorising one to execute
-	ActWithdrawalRequest     ActKind = "withdrawal_request"       // 0016: raising one
-	ActEnrolmentIssue        ActKind = "enrolment_issue"          // 0024: issuing an enrolment code
-	ActMemberRegister        ActKind = "member_register"          // 0031: the secretary registering members
-	ActPaymentResolution     ActKind = "payment_resolution"       // 0033: an officer proposing, confirming or rejecting a payment's resolution
-	ActMemberEmail           ActKind = "member_email"             // 0034: the secretary setting a member's email
-	ActMemberStatus          ActKind = "member_status"            // 0038: the secretary suspending, reinstating or recording a departure
-	ActMemberBankAccount     ActKind = "member_bank_account"      // 0040: setting a member's bank details
-	ActBankNameConfirmation  ActKind = "bank_name_confirmation"   // 0040: a signatory confirming a bank's name that differs
+	ActGuarantee             ActKind = "guarantee"                   // 0008: a guarantor's own consent
+	ActGuaranteeWithdrawal   ActKind = "guarantee_withdrawal"        // 0008
+	ActApprovalSignature     ActKind = "approval_signature"          // 0010: signing a request
+	ActApprovalRejection     ActKind = "approval_rejection"          // 0010: rejecting one
+	ActContributionRecord    ActKind = "contribution_record"         // 0011: recording a contribution
+	ActWithdrawalPayout      ActKind = "withdrawal_payout"           // 0011: recording a payout
+	ActWithdrawalAuthorise   ActKind = "withdrawal_authorisation"    // 0012: authorising one to execute
+	ActWithdrawalRequest     ActKind = "withdrawal_request"          // 0016: raising one
+	ActEnrolmentIssue        ActKind = "enrolment_issue"             // 0024: issuing an enrolment code
+	ActMemberRegister        ActKind = "member_register"             // 0031: the secretary registering members
+	ActPaymentResolution     ActKind = "payment_resolution"          // 0033: an officer proposing, confirming or rejecting a payment's resolution
+	ActMemberEmail           ActKind = "member_email"                // 0034: the secretary setting a member's email
+	ActMemberStatus          ActKind = "member_status"               // 0038: the secretary suspending, reinstating or recording a departure
+	ActMemberBankAccount     ActKind = "member_bank_account"         // 0040: setting a member's bank details
+	ActBankNameConfirmation  ActKind = "bank_name_confirmation"      // 0040: a signatory confirming a bank's name that differs
+	ActDisputeCorrection     ActKind = "dispute_correction"          // 0042: proposing a queried entry's correction
+	ActDisputeDecision       ActKind = "dispute_correction_decision" // 0042: a second officer deciding it
 )
 
 // ActKinds is every kind a proof can be minted for: credential_acts.kind.
@@ -170,7 +172,7 @@ var ActKinds = []ActKind{ActLedgerBatch, ActPinChange, ActMemberReset, ActPhoneC
 	ActGuarantee, ActGuaranteeWithdrawal, ActApprovalSignature, ActApprovalRejection,
 	ActContributionRecord, ActWithdrawalPayout, ActWithdrawalAuthorise, ActWithdrawalRequest,
 	ActEnrolmentIssue, ActMemberRegister, ActPaymentResolution, ActMemberEmail, ActMemberStatus,
-	ActMemberBankAccount, ActBankNameConfirmation}
+	ActMemberBankAccount, ActBankNameConfirmation, ActDisputeCorrection, ActDisputeDecision}
 
 // Proof is a minted step-up. Its id is what the act names; it is spent by the
 // act, inside the act's own transaction, and by nothing else.

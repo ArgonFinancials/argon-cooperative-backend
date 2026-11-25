@@ -710,6 +710,13 @@ probe req P93 argon_app '42501.*permission denied for table bank_name_confirmati
 probe ctl K70 argon_app '' "control: the app reads members' bank details and VFD's answers"   "SELECT count(*) FROM member_bank_current; SELECT count(*) FROM member_bank_accounts; SELECT count(*) FROM bank_name_checks; SELECT count(*) FROM bank_name_confirmations;"
 probe ctl K71 argon_wallet '' "control: the wallet reads members' current bank details"   "SELECT count(*) FROM member_bank_current WHERE NOT checked;"
 fi
+# 0042: disputes are recorded by the app; a correction is posted by the database alone.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.entry_disputes') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P94 argon_app '42501.*permission denied for function dispute_post_reversal' "app posts a dispute's correction itself (one officer, no second)"   "SELECT dispute_post_reversal($U1, $U1, $U1);"
+probe req P95 argon_app '42501.*permission denied for table dispute_correction_decisions' "app names the reversal a decision posted"   "INSERT INTO dispute_correction_decisions (correction_id, confirmed, decided_by, decided_act, entry_id) VALUES ($U1, true, $U1, $U1, $U1);"
+probe req P96 argon_app '42501.*permission denied for table dispute_answers' "app rewrites an officer's answer"   "UPDATE dispute_answers SET answer = 'rewritten afterwards' WHERE false;"
+probe ctl K72 argon_app '' "control: the app reads queries, answers, replies, corrections and where each stands"   "SELECT count(*) FROM entry_disputes; SELECT count(*) FROM dispute_answers; SELECT count(*) FROM dispute_replies; SELECT count(*) FROM dispute_corrections; SELECT count(*) FROM dispute_correction_decisions; SELECT count(*) FROM dispute_states;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no
