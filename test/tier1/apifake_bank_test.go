@@ -17,6 +17,7 @@
 //	bank_request_unmapped      a request with no bank details answered 500
 //	bank_setter_signs_unmapped the setter's signature refused as 500
 //	bank_vfd_db                VFD's own bank code reaches the database (500)
+//	bank_required_unsaid       a society on VFD said not to need bank details
 package tier1
 
 import (
@@ -173,6 +174,9 @@ func (f *fakeAPI) GetBankAccount(ctx context.Context, req api.GetBankAccountRequ
 		return nil, err
 	}
 	out := api.GetBankAccount200JSONResponse{History: all}
+	if f.brk != "bank_required_unsaid" {
+		f.db.QueryRow(ctx, `SELECT society_on_vfd($1)`, society).Scan(&out.Required)
+	}
 	if len(all) > 0 {
 		cur := all[0]
 		if f.brk == "bank_history_oldest" {

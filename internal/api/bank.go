@@ -216,6 +216,9 @@ func (s *server) GetBankAccount(ctx context.Context, req GetBankAccountRequestOb
 		return nil, err
 	}
 	out := GetBankAccount200JSONResponse{History: all}
+	if err := s.db.QueryRow(ctx, `SELECT society_on_vfd($1)`, society).Scan(&out.Required); err != nil {
+		return nil, err
+	}
 	if len(all) > 0 {
 		cur := all[0] // newest first, as member_bank_current orders them
 		out.Current = &cur

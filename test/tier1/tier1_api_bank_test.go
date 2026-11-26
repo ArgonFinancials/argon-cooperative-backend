@@ -30,8 +30,9 @@ type bankOut struct {
 }
 
 type bankRecordOut struct {
-	Current *bankOut
-	History []bankOut
+	Current  *bankOut
+	History  []bankOut
+	Required bool
 }
 
 func (w *mapi) setOwnBank(t *testing.T, as, member, number, bank, proof string) resp {
@@ -240,4 +241,19 @@ func TestApiBank11_AnAccountAtVFDIsRefusedInWords(t *testing.T) {
 	proof := stepUp(t, user, "member_bank_account")
 	wantProblem(t, w.setOwnBank(t, user, mem, "0123456789", "090110", proof), http.StatusUnprocessableEntity, "bank_at_vfd", "a member's account at VFD's own bank")
 	bankFrom(t, w.setOwnBank(t, user, mem, "0123456789", testBank, proof), http.StatusOK, "the same proof, at another bank")
+}
+
+// The screen asks for bank details exactly where the rules need them: a
+// society on VFD (2026-11-26, the frontend: the warning showed everywhere).
+func TestApiBank12_TheRecordSaysWhetherBankDetailsAreNeeded(t *testing.T) {
+	w := newMoneyAPI(t)
+	user, mem := bankMember(t, w.mworld, "Folake Adebayo", true)
+	if rec := w.bankRecord(t, user, mem); rec.Required {
+		t.Fatalf("ASKED — a society not on VFD reads bank details required; its officers pay by hand")
+	}
+	_, err := recordSocietyAccount(w.c.s.id, vfdNumber(), opName, opHost, socAcctReason)
+	fixture(t, err, "the society on VFD")
+	if rec := w.bankRecord(t, user, mem); !rec.Required {
+		t.Fatalf("UNSAID — a society on VFD reads bank details not required; a withdrawal there is refused without them")
+	}
 }

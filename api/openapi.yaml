@@ -360,8 +360,17 @@ components:
     BankAccountRecord:
       type: object
       additionalProperties: false
-      required: [current, history]
+      required: [current, history, required]
       properties:
+        required:
+          type: boolean
+          description: |
+            The member's society is on VFD (its own VFD account is recorded):
+            the system pays withdrawals into the member's bank account, so
+            without details a withdrawal is refused (needs_bank_account), and
+            the last signature refuses details not yet settled. false: the
+            officers pay by hand; bank details are not asked for. The same
+            test as the database's society_on_vfd().
         current:
           nullable: true
           description: "The member's current bank details; null: none, and a withdrawal cannot be paid."
