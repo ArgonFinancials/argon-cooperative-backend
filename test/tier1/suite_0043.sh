@@ -1,0 +1,32 @@
+# Suite 0043 — reversals and adjustments by two officers (stage 3, 2026-11-26;
+# LEDGER_CONTRACT §2). M0: test/tier1/0043_interface.sql (gen0043.py).
+SUITE_INCLUDE='^TestCorrections'
+SUITE_EXCLUDE='^$'
+SUITE_SKIP=''
+SUITE_RUN='^TestCorrections'
+SUITE_BASE='migrations/0001_init.up.sql,migrations/0002_tier1.up.sql,migrations/0003_auth.up.sql,migrations/0004_roles.up.sql,migrations/0005_step_up.up.sql,migrations/0006_line_society.up.sql,migrations/0007_approvals.up.sql,migrations/0008_loans.up.sql,migrations/0009_write_offs.up.sql,migrations/0010_sign_step_up.up.sql,migrations/0011_money_movements.up.sql,migrations/0012_payout_holds.up.sql,migrations/0013_vat_on_argon_fee.up.sql,migrations/0014_operator_settings.up.sql,migrations/0015_benefit_and_duties.up.sql,migrations/0016_withdrawal_requests.up.sql,migrations/0017_quotes_and_largest.up.sql,migrations/0018_member_position.up.sql,migrations/0019_sms_sends.up.sql,migrations/0020_account_role_once.up.sql,migrations/0021_decided_requests.up.sql,migrations/0022_lockout_by_device.up.sql,migrations/0023_society_founding.up.sql,migrations/0024_enrolment_codes.up.sql,migrations/0025_slip_device.up.sql,migrations/0026_enrolment_halves.up.sql,migrations/0027_founding_officers.up.sql,migrations/0028_vfd_wallet.up.sql,migrations/0029_vfd_inflows.up.sql,migrations/0030_slip_used.up.sql,migrations/0031_member_register.up.sql,migrations/0032_contribution_claims.up.sql,migrations/0033_payment_resolutions.up.sql,migrations/0034_enrol_by_email.up.sql,migrations/0035_demo_societies.up.sql,migrations/0036_founding_officers_active.up.sql,migrations/0037_defaults_said.up.sql,migrations/0038_member_status.up.sql,migrations/0039_vfd_as_proven.up.sql,migrations/0040_member_bank_accounts.up.sql,migrations/0041_coop_reference.up.sql,migrations/0042_disputes.up.sql,test/tier1/0043_interface.sql'
+SUITE_MUTDIR='mutants_0043'
+SUITE_GREEN_NEEDS='migrations/0043_corrections.up.sql'
+CONTROL_RE='Control'
+declare -gA SVC_TARGET_OF=()
+declare -gA TARGET_OF=(
+  [M0]='TestCorrections0[1-6]_'
+  [m_same_officer]='TestCorrections01_AReversalNeedsASecondOfficer'
+  [m_not_posted]='TestCorrections0[12]_'
+  [m_unbalanced_ok]='TestCorrections02_AnAdjustmentCorrectsTheEntrysOwnFigures'
+  [m_zero_line_ok]='TestCorrections02_AnAdjustmentCorrectsTheEntrysOwnFigures'
+  [m_any_account]='TestCorrections02_AnAdjustmentCorrectsTheEntrysOwnFigures'
+  [m_any_member]='TestCorrections02_AnAdjustmentCorrectsTheEntrysOwnFigures'
+  [m_proposal_any_act]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_decision_any_act]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_proposal_anyone]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_decision_anyone]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_proposal_own]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_decision_own]='TestCorrections03_EachHalfIsAnOfficersOwnActNeverTheirOwnEntry'
+  [m_two_waiting]='TestCorrections04_OneWaitsAtATimeAndARejectionSaysWhy'
+  [m_reject_silent]='TestCorrections04_OneWaitsAtATimeAndARejectionSaysWhy'
+  [m_decided_twice]='TestCorrections04_OneWaitsAtATimeAndARejectionSaysWhy'
+  [m_correct_anything]='TestCorrections05_OnlyWhatAnOfficerRecordedByHandOnce'
+  [m_editable]='TestCorrections06_NothingIsEdited'
+  [c_no_proposals]='TestCorrections_Control_ATwoOfficerReversal'
+)

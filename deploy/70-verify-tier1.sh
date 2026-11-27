@@ -717,6 +717,13 @@ probe req P95 argon_app '42501.*permission denied for table dispute_correction_d
 probe req P96 argon_app '42501.*permission denied for table dispute_answers' "app rewrites an officer's answer"   "UPDATE dispute_answers SET answer = 'rewritten afterwards' WHERE false;"
 probe ctl K72 argon_app '' "control: the app reads queries, answers, replies, corrections and where each stands"   "SELECT count(*) FROM entry_disputes; SELECT count(*) FROM dispute_answers; SELECT count(*) FROM dispute_replies; SELECT count(*) FROM dispute_corrections; SELECT count(*) FROM dispute_correction_decisions; SELECT count(*) FROM dispute_states;"
 fi
+# 0043: corrections are recorded by the app and posted by the database alone.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.entry_corrections') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P97 argon_app '42501.*permission denied for function entry_correction_post' "app posts a correction itself (one officer, no second)"   "SELECT entry_correction_post($U1, $U1, $U1);"
+probe req P98 argon_app '42501.*permission denied for table entry_correction_decisions' "app names what a decision posted"   "INSERT INTO entry_correction_decisions (correction_id, confirmed, decided_by, decided_act, entry_id) VALUES ($U1, true, $U1, $U1, $U1);"
+probe req P99 argon_app '42501.*permission denied for table entry_corrections' "app rewrites a proposal's lines"   "UPDATE entry_corrections SET lines = '[]' WHERE false;"
+probe ctl K73 argon_app '' "control: the app reads proposals and decisions"   "SELECT count(*) FROM entry_corrections; SELECT count(*) FROM entry_correction_decisions;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

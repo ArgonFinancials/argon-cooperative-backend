@@ -394,5 +394,18 @@ BEGIN
   END IF;
 END $$;
 
+-- 0043: REVERSALS AND ADJUSTMENTS. The app records a proposal (the entry, the
+-- kind, the lines, the reason, the proposer's act) and a decision; the
+-- database posts a confirmed one itself (P97) and names what it posted (P98).
+-- Nothing is rewritten (P99).
+DO $$
+BEGIN
+  IF to_regclass('public.entry_corrections') IS NOT NULL THEN
+    GRANT SELECT ON entry_corrections, entry_correction_decisions TO argon_app;
+    GRANT INSERT (id, entry_id, kind, lines, reason, proposed_by, proposed_act) ON entry_corrections TO argon_app;
+    GRANT INSERT (id, correction_id, confirmed, decided_by, decided_act, reason) ON entry_correction_decisions TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

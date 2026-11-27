@@ -225,14 +225,77 @@ components:
         a bank's name for them that does not match the register.
         dispute_correction (0042): an officer proposing the correction of a
         member's queried entry; dispute_correction_decision: a second officer
-        confirming or rejecting it.
+        confirming or rejecting it. entry_correction (0043): an officer proposing
+        a reversal or an adjustment of an entry; entry_correction_decision: a
+        second officer confirming or rejecting it.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
              withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email,
              member_status, member_bank_account, bank_name_confirmation, dispute_correction,
-             dispute_correction_decision]
+             dispute_correction_decision, entry_correction, entry_correction_decision]
+
+    CorrectionLine:
+      type: object
+      additionalProperties: false
+      required: [accountCode, amountKobo]
+      properties:
+        accountCode: { type: string, description: "An account of the entry's own society, by its code." }
+        memberId: { type: string, format: uuid, nullable: true, description: "The member, for a member's account line." }
+        amountKobo: { type: string, pattern: '^-?[0-9]+$', description: "Signed kobo: positive debits, negative credits." }
+
+    ProposeEntryCorrection:
+      type: object
+      required: [kind, reason, pinProofId]
+      properties:
+        kind: { type: string, enum: [reversal, adjustment] }
+        reason: { type: string, description: "Why, 10 to 500 characters; the posted entry's own reason." }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/CorrectionLine' }
+          description: "adjustment only: two or more, summing to zero, none zero, on the entry's own accounts and members."
+        pinProofId: { type: string, format: uuid, description: "The proposer's own proof, minted for entry_correction." }
+
+    DecideEntryCorrection:
+      type: object
+      required: [confirmed, pinProofId]
+      properties:
+        confirmed: { type: boolean }
+        reason: { type: string, description: "Required when rejecting, 10 to 500 characters." }
+        pinProofId: { type: string, format: uuid, description: "The decider's own proof, minted for entry_correction_decision." }
+
+    EntryCorrection:
+      type: object
+      additionalProperties: false
+      required: [correctionId, entryId, kind, reason, lines, proposedBy, proposedAt, state, decision]
+      properties:
+        correctionId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        kind: { type: string, enum: [reversal, adjustment] }
+        reason: { type: string }
+        lines: { type: array, items: { $ref: '#/components/schemas/CorrectionLine' }, description: "adjustment: the lines proposed; reversal: empty (the entry's own, negated)." }
+        proposedBy: { $ref: '#/components/schemas/EmailSetter' }
+        proposedAt: { type: string, format: date-time }
+        state: { type: string, enum: [waiting, confirmed, rejected] }
+        decision:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [confirmed, by, at, reason, postedEntryId]
+          properties:
+            confirmed: { type: boolean }
+            by: { $ref: '#/components/schemas/EmailSetter' }
+            at: { type: string, format: date-time }
+            reason: { type: string, nullable: true }
+            postedEntryId: { type: string, format: uuid, nullable: true, description: "A confirmation: the entry the database posted." }
+
+    EntryCorrectionList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/EntryCorrection' }, description: "Newest first." }
 
     RaiseDispute:
       type: object
@@ -3276,6 +3339,160 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /entries/{entryId}/corrections:
+    post:
+      operationId: proposeEntryCorrection
+      x-argon-built: true
+      summary: "One officer proposes reversing or adjusting an entry, on their own PIN (0043: a second officer decides)"
+      description: |
+        LEDGER_CONTRACT §2: a correction is a new entry, never an edit. A
+        reversal posts the entry's lines negated; an adjustment posts the
+        lines given, which balance and touch only the entry's own accounts and
+        members. A DIFFERENT officer decides; neither is the auditor nor a
+        member the entry names. Only an entry recorded by hand is corrected
+        this way, never one posted on VFD's word.
+      security: [{ session: [] }]
+      parameters:
+        - { name: entryId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProposeEntryCorrection' }
+      responses:
+        '201':
+          description: "Proposed: waiting for a second officer."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntryCorrection' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for entry_correction); not_permitted (not a current officer, or the auditor); conflict_of_interest (the entry names the caller)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such entry, or one of a society the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "not_correctable: posted on VFD’s word, itself a correction, or already reversed; already_waiting: a correction of this entry waits for a second officer."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required; bad_lines: an adjustment’s lines do not balance, include a zero, name an account or member the entry does not, or are not given."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /societies/{societyId}/corrections:
+    get:
+      operationId: listEntryCorrections
+      x-argon-built: true
+      summary: "The society's corrections, newest first: the officers' queue"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [waiting, confirmed, rejected] } }
+      responses:
+        '200':
+          description: "The corrections."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntryCorrectionList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /corrections/{correctionId}:
+    get:
+      operationId: getEntryCorrection
+      x-argon-built: true
+      summary: "One correction and its decision"
+      security: [{ session: [] }]
+      parameters:
+        - { name: correctionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: "The correction."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntryCorrection' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such correction, or one of a society the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /corrections/{correctionId}/decisions:
+    post:
+      operationId: decideEntryCorrection
+      x-argon-built: true
+      summary: "A second officer confirms (posted now) or rejects (saying why) a proposed correction"
+      security: [{ session: [] }]
+      parameters:
+        - { name: correctionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecideEntryCorrection' }
+      responses:
+        '201':
+          description: "Decided."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntryCorrection' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for entry_correction_decision); not_permitted (not a current officer, or the auditor); second_officer_required (the caller proposed it); conflict_of_interest (the entry names the caller)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such correction, or one of a society the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_decided; not_correctable (the entry was reversed meanwhile)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required: a rejection says why."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /societies/{societyId}/reports/income-statement:
     get:
       operationId: getIncomeStatement
