@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -44,13 +45,22 @@ func runVFDLookup(args []string) int {
 		return 2
 	}
 	base, token := os.Getenv("VFD_BASE_URL"), os.Getenv("VFD_ACCESS_TOKEN")
-	if !strings.HasPrefix(base, "https://") || token == "" {
-		fmt.Fprintln(os.Stderr, "vfd-account-lookup: VFD_BASE_URL (https) and VFD_ACCESS_TOKEN must be set: VFD's credentials (deploy/README.md, the wallet)")
+	var key []byte
+	if k := os.Getenv("VFD_PROXY_KEY"); k != "" {
+		b, err := hex.DecodeString(k)
+		if err != nil || len(b) < 32 {
+			fmt.Fprintln(os.Stderr, "vfd-account-lookup: VFD_PROXY_KEY must be at least 32 bytes as hex")
+			return 2
+		}
+		key = b
+	}
+	if !strings.HasPrefix(base, "https://") || (token == "") == (key == nil) {
+		fmt.Fprintln(os.Stderr, "vfd-account-lookup: VFD_BASE_URL (https) and exactly one of VFD_PROXY_KEY (through the relay) or VFD_ACCESS_TOKEN must be set (deploy/README.md, the wallet)")
 		return 2
 	}
 	// The client logs the last four digits and the outcome, to stderr: stdout
 	// is the answer and nothing else.
-	client, err := vfd.New(vfd.Config{BaseURL: base, AccessToken: token, Timeout: 15 * time.Second,
+	client, err := vfd.New(vfd.Config{BaseURL: base, AccessToken: token, ProxyKey: key, Timeout: 15 * time.Second,
 		Log: slog.New(slog.NewTextHandler(os.Stderr, nil))})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "vfd-account-lookup:", err)

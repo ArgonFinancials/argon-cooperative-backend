@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -13,7 +14,11 @@ import (
 type Wallet struct {
 	DatabaseURL string // WALLET_DATABASE_URL, as argon_wallet
 	VFDBaseURL  string // VFD_BASE_URL, https
-	VFDToken    string // VFD_ACCESS_TOKEN
+	VFDToken    string // VFD_ACCESS_TOKEN: calling VFD directly
+	// VFDProxyKey: VFD_PROXY_KEY (hex, 32 bytes or more): calling VFD through
+	// the relay on the wallet's server instead (cmd/vfd-proxy, 2026-11-28),
+	// with NO token here. Exactly one of the two.
+	VFDProxyKey []byte
 	Tick        time.Duration
 }
 
@@ -38,8 +43,19 @@ func LoadWallet() (Wallet, error) {
 		return w, fmt.Errorf("WALLET_DATABASE_URL must be set, as argon_wallet (the only role that writes what VFD said)")
 	case !strings.HasPrefix(w.VFDBaseURL, "https://"):
 		return w, fmt.Errorf("VFD_BASE_URL must be set, and https (the token travels in a header)")
-	case w.VFDToken == "":
-		return w, fmt.Errorf("VFD_ACCESS_TOKEN must be set")
+	}
+	key := os.Getenv("VFD_PROXY_KEY")
+	switch {
+	case w.VFDToken == "" && key == "":
+		return w, fmt.Errorf("VFD_PROXY_KEY (through the relay) or VFD_ACCESS_TOKEN (direct) must be set")
+	case w.VFDToken != "" && key != "":
+		return w, fmt.Errorf("VFD_PROXY_KEY and VFD_ACCESS_TOKEN are both set: through the relay, this server holds no token (deploy/README.md, the VFD relay)")
+	case key != "":
+		b, err := hex.DecodeString(key)
+		if err != nil || len(b) < 32 {
+			return w, fmt.Errorf("VFD_PROXY_KEY must be at least 32 bytes as hex (openssl rand -hex 32)")
+		}
+		w.VFDProxyKey = b
 	}
 	w.Tick = 30 * time.Second
 	if s := os.Getenv("WALLET_TICK"); s != "" {

@@ -71,8 +71,9 @@ lookup() {
   if [[ -n ${VFD_LOOKUP:-} ]]; then
     "$VFD_LOOKUP" "$1"
   else
-    VFD_BASE_URL="${VFD_BASE_URL:-}" VFD_ACCESS_TOKEN="${VFD_ACCESS_TOKEN:-}" \
-      docker run --rm -e VFD_BASE_URL -e VFD_ACCESS_TOKEN "$(api_image || echo no-running-api-container)" vfd-account-lookup "$1"
+    # Through the relay (deploy/vfd-proxy): its key, and no token on this server.
+    VFD_BASE_URL="${VFD_BASE_URL:-}" VFD_ACCESS_TOKEN="${VFD_ACCESS_TOKEN:-}" VFD_PROXY_KEY="${VFD_PROXY_KEY:-}" \
+      docker run --rm -e VFD_BASE_URL -e VFD_ACCESS_TOKEN -e VFD_PROXY_KEY "$(api_image || echo no-running-api-container)" vfd-account-lookup "$1"
   fi
 }
 # `|| rc=$?`, never `; rc=$?`: under lib.sh's set -e, a lookup that exits 3
@@ -85,7 +86,7 @@ case $rc in
   0) ;;
   3) die "VFD knows no account ${v[account]} (VFD's code: $(field code)). Nothing was recorded. Check the number against VFD's own onboarding letter." ;;
   4) die "VFD did not answer for ${v[account]} (outcome: $(field outcome); $(field code)). Nothing was recorded; try again later." ;;
-  *) die "the lookup could not run (exit $rc): ${err:-no reason given}. Nothing was recorded. VFD's credentials must be in the env file (VFD_BASE_URL, VFD_ACCESS_TOKEN)." ;;
+  *) die "the lookup could not run (exit $rc): ${err:-no reason given}. Nothing was recorded. VFD's address and one credential must be in the env file (VFD_BASE_URL, and VFD_PROXY_KEY through the relay or VFD_ACCESS_TOKEN)." ;;
 esac
 name=$(field name) client=$(field clientId) acct=$(field accountId) number=$(field accountNo)
 [[ $number == "${v[account]}" ]] || die "VFD answered for account '$number', not ${v[account]}: nothing was recorded"

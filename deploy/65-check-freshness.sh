@@ -90,6 +90,13 @@ fi
 
 # Payouts waiting on VFD (0039): its own check and its own alert.
 bash "$DEPLOY_DIR/66-check-vfd-holds.sh" --db "$ARGON_DB" || vfd_failed=1
+# Through the VFD relay: its clock against ours (67), alerted at 10 seconds,
+# long before 60 stops every call. Only the relay's address is read from the
+# wallet's file, never its key.
+if grep -q '^VFD_PROXY_KEY=.' /etc/argon/wallet.env 2>/dev/null; then
+  relay=$(sed -n 's/^VFD_BASE_URL=//p' /etc/argon/wallet.env | head -1)
+  bash "$DEPLOY_DIR/67-check-vfd-relay-clock.sh" --url "$relay" || vfd_failed=1
+fi
 
 if ((${#problems[@]})); then
   printf '%s\n' "${problems[@]}" | sed 's/^/  !! /' >&2

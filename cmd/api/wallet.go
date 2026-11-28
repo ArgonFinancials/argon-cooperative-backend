@@ -31,7 +31,7 @@ func runWallet(log *slog.Logger) int {
 		return 1
 	}
 	defer pool.Close()
-	client, err := vfd.New(vfd.Config{BaseURL: cfg.VFDBaseURL, AccessToken: cfg.VFDToken, Log: log})
+	client, err := vfd.New(vfd.Config{BaseURL: cfg.VFDBaseURL, AccessToken: cfg.VFDToken, ProxyKey: cfg.VFDProxyKey, Log: log})
 	if err != nil {
 		log.Error("vfd client", "err", err)
 		return 1

@@ -28,6 +28,11 @@
 //	number_float_taken     a number VFD sent as a JSON number taken
 //	open_fallback          an ambiguous opening retried on /client/create (two accounts for one person)
 //	pool_unchecked         a pool enquiry with no account number taken
+//	proxy_header_ignored   the relay's own answer read as VFD's (a 401 becomes "no such account")
+//	proxy_timeout_not_reached the relay's "VFD did not answer in time" read as never sent (VFD may have acted)
+//	proxy_unsigned         calls to the relay sent unsigned
+//	proxy_skew_unsaid      the relay's clock drifting, and nobody told
+//	token_and_key          a client built with both VFD's token and the relay's key
 //	history_plus_space     history asked with its dates' space as + (VFD reads %20)
 //	history_utc            history asked in UTC, not VFD's own time (an hour of deposits unseen)
 //	history_page_ignored   history always asked for page 0 (the pages after the first never read)
@@ -59,6 +64,7 @@ import (
 	"time"
 
 	"github.com/argon/backend/internal/vfd"
+	"github.com/argon/backend/internal/vfdsign"
 )
 
 type refVFD struct {
@@ -69,8 +75,11 @@ type refVFD struct {
 }
 
 func newRefVFD(cfg vfd.Config, brk string) (vfd.Client, error) {
-	if cfg.BaseURL == "" || (cfg.AccessToken == "" && brk != "token_optional") {
+	if cfg.BaseURL == "" || (cfg.AccessToken == "" && len(cfg.ProxyKey) == 0 && brk != "token_optional") {
 		return nil, errors.New("vfd: base URL and access token are both required")
+	}
+	if cfg.AccessToken != "" && len(cfg.ProxyKey) > 0 && brk != "token_and_key" {
+		return nil, errors.New("vfd: VFD's token or the relay's key, not both")
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 15 * time.Second
@@ -118,8 +127,20 @@ func (r *refVFD) call(ctx context.Context, what, method, path string, query url.
 		rd = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequestWithContext(ctx, method, u, rd)
-	req.Header.Set("AccessToken", r.cfg.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
+	if len(r.cfg.ProxyKey) > 0 {
+		if r.brk != "proxy_unsigned" {
+			var signed []byte
+			if body != nil {
+				signed, _ = json.Marshal(body)
+			}
+			ts := time.Now().Unix()
+			req.Header.Set(vfdsign.HeaderTime, strconv.FormatInt(ts, 10))
+			req.Header.Set(vfdsign.HeaderSignature, vfdsign.Sign(r.cfg.ProxyKey, method, req.URL.EscapedPath(), req.URL.RawQuery, ts, signed))
+		}
+	} else {
+		req.Header.Set("AccessToken", r.cfg.AccessToken)
+	}
 	if r.brk == "token_logged" {
 		r.log.DebugContext(ctx, "vfd request", "what", what, "headers", fmt.Sprint(req.Header))
 	}
@@ -146,6 +167,19 @@ func (r *refVFD) call(ctx context.Context, what, method, path string, query url.
 	if rerr != nil {
 		r.log.ErrorContext(ctx, "vfd answer unreadable", "what", what, "status", resp.StatusCode, "err", rerr.Error())
 		return refAnswer{outcome: vfd.Unknown, status: resp.StatusCode}
+	}
+	if t, err := strconv.ParseInt(resp.Header.Get(vfdsign.HeaderProxyTime), 10, 64); err == nil && r.brk != "proxy_skew_unsaid" {
+		if skew := time.Now().Unix() - t; skew > vfdsign.AlertSkewSeconds || skew < -vfdsign.AlertSkewSeconds {
+			r.log.ErrorContext(ctx, "vfd relay clock skew: signed calls fail at 60 seconds apart", "skew_seconds", skew)
+		}
+	}
+	if p := resp.Header.Get(vfdsign.HeaderProxy); p != "" && r.brk != "proxy_header_ignored" {
+		out := vfd.NotReached
+		if p == "vfd_timeout" && r.brk != "proxy_timeout_not_reached" {
+			out = vfd.Unknown
+		}
+		r.log.ErrorContext(ctx, "vfd relay answered for itself", "what", what, "relay", p, "outcome", out)
+		return refAnswer{outcome: out, status: resp.StatusCode}
 	}
 	if resp.StatusCode >= 500 && r.brk != "http_5xx_read" {
 		r.log.ErrorContext(ctx, "vfd answered with its own failure", "what", what, "status", resp.StatusCode)

@@ -734,11 +734,25 @@ It runs as `argon_wallet`, the only role that writes VFD's evidence (probes P60â
 **Before it can run:** a society's own VFD account recorded by the operator (`48-society-vfd-account.sh`, below: from VFD's name enquiry, never typed), each paid member's own bank account (0040: set by the member in the app; the worker checks the name with VFD, and a signatory confirms a name that differs from the register), and VFD's credentials in `deploy.env`:
 
 ```bash
-# On the instance, set by hand from whoever holds the VFD relationship; never pasted into a chat or a ticket.
+# On the instance, set by hand; never pasted into a chat or a ticket.
 ARGON_VFD=vfd
-VFD_BASE_URL=https://...       # VFD's API base, as VFD gives it
-VFD_ACCESS_TOKEN=...
+VFD_BASE_URL=https://vfd-relay.example.com:8443   # THE RELAY's address, not VFD's
+VFD_PROXY_KEY=...                                  # openssl rand -hex 32; the same value is in the relay's PROXY_KEYS
+# NO VFD_ACCESS_TOKEN: 30-install-api.sh refuses both together.
 ```
+
+### The VFD relay (decided 2026-11-28; `deploy/vfd-proxy/README.md`)
+
+VFD accepts calls only from the wallet's server address. The cooperative's calls therefore go through a relay on that server: `cmd/vfd-proxy`, built and tested in this repository, and installed there as its own service under its own user.
+
+**This server no longer holds VFD's token at all.** It holds a signing key. That key opens five calls, only from 54.85.168.60, and is worth nothing anywhere else. Someone who takes this server gets five calls from one address, and nothing they can take away and use. This is the strongest reason for the relay over asking VFD to whitelist a second address.
+
+- **Allowlist.** The relay passes the five calls. It never interprets, retries or decides.
+- **VFD's answers.** VFD's answer comes back byte for byte.
+- **The relay's own answers.** These are marked `X-Argon-Proxy`. The client reads them as "VFD not reached", except `vfd_timeout`, which it reads as "unknown". It never reads them as VFD's own answer.
+- **Clocks.** `67-check-vfd-relay-clock.sh` runs on the freshness timer. It alerts when the two clocks are more than 10 seconds apart; signed calls fail at 60.
+
+A direct token (`VFD_ACCESS_TOKEN`, without `VFD_PROXY_KEY`) still works, but only from an address VFD whitelists.
 
 Then `30-install-api.sh` writes `/etc/argon/wallet.env`, and the worker is started deliberately:
 

@@ -1,0 +1,54 @@
+# THE VFD RELAY'S DOOR, on the wallet's server (deploy/vfd-proxy/README.md).
+# Rendered by install.sh into /etc/nginx/sites-available/argon-vfd-proxy.
+#
+# Two layers, each enough alone: the security group opens @RELAY_PORT@ to
+# @COOP_ADDR@/32 only, and this site refuses any other address before
+# anything is read. A real certificate for @RELAY_DOMAIN@ (Let's Encrypt), so
+# the cooperative checks it the ordinary way: nothing pinned, nothing to rotate
+# by hand.
+#
+# Nginx does not interpret, retry or change anything: no proxy_next_upstream,
+# no caching, no buffering of a refusal into another status. The relay's
+# own answer and VFD's both come back as they were.
+
+# Port 80, this name only: Let's Encrypt's check, nothing else.
+server {
+    listen 80;
+    server_name @RELAY_DOMAIN@;
+    server_tokens off;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/argon-vfd-proxy-acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 444; }
+}
+
+server {
+    listen @RELAY_PORT@ ssl;
+    server_name @RELAY_DOMAIN@;
+    server_tokens off;
+
+    ssl_certificate /etc/letsencrypt/live/@RELAY_DOMAIN@/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/@RELAY_DOMAIN@/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    allow @COOP_ADDR@;
+    deny all;
+
+    client_max_body_size 1m;
+    access_log /var/log/nginx/argon-vfd-proxy.access.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:8095;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_next_upstream off;
+        proxy_buffering off;
+        proxy_intercept_errors off;
+        # The relay gives VFD 50 seconds; the cooperative waits 60.
+        proxy_read_timeout 55s;
+        proxy_send_timeout 30s;
+    }
+}

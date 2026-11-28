@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/argon/backend/internal/vfdsign"
 )
 
 // 60 seconds: the wallet's, since 2026-11-21 (§1.2). A send that runs out of
@@ -48,8 +50,8 @@ type client struct {
 // New returns the VFD client, or refuses a configuration it cannot call with:
 // no base URL or no token, no client. No default that works.
 func New(cfg Config) (Client, error) {
-	if cfg.BaseURL == "" || cfg.AccessToken == "" {
-		return nil, errors.New("vfd: the client needs a base URL and an access token, both set")
+	if cfg.BaseURL == "" || (cfg.AccessToken == "") == (len(cfg.ProxyKey) == 0) {
+		return nil, errors.New("vfd: the client needs a base URL, and either VFD's access token or the relay's signing key (exactly one)")
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
@@ -99,8 +101,19 @@ func (c *client) call(ctx context.Context, what, method, path string, query url.
 		c.log.ErrorContext(ctx, "vfd request not built", "what", what, "err", err.Error())
 		return answer{outcome: NotReached}
 	}
-	req.Header.Set("AccessToken", c.cfg.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
+	if len(c.cfg.ProxyKey) > 0 {
+		// Through the relay: signed, and no token (the relay holds it).
+		var signed []byte
+		if body != nil {
+			signed, _ = json.Marshal(body)
+		}
+		ts := time.Now().Unix()
+		req.Header.Set(vfdsign.HeaderTime, strconv.FormatInt(ts, 10))
+		req.Header.Set(vfdsign.HeaderSignature, vfdsign.Sign(c.cfg.ProxyKey, method, req.URL.EscapedPath(), req.URL.RawQuery, ts, signed))
+	} else {
+		req.Header.Set("AccessToken", c.cfg.AccessToken)
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		// A timeout may have reached VFD (unknown); a connection never made did
@@ -119,12 +132,40 @@ func (c *client) call(ctx context.Context, what, method, path string, query url.
 		c.log.ErrorContext(ctx, "vfd answer could not be read", "what", what, "status", resp.StatusCode, "err", err.Error())
 		return answer{outcome: Unknown, status: resp.StatusCode}
 	}
+	c.clockSkew(ctx, resp)
+	// THE RELAY'S OWN ANSWER IS NEVER VFD'S (2026-11-28). A refusal by the
+	// relay (bad signature, not allowed, stale, replayed) or VFD not reached:
+	// nothing was asked of VFD, so nothing is concluded (not reached: a name
+	// enquiry records nothing, a send waits). VFD not answering in time: VFD
+	// may have acted (unknown). Never "refused": a 401 from the relay read as
+	// VFD's refusal would tell a member their bank details are wrong when
+	// nothing was ever asked.
+	if p := resp.Header.Get(vfdsign.HeaderProxy); p != "" {
+		out := NotReached
+		if p == "vfd_timeout" {
+			out = Unknown
+		}
+		c.log.ErrorContext(ctx, "vfd relay answered for itself", "what", what, "relay", p, "status", resp.StatusCode, "outcome", out)
+		return answer{outcome: out, status: resp.StatusCode}
+	}
 	if resp.StatusCode >= 500 {
 		// VFD's own failure: the request reached it, and it may have acted.
 		c.log.ErrorContext(ctx, "vfd answered with its own failure", "what", what, "status", resp.StatusCode)
 		return answer{outcome: Unknown, status: resp.StatusCode, raw: raw}
 	}
 	return answer{status: resp.StatusCode, raw: raw}
+}
+
+// clockSkew: the relay's clock against this server's. Signatures fail at 60
+// seconds apart; drift is told at 10, well before (2026-11-28).
+func (c *client) clockSkew(ctx context.Context, resp *http.Response) {
+	t, err := strconv.ParseInt(resp.Header.Get(vfdsign.HeaderProxyTime), 10, 64)
+	if err != nil {
+		return
+	}
+	if skew := time.Now().Unix() - t; skew > vfdsign.AlertSkewSeconds || skew < -vfdsign.AlertSkewSeconds {
+		c.log.ErrorContext(ctx, "vfd relay clock skew: signed calls fail at 60 seconds apart", "skew_seconds", skew)
+	}
 }
 
 type envelope struct {

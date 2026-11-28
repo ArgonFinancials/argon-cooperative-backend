@@ -53,6 +53,7 @@
 - Every request carries a static access token in an `AccessToken` header, from configuration.
 - There is no token refresh in production code; rotation is manual.
 - An OAuth client-credentials exchange exists only in a diagnostic tool. **UNVERIFIED** whether VFD expects it for production.
+- **The cooperative's route (2026-11-28).** VFD accepts only the wallet server's address. The cooperative's calls go through the relay on that server (`cmd/vfd-proxy`, `deploy/vfd-proxy/README.md`). The relay adds the token there, and the cooperative never holds it. Calls are signed with HMAC-SHA256 (`internal/vfdsign`). An answer marked `X-Argon-Proxy` is the relay's own, never VFD's: the client reads it as not reached, or as unknown for `vfd_timeout`.
 
 ### Endpoints in use
 

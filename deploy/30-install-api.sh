@@ -90,11 +90,25 @@ require_env ARGON_WALLET_PASSWORD
 case ${ARGON_VFD:-} in
   off) vfd_env="ARGON_VFD=off" ;;
   vfd)
-    require_env VFD_BASE_URL VFD_ACCESS_TOKEN
-    [[ $VFD_BASE_URL == https://* ]] || die "VFD_BASE_URL must be https: the token travels in a header"
-    vfd_env="ARGON_VFD=vfd
+    # Through the relay on the wallet's server (deploy/vfd-proxy, 2026-11-28):
+    # VFD_BASE_URL is the relay's address and VFD_PROXY_KEY signs every call;
+    # THIS SERVER HOLDS NO VFD TOKEN. Direct (VFD_ACCESS_TOKEN) stays possible
+    # for an address VFD whitelists. Exactly one of the two, never both.
+    require_env VFD_BASE_URL
+    [[ $VFD_BASE_URL == https://* ]] || die "VFD_BASE_URL must be https"
+    if [[ -n ${VFD_PROXY_KEY:-} && -n ${VFD_ACCESS_TOKEN:-} ]]; then
+      die "VFD_PROXY_KEY and VFD_ACCESS_TOKEN are both in $ARGON_ENV: through the relay this server holds no token; remove VFD_ACCESS_TOKEN"
+    elif [[ -n ${VFD_PROXY_KEY:-} ]]; then
+      [[ $VFD_PROXY_KEY =~ ^[0-9a-fA-F]{64,}$ ]] || die "VFD_PROXY_KEY must be at least 32 bytes as hex (openssl rand -hex 32)"
+      vfd_env="ARGON_VFD=vfd
 VFD_BASE_URL=${VFD_BASE_URL}
-VFD_ACCESS_TOKEN=${VFD_ACCESS_TOKEN}" ;;
+VFD_PROXY_KEY=${VFD_PROXY_KEY}"
+    else
+      require_env VFD_ACCESS_TOKEN
+      vfd_env="ARGON_VFD=vfd
+VFD_BASE_URL=${VFD_BASE_URL}
+VFD_ACCESS_TOKEN=${VFD_ACCESS_TOKEN}"
+    fi ;;
   *) die "ARGON_VFD must be vfd or off: add ARGON_VFD=off to $ARGON_ENV until VFD's credentials are there (deploy/README.md, the wallet)" ;;
 esac
 cat > /etc/argon/wallet.env <<EOF

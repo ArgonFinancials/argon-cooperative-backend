@@ -36,12 +36,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/argon/backend/internal/vfd"
+	"github.com/argon/backend/internal/vfdsign"
 )
 
 const (
@@ -600,5 +602,110 @@ func vfdHistoryMode(w http.ResponseWriter, r *http.Request, mode string) {
 		w.Write([]byte(`<html>502</html>`))
 	default:
 		w.Write([]byte(`{"status":"00","message":"Successful","data":{"content":[]}}`))
+	}
+}
+
+// ---- THROUGH THE RELAY (cmd/vfd-proxy, 2026-11-28) --------------------------------
+
+var relayKey = []byte("relay-key-for-the-tests-only-0123456789abcdef")
+
+// fakeRelay: the relay as the client meets it. Every call must be signed with
+// relayKey and carry no token; then it answers as `mode` says. Its clock is
+// `skew` seconds behind.
+func fakeRelay(t *testing.T, mode string, skew int64) (*httptest.Server, *int) {
+	t.Helper()
+	calls := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls++
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set(vfdsign.HeaderProxyTime, strconv.FormatInt(time.Now().Unix()-skew, 10))
+		ts, _ := strconv.ParseInt(r.Header.Get(vfdsign.HeaderTime), 10, 64)
+		if r.Header.Get("AccessToken") != "" || !vfdsign.Verify(relayKey, r.Method, r.URL.EscapedPath(), r.URL.RawQuery, ts, body, r.Header.Get(vfdsign.HeaderSignature)) {
+			w.Header().Set(vfdsign.HeaderProxy, "bad_signature")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"proxy":"argon-vfd-proxy","outcome":"bad_signature"}`))
+			return
+		}
+		switch mode {
+		case "refuse":
+			w.Header().Set(vfdsign.HeaderProxy, "not_allowed")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"proxy":"argon-vfd-proxy","outcome":"not_allowed"}`))
+		case "unauthorised":
+			w.Header().Set(vfdsign.HeaderProxy, "stale")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"proxy":"argon-vfd-proxy","outcome":"stale"}`))
+		case "timeout":
+			w.Header().Set(vfdsign.HeaderProxy, "vfd_timeout")
+			w.WriteHeader(http.StatusGatewayTimeout)
+			w.Write([]byte(`{"proxy":"argon-vfd-proxy","outcome":"vfd_timeout"}`))
+		default: // VFD's own answer, passed through
+			w.Write([]byte(`{"status":"00","message":"Account found","data":{"name":"ADEBAYO FOLAKE","clientId":"C-123","account":{"number":"` + memberAcct + `","id":"A-456"}}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+func relayClient(t *testing.T, url string, logs *bytes.Buffer) vfd.Client {
+	t.Helper()
+	c, err := newVFDClient(vfd.Config{BaseURL: url, ProxyKey: relayKey, Timeout: 2 * time.Second,
+		Log: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	if err != nil {
+		t.Fatalf("NOT BUILT — a client through the relay, with its key and no token: %v", err)
+	}
+	return c
+}
+
+// THE RISKIEST PIECE (the reviewer, 2026-11-28): the relay's own answer is
+// never VFD's. A relay 401 read as VFD's refusal would tell a member their
+// bank details are wrong when nothing was ever asked.
+func TestVfdClient23_ARelayRefusalIsNeverVFDsAnswer(t *testing.T) {
+	for _, mode := range []string{"refuse", "unauthorised"} {
+		srv, _ := fakeRelay(t, mode, 0)
+		var logs bytes.Buffer
+		c := relayClient(t, srv.URL, &logs)
+		l, err := c.NameEnquiry(context.Background(), otherBankAcc, "000013")
+		if err != nil || l.Outcome != vfd.NotReached {
+			t.Fatalf("WRONG OUTCOME — %s: a name enquiry the relay refused reads %q (%v); want not_reached (nothing was asked of VFD: never \"no such account\")", mode, l.Outcome, err)
+		}
+		q, err := c.Requery(context.Background(), "COOP-0b1f2e3d4c5b6a79")
+		if err != nil || q.State != vfd.StateUnknown {
+			t.Fatalf("WRONG STATE — %s: a requery the relay refused reads %q (%v); want unknown (never not_found: that releases money)", mode, q.State, err)
+		}
+	}
+}
+
+// The relay gave up waiting for VFD: VFD may have acted. Unknown, never "not sent".
+func TestVfdClient24_ARelayTimeoutMayHaveActed(t *testing.T) {
+	srv, _ := fakeRelay(t, "timeout", 0)
+	var logs bytes.Buffer
+	s, err := relayClient(t, srv.URL, &logs).Transfer(context.Background(), vfdATransfer(memberParty))
+	if err != nil || s.Outcome != vfd.Unknown {
+		t.Fatalf("WRONG OUTCOME — a send the relay timed out on reads %q (%v); want unknown (VFD may have sent it: asked about, never resent)", s.Outcome, err)
+	}
+}
+
+// Through the relay, every call is signed and no token is sent (this server
+// holds none); a client with both a token and a key is not built.
+func TestVfdClient25_ThroughTheRelayCallsAreSignedAndCarryNoToken(t *testing.T) {
+	srv, calls := fakeRelay(t, "pass", 0)
+	var logs bytes.Buffer
+	l, err := relayClient(t, srv.URL, &logs).NameEnquiry(context.Background(), otherBankAcc, "000013")
+	if err != nil || l.Outcome != vfd.Accepted || *calls != 1 {
+		t.Fatalf("REFUSED — a signed name enquiry through the relay reads %q (%v, %d calls); want accepted, VFD's answer", l.Outcome, err, *calls)
+	}
+	if c, err := newVFDClient(vfd.Config{BaseURL: srv.URL, AccessToken: vfdToken, ProxyKey: relayKey}); err == nil || c != nil {
+		t.Fatalf("BUILT — a client with both VFD's token and the relay's key; through the relay this server holds no token")
+	}
+}
+
+// The relay's clock 30 seconds off: told now, long before signed calls fail at 60.
+func TestVfdClient26_TheRelaysClockDriftIsTold(t *testing.T) {
+	srv, _ := fakeRelay(t, "pass", 30)
+	var logs bytes.Buffer
+	relayClient(t, srv.URL, &logs).NameEnquiry(context.Background(), otherBankAcc, "000013")
+	if !strings.Contains(logs.String(), "clock skew") {
+		t.Fatalf("UNTOLD — the relay's clock is 30 seconds off and the log says nothing of it: %s", logs.String())
 	}
 }

@@ -1,0 +1,41 @@
+[Unit]
+Description=Argon VFD relay: the cooperative's five VFD calls, signed, through this server's address
+# Installed on the WALLET's server, not the cooperative's (deploy/vfd-proxy/README.md).
+# Its own user, its own env file; it reads nothing of the wallet's.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argon-vfd-proxy
+Group=argon-vfd-proxy
+# Root-only (0600 root:root): systemd reads it as root and hands the values
+# to the process. The relay's user cannot read the file itself.
+EnvironmentFile=/etc/argon-vfd-proxy/proxy.env
+ExecStart=/opt/argon-vfd-proxy/vfd-proxy
+Restart=on-failure
+RestartSec=5
+
+# The record: the only place it writes.
+LogsDirectory=argon-vfd-proxy
+LogsDirectoryMode=0700
+UMask=0077
+
+# Nothing else on this box is its business.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

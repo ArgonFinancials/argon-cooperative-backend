@@ -1,0 +1,13 @@
+# /etc/logrotate.d/argon-vfd-proxy. The relay opens its record once, with
+# O_APPEND: truncating the copy in place is safe, and nothing is lost but the
+# instant between copy and truncate. Kept 90 days, then gone.
+/var/log/argon-vfd-proxy/requests.log {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0600 argon-vfd-proxy argon-vfd-proxy
+}

@@ -44,9 +44,13 @@ const IntraBank = "090110"
 
 type Config struct {
 	BaseURL     string // https in production (config refuses anything else)
-	AccessToken string // VFD's AccessToken header
-	Timeout     time.Duration
-	Log         *slog.Logger
+	AccessToken string // VFD's AccessToken header: calling VFD directly
+	// ProxyKey: calling VFD through the relay on the wallet's server
+	// (cmd/vfd-proxy, 2026-11-28) instead: every call signed with this key,
+	// and NO token held here. Exactly one of AccessToken and ProxyKey.
+	ProxyKey []byte
+	Timeout  time.Duration
+	Log      *slog.Logger
 }
 
 // Outcome of a call that asks VFD to do something.

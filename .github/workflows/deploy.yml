@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ["0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", stepup, api, batch, stepup_api, signin_api, books, loans_api, approvals_api, money_api, me_api, requests_api, balance_api, cors_api, spec_api, session_api, sms, sms_api, pin, locks_api, enrol, enrol_api, vfd, wallet, webhook_api, members_api, claims_api, resolutions_api, email_api, "0035", demo, "0036", "0037", "0038", status_api, "0039", "0040", bank_api, "0041", "0042", disputes_api, reports_api, "0043", corrections_api, "0044", closes_api]
+        suite: ["0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", stepup, api, batch, stepup_api, signin_api, books, loans_api, approvals_api, money_api, me_api, requests_api, balance_api, cors_api, spec_api, session_api, sms, sms_api, pin, locks_api, enrol, enrol_api, vfd, wallet, webhook_api, members_api, claims_api, resolutions_api, email_api, "0035", demo, "0036", "0037", "0038", status_api, "0039", "0040", bank_api, "0041", "0042", disputes_api, reports_api, "0043", corrections_api, "0044", closes_api, vfdproxy]
     services:
       postgres:
         image: postgres:18-trixie
@@ -203,6 +203,13 @@ jobs:
       - name: Held payouts alert, every rule sabotaged
         if: matrix.suite == '0039'
         run: bash test/ops/sabotage_vfd_holds.sh
+      # The VFD relay's clock drifting is told at 10 seconds (67, 2026-11-28).
+      - name: VFD relay clock alert (67-check-vfd-relay-clock.sh)
+        if: matrix.suite == 'vfdproxy'
+        run: bash test/ops/vfd_relay_clock_test.sh
+      - name: VFD relay clock alert, every rule sabotaged
+        if: matrix.suite == 'vfdproxy'
+        run: bash test/ops/sabotage_vfd_relay_clock.sh
 
   # The client install's FAILURE PATH, made to fire on every push (a failure
   # path is proven by making it fire, finding 47). apt is pointed at a proxy

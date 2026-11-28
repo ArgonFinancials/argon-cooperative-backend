@@ -160,6 +160,17 @@ T="V13 the real lookup refuses a VFD address that is not https"
 out=$(VFD_BASE_URL=http://127.0.0.1:1 VFD_ACCESS_TOKEN=t "$BIN" vfd-account-lookup 1000000001 2>&1); rc=$?
 if ((rc != 2)); then red "exit $rc: $out"; else pass; fi
 
+# Through the VFD relay (deploy/vfd-proxy) this server holds the relay's key
+# and no VFD token: both at once is a server not moved over, refused.
+T="V14 the real lookup refuses VFD's token and the relay's key together"
+k=$(printf 'ab%.0s' {1..32})
+out=$(VFD_BASE_URL=https://127.0.0.1:1 VFD_ACCESS_TOKEN=t VFD_PROXY_KEY=$k "$BIN" vfd-account-lookup 1000000001 2>&1); rc=$?
+if ((rc != 2)) || ! grep -q "exactly one" <<<"$out"; then red "exit $rc: $out"; else pass; fi
+
+T="V15 the real lookup refuses a relay key shorter than 32 bytes"
+out=$(VFD_BASE_URL=https://127.0.0.1:1 VFD_PROXY_KEY=abcd "$BIN" vfd-account-lookup 1000000001 2>&1); rc=$?
+if ((rc != 2)) || ! grep -q "32 bytes" <<<"$out"; then red "exit $rc: $out"; else pass; fi
+
 if [[ $(uname -s) != Linux ]]; then
   echo "  NOT RUN V11 V12: the stub's certificate is trusted through SSL_CERT_FILE, which Go honours on Linux only (CI runs them)"
   RED+=(V11-NOT-RUN V12-NOT-RUN)
