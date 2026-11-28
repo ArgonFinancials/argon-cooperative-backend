@@ -67,6 +67,14 @@ if [[ $which == site ]]; then
         try_files \$uri =404;
     }
 " ""
+  # The export's text sent uncompressed (the live sign-in, 2026-11-27).
+  sabotage tls_no_gzip "$L" "A16" "    gzip on;
+" ""
+  # Compressed, but without Vary: a shared cache serves gzip to anyone.
+  sabotage tls_no_vary "$L" "A16" "    gzip_vary on;
+" ""
+  # HTTP/1.1 only: six connections, six handshakes.
+  sabotage tls_no_http2 "nginx/argon-api-tls.conf.in" "A17" "listen @HTTPS_LISTEN@ ssl http2 default_server;" "listen @HTTPS_LISTEN@ ssl default_server;"
   # HSTS only where the server block says it (dropped from a location).
   sabotage tls_page_no_hsts "$L" "A08" "        add_header Strict-Transport-Security \"max-age=31536000\" always;
         add_header Cache-Control \"no-cache\" always;" "        add_header Cache-Control \"no-cache\" always;"

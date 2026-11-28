@@ -239,11 +239,11 @@ func (s *server) ListEntryCorrections(ctx context.Context, req ListEntryCorrecti
 	where, args := `c.society_id = $1`, []any{society}
 	if st := req.Params.State; st != nil {
 		switch *st {
-		case Waiting:
+		case ListEntryCorrectionsParamsStateWaiting:
 			where += ` AND k.id IS NULL`
-		case Confirmed:
+		case ListEntryCorrectionsParamsStateConfirmed:
 			where += ` AND k.confirmed`
-		case Rejected:
+		case ListEntryCorrectionsParamsStateRejected:
 			where += ` AND NOT k.confirmed`
 		}
 	}

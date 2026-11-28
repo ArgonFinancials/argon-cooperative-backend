@@ -169,8 +169,14 @@ func (s *server) GetMemberStatement(ctx context.Context, req GetMemberStatementR
 		return nil, err
 	}
 
+	// Where the books are closed (0044): entries on or before it are final.
+	var closed *time.Time
+	if err := s.db.QueryRow(ctx, `SELECT society_closed_through($1)`, m.society).Scan(&closed); err != nil {
+		return nil, err
+	}
 	return GetMemberStatement200JSONResponse(MemberStatement{
-		MemberId: uuidOf(m.id), MemberNumber: m.number, MemberName: m.name, SocietyId: uuidOf(m.society),
+		BooksClosedThrough: dateOf(closed),
+		MemberId:           uuidOf(m.id), MemberNumber: m.number, MemberName: m.name, SocietyId: uuidOf(m.society),
 		Projection: projection, From: from, To: to,
 		OpeningSavingsBalanceKobo: SavingsBalance(strconv.FormatInt(opening, 10)),
 		ClosingSavingsBalanceKobo: SavingsBalance(strconv.FormatInt(balance, 10)),

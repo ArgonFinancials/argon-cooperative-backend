@@ -251,11 +251,11 @@ func (f *fakeAPI) ListEntryCorrections(ctx context.Context, req api.ListEntryCor
 	where, args := `c.society_id = $1`, []any{society}
 	if st := req.Params.State; st != nil && f.brk != "corr_queue_all" {
 		switch *st {
-		case api.Waiting:
+		case api.ListEntryCorrectionsParamsStateWaiting:
 			where += ` AND k.id IS NULL`
-		case api.Confirmed:
+		case api.ListEntryCorrectionsParamsStateConfirmed:
 			where += ` AND k.confirmed`
-		case api.Rejected:
+		case api.ListEntryCorrectionsParamsStateRejected:
 			where += ` AND NOT k.confirmed`
 		}
 	}

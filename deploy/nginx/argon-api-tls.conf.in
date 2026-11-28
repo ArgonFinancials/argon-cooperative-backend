@@ -39,8 +39,12 @@ map $http_origin $argon_cors_credentials {
 }
 
 # Any name that is not the API's: the handshake is refused, no certificate shown.
+# HTTP/2 is a property of the port, set once here for every name on it (the
+# API and the app): one connection per browser, not six, each with its own
+# TLS handshake (2026-11-27, measured on the live sign-in). The form that
+# nginx 1.24 (Ubuntu 24.04) takes; later versions accept it with a warning.
 server {
-    listen @HTTPS_LISTEN@ ssl default_server;
+    listen @HTTPS_LISTEN@ ssl http2 default_server;
     server_name _;
     ssl_reject_handshake on;
 }

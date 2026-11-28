@@ -16,6 +16,8 @@
 #     A12 nothing but GET/HEAD on 443                     A13 the API still answers on its own name (SNI)
 #     A14 a switched release is served without a reload (needs symlinks: Linux, CI)
 #   A15 an app template with its app values empty is a refusal
+#     A16 the export's text is gzipped when asked, Vary: Accept-Encoding
+#     A17 the TLS port offers HTTP/2 (ALPN h2)
 #
 #   bash test/ops/app_site_test.sh            (needs nginx, openssl, curl, python3)
 #   GL_DEPLOY=/path/to/deploy-copy            runs against another copy (sabotage runs)
@@ -59,7 +61,8 @@ export_rel() {
   echo "<p>home of $1</p>" >"$r/index.html"
   echo "<p>not found ($1)</p>" >"$r/404.html"
   echo "<p>entry page of $1</p>" >"$r/admin/ledger/entry.html"
-  echo "console.log('$1')" >"$r/_next/static/chunks/main-abc123.js"
+  # A chunk the size of a real one's start (gzip skips anything under 256 bytes).
+  { echo "console.log('$1');"; for i in $(seq 1 40); do echo "export function f$i(a,b){return a+b+$i}"; done; } >"$r/_next/static/chunks/main-abc123.js"
 }
 export_rel one; export_rel two
 ROOT="$W/www/releases/one"   # a plain directory; A14 switches a symlink where one can be made
@@ -252,6 +255,17 @@ if [[ $c != 403 ]]; then red "a POST answered $c"; else pass; fi
 T="A13 the API still answers on its own name and certificate beside the app (SNI)"
 c=$(API443 "https://$API:$HTTPS/healthz")
 if [[ $c != 200 ]] || ! body | grep -q '"stub": true'; then red "$c: $(body | head -c 120)"; else pass; fi
+
+T="A16 the export's text is compressed when the browser asks, and says it varies"
+c=$(A443 -H 'Accept-Encoding: gzip' "https://$APPD:$HTTPS/_next/static/chunks/main-abc123.js")
+if [[ $c != 200 ]]; then red "$c"
+elif [[ $(hdr Content-Encoding) != gzip ]]; then red "Content-Encoding is '$(hdr Content-Encoding)' (512 KB of JS and CSS went uncompressed on the live sign-in)"
+elif [[ $(hdr Vary) != *Accept-Encoding* ]]; then red "Vary is '$(hdr Vary)': a cache could hand gzip to a browser that cannot read it"
+else pass; fi
+
+T="A17 the TLS port offers HTTP/2 (one connection, one handshake), for the app's name"
+alpn=$(echo | openssl s_client -connect "127.0.0.1:$HTTPS" -servername "$APPD" -alpn h2,http/1.1 2>/dev/null | tr -d $'\r' | grep -ai '^ALPN protocol' || true)
+if [[ $alpn != *h2* ]]; then red "the server chose '${alpn:-no ALPN}', not h2"; else pass; fi
 
 T="A14 a switched release is served without a reload"
 if ((LINKS == 0)); then echo "  NOT RUN $T (this platform cannot make symlinks; CI runs it)"; RED+=(A14-NOT-RUN)

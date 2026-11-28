@@ -29,6 +29,16 @@ server {
     ssl_session_timeout 1h;
     ssl_session_tickets off;
 
+    # The export's text, compressed when the browser asks (2026-11-27: the
+    # live sign-in sent 512 KB of JS and CSS uncompressed). These files carry
+    # no secret; the API's JSON is NOT compressed: it carries session and CSRF
+    # tokens beside what a request can influence (BREACH), and is small.
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_types text/css application/javascript text/javascript application/json text/plain image/svg+xml;
+
     # A location that adds headers inherits none from the server: every
     # location below names all of its own, HSTS included.
     location ^~ /_next/static/ {

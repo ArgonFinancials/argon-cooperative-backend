@@ -397,7 +397,8 @@ func (f *fakeAPI) GetMemberStatement(ctx context.Context, req api.GetMemberState
 		out = append(out, r)
 	}
 	st := api.MemberStatement{
-		MemberId: uuidOf(m.id), MemberNumber: m.number, MemberName: m.name, SocietyId: uuidOf(m.society),
+		BooksClosedThrough: f.fpClosedThrough(ctx, m.society),
+		MemberId:           uuidOf(m.id), MemberNumber: m.number, MemberName: m.name, SocietyId: uuidOf(m.society),
 		Projection: api.MemberStatementProjection(projection), From: from, To: to,
 		OpeningSavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(opening, 10)),
 		ClosingSavingsBalanceKobo: api.SavingsBalance(strconv.FormatInt(run, 10)),

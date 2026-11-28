@@ -227,14 +227,76 @@ components:
         member's queried entry; dispute_correction_decision: a second officer
         confirming or rejecting it. entry_correction (0043): an officer proposing
         a reversal or an adjustment of an entry; entry_correction_decision: a
-        second officer confirming or rejecting it.
+        second officer confirming or rejecting it. period_close (0044): an
+        officer proposing to close the books through a date;
+        period_close_decision: a second officer confirming or rejecting it.
       enum: [ledger_batch, pin_change, member_reset, phone_change, lock_release,
              signatory_reset_request, signatory_phone_request, signatory_approval,
              guarantee, guarantee_withdrawal, approval_signature, approval_rejection,
              contribution_record, withdrawal_payout, withdrawal_authorisation,
              withdrawal_request, enrolment_issue, member_register, payment_resolution, member_email,
              member_status, member_bank_account, bank_name_confirmation, dispute_correction,
-             dispute_correction_decision, entry_correction, entry_correction_decision]
+             dispute_correction_decision, entry_correction, entry_correction_decision,
+             period_close, period_close_decision]
+
+    ProposePeriodClose:
+      type: object
+      required: [through, pinProofId]
+      properties:
+        through: { type: string, format: date, description: "Close the books through this day: today or earlier, later than any close before." }
+        pinProofId: { type: string, format: uuid, description: "The proposer's own proof, minted for period_close." }
+
+    DecidePeriodClose:
+      type: object
+      required: [confirmed, pinProofId]
+      properties:
+        confirmed: { type: boolean }
+        reason: { type: string, description: "Required when rejecting, 10 to 500 characters." }
+        pinProofId: { type: string, format: uuid, description: "The decider's own proof, minted for period_close_decision." }
+
+    PeriodClose:
+      type: object
+      additionalProperties: false
+      required: [closeId, through, proposedBy, proposedAt, state, decision]
+      properties:
+        closeId: { type: string, format: uuid }
+        through: { type: string, format: date }
+        proposedBy: { $ref: '#/components/schemas/EmailSetter' }
+        proposedAt: { type: string, format: date-time }
+        state: { type: string, enum: [waiting, confirmed, rejected] }
+        decision:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [confirmed, by, at, reason, trialBalance]
+          properties:
+            confirmed: { type: boolean }
+            by: { $ref: '#/components/schemas/EmailSetter' }
+            at: { type: string, format: date-time }
+            reason: { type: string, nullable: true }
+            trialBalance:
+              type: array
+              nullable: true
+              description: "A confirmation: every account's balance through the date, as the database kept it (summing to zero)."
+              items: { $ref: '#/components/schemas/ClosedBalance' }
+
+    ClosedBalance:
+      type: object
+      additionalProperties: false
+      required: [code, name, kind, balanceKobo]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        balanceKobo: { $ref: '#/components/schemas/Kobo' }
+
+    PeriodCloses:
+      type: object
+      additionalProperties: false
+      required: [closedThrough, items]
+      properties:
+        closedThrough: { type: string, format: date, nullable: true, description: "The books are closed through this date; null: never closed." }
+        items: { type: array, items: { $ref: '#/components/schemas/PeriodClose' }, description: "Newest first." }
 
     CorrectionLine:
       type: object
@@ -1027,13 +1089,25 @@ components:
     MemberStatement:
       type: object
       required: [memberId, memberNumber, memberName, societyId, projection, from, to,
-                 openingSavingsBalanceKobo, closingSavingsBalanceKobo, chargedInPeriod, rows]
+                 openingSavingsBalanceKobo, closingSavingsBalanceKobo, chargedInPeriod, rows, booksClosedThrough]
       description: |
         ONE record, two projections. The member and an officer of the member's
         society are served by the same handler and the same query; the
         projection decides only whether attribution (postedBy) is included.
         Every figure is identical in both.
       properties:
+        booksClosedThrough:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            The society's books are closed through this date (0044): every
+            entry dated on or before it is final. A correction of one appears
+            as a NEW entry on the day it is made, with its reason, never as a
+            change to the closed month. null: no close yet. A screen says so:
+            "Your society's books are closed to 31 December 2026. Entries up
+            to then are final; a correction appears as a new entry on the day
+            it is made."
         memberId: { type: string, format: uuid }
         memberNumber: { type: string }
         memberName: { type: string }
@@ -3339,6 +3413,132 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /societies/{societyId}/period-closes:
+    post:
+      operationId: proposePeriodClose
+      x-argon-built: true
+      summary: "One officer proposes closing the books through a date, on their own PIN (0044: a second officer decides)"
+      description: |
+        LEDGER_CONTRACT §5. Closed means read-only: nothing is posted with a
+        value date on or before the date, nor undated. A correction still
+        posts, today. Confirmed only over books whose trial balance sums to
+        zero; the trial balance is kept with the confirmation.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProposePeriodClose' }
+      responses:
+        '201':
+          description: "Proposed: waiting for a second officer."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PeriodClose' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for period_close); not_permitted (not a current officer, or the auditor)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_waiting: a close waits for a second officer; not_forward: the books are already closed through that date or later."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "not_future: a close is through today or earlier."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: listPeriodCloses
+      x-argon-built: true
+      summary: "Where the society's books are closed, and every close proposed, newest first"
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: "The closes."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PeriodCloses' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such society, or one the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /period-closes/{closeId}/decisions:
+    post:
+      operationId: decidePeriodClose
+      x-argon-built: true
+      summary: "A second officer confirms (the books are closed now) or rejects (saying why) a proposed close"
+      security: [{ session: [] }]
+      parameters:
+        - { name: closeId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecidePeriodClose' }
+      responses:
+        '201':
+          description: "Decided."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PeriodClose' }
+        '400':
+          description: "bad_request."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: "No session, or one that is not valid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: "step_up_required (a proof for period_close_decision); not_permitted (not a current officer, or the auditor); second_officer_required (the caller proposed it)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: "No such close, or one of a society the caller is not an officer of."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "already_decided; not_forward (the books were closed further meanwhile); books_do_not_balance (the trial balance through the date does not sum to zero: a defect, the close refused)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "reason_required: a rejection says why."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /entries/{entryId}/corrections:
     post:
       operationId: proposeEntryCorrection

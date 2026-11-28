@@ -724,6 +724,13 @@ probe req P98 argon_app '42501.*permission denied for table entry_correction_dec
 probe req P99 argon_app '42501.*permission denied for table entry_corrections' "app rewrites a proposal's lines"   "UPDATE entry_corrections SET lines = '[]' WHERE false;"
 probe ctl K73 argon_app '' "control: the app reads proposals and decisions"   "SELECT count(*) FROM entry_corrections; SELECT count(*) FROM entry_correction_decisions;"
 fi
+# 0044: a period is closed by two officers, over a trial balance the database checks and keeps.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.period_closes') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P100 argon_app '42501.*permission denied for table accounting_periods' "app closes a period alone (0002's way)"   "UPDATE accounting_periods SET closed_at = now() WHERE false;"
+probe req P101 argon_app '42501.*permission denied for table period_close_decisions' "app supplies a close's trial balance"   "INSERT INTO period_close_decisions (close_id, confirmed, decided_by, decided_act, trial_balance) VALUES ($U1, true, $U1, $U1, '[]');"
+probe req P102 argon_app '42501.*permission denied for table period_closes' "app moves a close's date"   "UPDATE period_closes SET through = '2000-01-01' WHERE false;"
+probe ctl K74 argon_app '' "control: the app reads closes and their decisions"   "SELECT count(*) FROM period_closes; SELECT count(*) FROM period_close_decisions; SELECT society_closed_through($S);"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

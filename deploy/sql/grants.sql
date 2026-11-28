@@ -407,5 +407,19 @@ BEGIN
   END IF;
 END $$;
 
+-- 0044: PERIOD CLOSE. The app records a close's proposal (the society, the
+-- date, the proposer's act) and its decision; the database checks the trial
+-- balance and keeps it (P101). A period is no longer closed by one person
+-- through 0002's accounting_periods (P100). Nothing is rewritten (P102).
+DO $$
+BEGIN
+  IF to_regclass('public.period_closes') IS NOT NULL THEN
+    REVOKE UPDATE ON accounting_periods FROM argon_app;
+    GRANT SELECT ON period_closes, period_close_decisions TO argon_app;
+    GRANT INSERT (id, society_id, through, proposed_by, proposed_act) ON period_closes TO argon_app;
+    GRANT INSERT (id, close_id, confirmed, decided_by, decided_act, reason) ON period_close_decisions TO argon_app;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;
