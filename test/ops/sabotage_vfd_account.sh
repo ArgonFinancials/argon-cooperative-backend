@@ -72,7 +72,9 @@ script_break number_unchecked "V09" '[[ $number == "${v[account]}" ]] ||' 'true 
 script_break client_unchecked "V10" 'blank "$client" && die' 'false && die'
 
 # ---- the lookup ----------------------------------------------------------------
-lookup_break http_ok "V13" 'if !strings.HasPrefix(base, "https://") || token == "" {' 'if false && !strings.HasPrefix(base, "https://") || token == "" {'
+lookup_break http_ok "V13" 'if !strings.HasPrefix(base, "https://") || (token == "") == (key == nil) {' 'if false && !strings.HasPrefix(base, "https://") || (token == "") == (key == nil) {'
+# A relay key too short to be a key (the VFD relay, 2026-11-28).
+lookup_break short_key_ok "V15" 'if err != nil || len(b) < 32 {' 'if err != nil || len(b) < 1 {'
 if [[ $(uname -s) == Linux ]]; then
   # The BVN leaks into what is printed (here, beside the name).
   lookup_break bvn_printed "V11" 'a.AccountNo, a.Name, a.ClientID, a.AccountID = l.Party.AccountNo, l.Party.Name, l.Party.ClientID, l.Party.AccountID' 'a.AccountNo, a.Name, a.ClientID, a.AccountID = l.Party.AccountNo, l.Party.Name+" "+l.Party.BVN, l.Party.ClientID, l.Party.AccountID'
