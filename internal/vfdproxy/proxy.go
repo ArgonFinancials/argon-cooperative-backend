@@ -7,11 +7,11 @@
 // The token that moves money from the pool lives here alone, in this
 // service's own root-only env file. The cooperative's server holds only a key
 // that signs requests to this relay. Someone who takes over the cooperative's
-// server gets five calls, from one address, and nothing portable: no token to
+// server gets six calls, from one address, and nothing portable: no token to
 // carry away and use from anywhere else. Approving a second address at VFD
 // would have meant a second copy of the token. That is why the relay exists.
 //
-// WHAT IT ALLOWS: exactly the cooperative's five calls (allowed, below);
+// WHAT IT ALLOWS: exactly the cooperative's six calls (allowed, below);
 // anything else is refused before it reaches VFD.
 //
 // HOW IT KNOWS THE CALLER: nginx and the security group admit 54.85.168.60
@@ -62,6 +62,7 @@ var allowed = map[string]bool{
 	"GET /transactions":         true, // ask about a transfer
 	"GET /account/enquiry":      true, // the pool's details
 	"GET /account/transactions": true, // an account's history
+	"GET /bank":                 true, // VFD's list of banks (0046, 2026-11-28)
 }
 
 // bodyCap: the most of a request or an answer read (VFD's are a few hundred bytes).
@@ -145,7 +146,7 @@ func (p *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	path, query := r.URL.EscapedPath(), r.URL.RawQuery
 	if !allowed[r.Method+" "+path] {
-		p.refuse(w, r, body, start, id, http.StatusForbidden, "not_allowed", "this relay passes the cooperative's five VFD calls and nothing else")
+		p.refuse(w, r, body, start, id, http.StatusForbidden, "not_allowed", "this relay passes the cooperative's six VFD calls and nothing else")
 		return
 	}
 	ts, err := strconv.ParseInt(r.Header.Get(vfdsign.HeaderTime), 10, 64)

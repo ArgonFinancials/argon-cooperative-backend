@@ -28,6 +28,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -182,12 +183,43 @@ type act struct {
 
 func (a *authT) act(x act) (string, error) {
 	var id string
+	// From 0045 (2026-11-28) a phone change says the member is present, and
+	// every approval states its reason. On a schema without the column, as
+	// proof() does for act kinds, nothing extra is written.
+	if schemaHasMemberPresent() {
+		var present *bool
+		if x.kind == "phone_change" || x.kind == "signatory_phone_request" {
+			present = rpYes
+		}
+		if x.kind == "signatory_approval" && x.reason == "" {
+			x.reason = "I know them; they asked me in person today"
+		}
+		err := a.c.QueryRow(bg(), `INSERT INTO credential_acts
+			  (kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id, new_phone, new_pin_hash, request_id, reason, at, member_present)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, auth_now()), $12) RETURNING id`,
+			x.kind, x.actor, nz(x.actorSession), nz(x.proof), nz(x.targetUser), nz(x.targetMember),
+			nz(x.newPhone), nz(x.newPin), nz(x.request), nz(x.reason), nz(x.at), present).Scan(&id)
+		return id, err
+	}
 	err := a.c.QueryRow(bg(), `INSERT INTO credential_acts
 		  (kind, actor_user_id, actor_session_id, proof_id, target_user_id, target_member_id, new_phone, new_pin_hash, request_id, reason, at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, auth_now())) RETURNING id`,
 		x.kind, x.actor, nz(x.actorSession), nz(x.proof), nz(x.targetUser), nz(x.targetMember),
 		nz(x.newPhone), nz(x.newPin), nz(x.request), nz(x.reason), nz(x.at)).Scan(&id)
 	return id, err
+}
+
+var (
+	memberPresentOnce sync.Once
+	memberPresentCol  bool
+)
+
+func schemaHasMemberPresent() bool {
+	memberPresentOnce.Do(func() {
+		db.QueryRow(bg(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'credential_acts' AND column_name = 'member_present')`).Scan(&memberPresentCol)
+	})
+	return memberPresentCol
 }
 
 const why = "Member locked out after changing phones; identity confirmed in person at the branch"
@@ -622,7 +654,12 @@ func TestAuthE5_AppliedNumberMustBeTheRecordedNumber(t *testing.T) {
 	recorded, applied := unregistered(), unregistered()
 	proof := a.proof(o.user, "pin", "phone_change") // before the transaction: a proof is never minted where it is spent (0005)
 	err := a.tx(func(x pgx.Tx) error {
-		if _, err := x.Exec(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id, target_member_id, new_phone, reason)
+		if schemaHasMemberPresent() {
+			if _, err := x.Exec(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id, target_member_id, new_phone, reason, member_present)
+				VALUES ('phone_change', $1, $2, $3, $4, $5, true)`, o.user, proof, m.member, recorded, why); err != nil {
+				return err
+			}
+		} else if _, err := x.Exec(bg(), `INSERT INTO credential_acts (kind, actor_user_id, proof_id, target_member_id, new_phone, reason)
 			VALUES ('phone_change', $1, $2, $3, $4, $5)`, o.user, proof, m.member, recorded, why); err != nil {
 			return err
 		}

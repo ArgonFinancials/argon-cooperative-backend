@@ -745,9 +745,9 @@ VFD_PROXY_KEY=...                                  # openssl rand -hex 32; the s
 
 VFD accepts calls only from the wallet's server address. The cooperative's calls therefore go through a relay on that server: `cmd/vfd-proxy`, built and tested in this repository, and installed there as its own service under its own user.
 
-**This server no longer holds VFD's token at all.** It holds a signing key. That key opens five calls, only from 54.85.168.60, and is worth nothing anywhere else. Someone who takes this server gets five calls from one address, and nothing they can take away and use. This is the strongest reason for the relay over asking VFD to whitelist a second address.
+**This server no longer holds VFD's token at all.** It holds a signing key. That key opens six calls, only from 54.85.168.60, and is worth nothing anywhere else. Someone who takes this server gets five calls from one address, and nothing they can take away and use. This is the strongest reason for the relay over asking VFD to whitelist a second address.
 
-- **Allowlist.** The relay passes the five calls. It never interprets, retries or decides.
+- **Allowlist.** The relay passes the six calls (the sixth, `GET /bank`, added 2026-11-28 for VFD's list of banks). It never interprets, retries or decides.
 - **VFD's answers.** VFD's answer comes back byte for byte.
 - **The relay's own answers.** These are marked `X-Argon-Proxy`. The client reads them as "VFD not reached", except `vfd_timeout`, which it reads as "unknown". It never reads them as VFD's own answer.
 - **Clocks.** `67-check-vfd-relay-clock.sh` runs on the freshness timer. It alerts when the two clocks are more than 10 seconds apart; signed calls fail at 60.
@@ -759,6 +759,14 @@ Then `30-install-api.sh` writes `/etc/argon/wallet.env`, and the worker is start
 ```bash
 cd /opt/argon/src && sudo docker compose --env-file /etc/argon/deploy.env -f deploy/compose/docker-compose.prod.yml --profile wallet up -d wallet
 ```
+
+### A changed phone number: the old phone is told (`68-check-phone-notices.sh`, 0045)
+
+The secretary changes a member's number, with the member present. The old number is sent an SMS saying it changed and who changed it (the API, after the change, through the same Termii sender as sign-in codes; with `ARGON_SMS=refusing` every such notice is recorded as `no_sender`). An old phone that was not told is recorded, shown to the society's officers, and alerted on by `68-check-phone-notices.sh` on the freshness timer, which also alerts on a notice still waiting after 15 minutes (the API stopped between the change and the send). **On that alert: call the society and confirm with the member, in person, that they asked for the change.** A number is how a member signs in, so a change nobody asked for is an account taken over.
+
+### VFD's list of banks (0046)
+
+The wallet worker takes VFD's list (`GET /bank`, through the relay) when the one kept is a day old, and `GET /banks` serves it to the app for choosing a bank code. Until the first list is taken, `GET /banks` answers 503 `banks_unavailable` and the bank code is typed.
 
 ### A society's VFD account: the operator (`48-society-vfd-account.sh`)
 

@@ -55,6 +55,9 @@ import (
 // Worker pays and asks. Tick does one round; a caller runs it on a schedule.
 type Worker interface {
 	Tick(ctx context.Context) (Round, error)
+	// RefreshBanks: VFD's list of banks, taken when none kept is under a
+	// day old (0046); how many banks were kept (0: none taken).
+	RefreshBanks(ctx context.Context) (int, error)
 }
 
 // Round: what one tick did, for the log and the tests.
@@ -88,6 +91,8 @@ type Config struct {
 	// never sent at all). It is recorded as an unknown send, and asked about.
 	// Zero: two minutes.
 	LostAfter time.Duration
+	// BanksEvery: how often VFD's list of banks is taken (0046). Zero: a day.
+	BanksEvery time.Duration
 	// Society: one society's holds and transfers only; empty, every society.
 	// Production runs one worker for all; the tests run one per world.
 	Society string
@@ -121,6 +126,9 @@ func New(cfg Config) (Worker, error) {
 	if cfg.LostAfter <= 0 {
 		cfg.LostAfter = 2 * time.Minute
 	}
+	if cfg.BanksEvery <= 0 {
+		cfg.BanksEvery = 24 * time.Hour
+	}
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
@@ -151,6 +159,48 @@ func (w *worker) Tick(ctx context.Context) (Round, error) {
 		return r, fmt.Errorf("wallet: matching claims a race missed: %w", err)
 	}
 	return r, w.sweep(ctx, &r)
+}
+
+// RefreshBanks: VFD's list of banks (GET /bank), for a member choosing their
+// bank's code (0046, the reviewer: "VFD's own list, cached"). Taken when the
+// newest list kept is BanksEvery old (a day) or there is none, and kept whole: the list
+// and its banks in one transaction. VFD refusing or not answering: nothing
+// written, the list kept is still served, and it is asked again next time.
+func (w *worker) RefreshBanks(ctx context.Context) (int, error) {
+	var fresh bool
+	if err := w.cfg.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM vfd_bank_lists WHERE taken_at > now() - make_interval(secs => $1))`, w.cfg.BanksEvery.Seconds()).Scan(&fresh); err != nil {
+		return 0, fmt.Errorf("wallet: reading the bank list: %w", err)
+	}
+	if fresh {
+		return 0, nil
+	}
+	got, err := w.cfg.VFD.Banks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if got.Outcome != vfd.Accepted {
+		w.log.ErrorContext(ctx, "VFD gave no list of banks; the one kept is still served", "outcome", got.Outcome, "code", got.Code)
+		return 0, nil
+	}
+	err = pgx.BeginFunc(ctx, w.cfg.DB, func(x pgx.Tx) error {
+		var list string
+		if err := x.QueryRow(ctx, `INSERT INTO vfd_bank_lists (bank_count) VALUES ($1) RETURNING id::text`, len(got.Banks)).Scan(&list); err != nil {
+			return err
+		}
+		for _, b := range got.Banks {
+			if _, err := x.Exec(ctx, `INSERT INTO vfd_banks (list_id, code, name) VALUES ($1, $2, $3)`, list, b.Code, b.Name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("wallet: keeping VFD's bank list: %w", err)
+	}
+	if got.Skipped > 0 {
+		w.log.WarnContext(ctx, "VFD's bank list had entries with no code, no name, or a code twice; left out", "skipped", got.Skipped)
+	}
+	return len(got.Banks), nil
 }
 
 // pool: Argon's VFD pool (§1.1), as recorded, or recorded now from VFD's

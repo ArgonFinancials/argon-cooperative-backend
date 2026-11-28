@@ -421,5 +421,32 @@ BEGIN
   END IF;
 END $$;
 
+-- 0045: A FORGOTTEN PIN AND A CHANGED PHONE. The app records the act with the
+-- secretary's attestation that the member is present; the database writes
+-- the notice to the old number (the app never writes one: P103) and the app
+-- records what came of sending it, once (P104).
+DO $$
+BEGIN
+  IF to_regclass('public.phone_change_notices') IS NOT NULL THEN
+    GRANT SELECT (member_present), INSERT (member_present) ON credential_acts TO argon_app;
+    GRANT SELECT ON phone_change_notices, phone_change_notice_sends TO argon_app;
+    GRANT INSERT (id, notice_id, outcome, provider_message_id, provider_code) ON phone_change_notice_sends TO argon_app;
+  END IF;
+END $$;
+
+-- 0046: THE BANKS AS VFD LISTS THEM. The wallet takes the list (P105: the app
+-- never writes one); the app reads the newest.
+DO $$
+BEGIN
+  IF to_regclass('public.vfd_bank_lists') IS NOT NULL THEN
+    GRANT SELECT ON vfd_banks_current TO argon_app;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'argon_wallet') THEN
+      GRANT SELECT ON vfd_bank_lists, vfd_banks TO argon_wallet;
+      GRANT INSERT (id, bank_count) ON vfd_bank_lists TO argon_wallet;
+      GRANT INSERT (list_id, code, name) ON vfd_banks TO argon_wallet;
+    END IF;
+  END IF;
+END $$;
+
 -- migrate's bookkeeping is not the app's business.
 REVOKE ALL ON schema_migrations FROM argon_app;

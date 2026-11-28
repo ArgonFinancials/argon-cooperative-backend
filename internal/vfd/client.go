@@ -331,6 +331,44 @@ func (c *client) Pool(ctx context.Context) (Pool, error) {
 	return out, nil
 }
 
+func (c *client) Banks(ctx context.Context) (BankList, error) {
+	a := c.call(ctx, "bank list", http.MethodGet, "/bank", nil, nil)
+	out := BankList{Outcome: a.outcome}
+	if a.outcome == "" {
+		e, ok := read(a)
+		var d struct {
+			Bank []struct {
+				Code string `json:"code"`
+				Name string `json:"name"`
+			} `json:"bank"`
+		}
+		dataOK := ok && len(e.Data) > 0 && json.Unmarshal(e.Data, &d) == nil
+		switch {
+		case !ok:
+			out = BankList{Outcome: Unknown, Code: fmt.Sprintf("http_%d", a.status)}
+		case a.status >= 400 || e.Status != "00" || !dataOK:
+			out = BankList{Outcome: Refused, Code: e.Status}
+		default:
+			out = BankList{Outcome: Accepted, Code: e.Status}
+			seen := map[string]bool{}
+			for _, b := range d.Bank {
+				code, name := strings.TrimSpace(b.Code), strings.TrimSpace(b.Name)
+				if code == "" || name == "" || seen[code] {
+					out.Skipped++
+					continue
+				}
+				seen[code] = true
+				out.Banks = append(out.Banks, Bank{Code: code, Name: name})
+			}
+			if len(out.Banks) == 0 {
+				out = BankList{Outcome: Refused, Code: e.Status, Skipped: out.Skipped}
+			}
+		}
+	}
+	c.log.InfoContext(ctx, "vfd bank list", "outcome", out.Outcome, "code", out.Code, "banks", len(out.Banks), "skipped", out.Skipped)
+	return out, nil
+}
+
 func (c *client) History(ctx context.Context, accountNo string, from, to time.Time, page int) (History, error) {
 	if !tenDigits.MatchString(accountNo) {
 		return History{}, errors.New("vfd: an account's history names a ten-digit account")

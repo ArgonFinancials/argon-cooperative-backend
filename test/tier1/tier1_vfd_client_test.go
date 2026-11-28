@@ -132,6 +132,10 @@ func vfdAnswerMode(w http.ResponseWriter, mode string) {
 		w.Write([]byte(`{"status":"00","message":"Account Details","data":{"accountId":"P-ID","client":"ARGON FINANCIALS LIMITED","clientId":"P-CLIENT"}}`))
 	case "pool_refused":
 		w.Write([]byte(`{"status":"99","message":"Unauthorized"}`))
+	case "banks_ok": // as VFD gives it, with one entry nameless and one code twice
+		w.Write([]byte(`{"status":"00","message":"Banks","data":{"bank":[{"id":"1","code":"000013","name":"GUARANTY TRUST BANK"},{"id":"2","code":"000016","name":"FIRST BANK OF NIGERIA"},{"id":"3","code":"000099","name":" "},{"id":"4","code":"000013","name":"GTBANK AGAIN"}]}}`))
+	case "banks_refused": // a list, under a status that is not 00: never taken
+		w.Write([]byte(`{"status":"99","message":"Unauthorized","data":{"bank":[{"id":"1","code":"000013","name":"GUARANTY TRUST BANK"}]}}`))
 	case "requery_no_txn":
 		w.Write([]byte(`{"status":"01","message":"There is no transaction with this reference"}`))
 	case "enquiry_ok":
@@ -707,5 +711,23 @@ func TestVfdClient26_TheRelaysClockDriftIsTold(t *testing.T) {
 	relayClient(t, srv.URL, &logs).NameEnquiry(context.Background(), otherBankAcc, "000013")
 	if !strings.Contains(logs.String(), "clock skew") {
 		t.Fatalf("UNTOLD — the relay's clock is 30 seconds off and the log says nothing of it: %s", logs.String())
+	}
+}
+
+// ---- VFD'S LIST OF BANKS (0046, 2026-11-28) ------------------------------------
+
+// The list is VFD's only on its 00; an entry with no name, or a code seen
+// already, is left out, never guessed.
+func TestVfdClient27_TheBankListIsVFDsOnlyOnZeroZero(t *testing.T) {
+	srv := newFakeVFD(t, map[string]string{"/bank": "banks_ok"})
+	var logs bytes.Buffer
+	l, err := vfdClientFor(t, srv.srv.URL, &logs).Banks(context.Background())
+	if err != nil || l.Outcome != vfd.Accepted || len(l.Banks) != 2 || l.Banks[0] != (vfd.Bank{Code: "000013", Name: "GUARANTY TRUST BANK"}) || l.Skipped != 2 {
+		t.Fatalf("WRONG LIST — %+v (%v); want accepted, the two whole banks as VFD named them, two entries left out", l, err)
+	}
+	srv2 := newFakeVFD(t, map[string]string{"/bank": "banks_refused"})
+	l, err = vfdClientFor(t, srv2.srv.URL, &logs).Banks(context.Background())
+	if err != nil || l.Outcome != vfd.Refused || len(l.Banks) != 0 {
+		t.Fatalf("TAKEN — a list under status 99 reads %+v (%v); want refused, no banks", l, err)
 	}
 }

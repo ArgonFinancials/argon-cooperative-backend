@@ -680,3 +680,38 @@ func deadVFD(t *testing.T) string {
 	})
 	return f.srv.URL
 }
+
+// ---- VFD'S LIST OF BANKS (0046, 2026-11-28) ------------------------------------
+
+func bankListsTaken(t *testing.T) int {
+	t.Helper()
+	var n int
+	fixture(t, db.QueryRow(bg(), `SELECT count(*) FROM vfd_bank_lists`).Scan(&n), "the lists")
+	return n
+}
+
+// The list is taken when the newest is older than BanksEvery, kept whole,
+// and not taken again while it is fresh; a refusal writes nothing.
+func TestWalletWorker21_VFDsBankListIsTakenWholeAndOnlyWhenOld(t *testing.T) {
+	w := newWalletWorld(t)
+	every := func(d time.Duration) { walletCfg = func(c *wallet.Config) { c.BanksEvery = d } }
+	before := bankListsTaken(t)
+	f := newSwitchVFD(t, modes(map[string]string{"/bank": "banks_refused"}))
+	every(time.Microsecond)
+	n, err := walletWorkerFor(t, w.c.s.id, f.srv.URL).RefreshBanks(bg())
+	if err != nil || n != 0 || bankListsTaken(t) != before || f.count("/bank") != 1 {
+		t.Fatalf("TAKEN — VFD refused the list: %d banks kept (%v), %d lists (was %d), VFD asked %d times; want VFD asked, nothing kept", n, err, bankListsTaken(t), before, f.count("/bank"))
+	}
+	f.set("/bank", "banks_ok")
+	every(time.Microsecond)
+	n, err = walletWorkerFor(t, w.c.s.id, f.srv.URL).RefreshBanks(bg())
+	got := servedBanks(t)
+	if err != nil || n != 2 || len(got) != 2 || got["000013"] != "GUARANTY TRUST BANK" || got["000016"] != "FIRST BANK OF NIGERIA" {
+		t.Fatalf("NOT TAKEN — VFD gave its list: %d banks kept (%v), serving %v; want VFD's two whole banks", n, err, got)
+	}
+	every(time.Hour)
+	n, err = walletWorkerFor(t, w.c.s.id, f.srv.URL).RefreshBanks(bg())
+	if err != nil || n != 0 || f.count("/bank") != 2 {
+		t.Fatalf("TAKEN AGAIN — a list minutes old: %d banks kept (%v), VFD asked %d times in all; want it served as kept, VFD not asked", n, err, f.count("/bank"))
+	}
+}

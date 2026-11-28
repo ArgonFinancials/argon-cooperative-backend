@@ -45,6 +45,12 @@ func runWallet(log *slog.Logger) int {
 	t := time.NewTicker(cfg.Tick)
 	defer t.Stop()
 	for {
+		// VFD's list of banks, when the one kept is a day old (0046).
+		if n, err := w.RefreshBanks(ctx); err != nil {
+			log.Error("the bank list could not be taken; the next tick tries again", "err", err)
+		} else if n > 0 {
+			log.Info("VFD's bank list taken", "banks", n)
+		}
 		r, err := w.Tick(ctx)
 		if err != nil {
 			log.Error("wallet tick failed; the next tick tries again", "err", err)

@@ -176,4 +176,19 @@ type Client interface {
 	Pool(ctx context.Context) (Pool, error)
 	// History: GET /account/transactions, one page (0, 1, ...), from..to.
 	History(ctx context.Context, accountNo string, from, to time.Time, page int) (History, error)
+	// Banks: GET /bank, VFD's list of banks (0046).
+	Banks(ctx context.Context) (BankList, error)
+}
+
+// Bank: one of VFD's banks, by VFD's code for it.
+type Bank struct{ Code, Name string }
+
+// BankList: VFD's list. Accepted only on VFD's 00 with at least one bank;
+// an entry with no code or no name is left out, never guessed, and a code
+// seen twice is kept once (the first).
+type BankList struct {
+	Outcome Outcome
+	Code    string
+	Banks   []Bank
+	Skipped int // entries left out: no code, no name, or a code seen already
 }

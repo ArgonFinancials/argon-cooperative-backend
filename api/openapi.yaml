@@ -534,6 +534,131 @@ components:
       properties:
         changes: { type: array, items: { $ref: '#/components/schemas/MemberStatusChange' } }
 
+    ResetMemberPin:
+      type: object
+      required: [reason, pinProofId]
+      properties:
+        reason: { type: string, description: "Why, in the secretary's words; recorded as written." }
+        pinProofId: { type: string, format: uuid, description: "The secretary's own proof, minted for member_reset." }
+
+    PinReset:
+      type: object
+      additionalProperties: false
+      required: [memberId, reason, byUserId, byName, at]
+      properties:
+        memberId: { type: string, format: uuid }
+        reason: { type: string }
+        byUserId: { type: string, format: uuid }
+        byName: { type: string }
+        at: { type: string, format: date-time }
+
+    ChangeMemberPhone:
+      type: object
+      required: [newPhone, reason, memberPresent, pinProofId]
+      properties:
+        newPhone: { type: string, description: "Nigerian, in any of +234…, 234…, 0…; stored as +234 E.164." }
+        reason: { type: string, description: "Why, in the secretary's words; recorded as written." }
+        memberPresent: { type: boolean, description: "The secretary says the member is with them. Must be true: a number is changed with the member present." }
+        pinProofId: { type: string, format: uuid, description: "The secretary's own proof, minted for phone_change." }
+
+    PhoneChange:
+      type: object
+      additionalProperties: false
+      required: [noticeId, memberId, oldPhone, newPhone, byUserId, byName, at, oldNumberTold]
+      properties:
+        noticeId: { type: string, format: uuid }
+        memberId: { type: string, format: uuid }
+        oldPhone: { type: string }
+        newPhone: { type: string }
+        byUserId: { type: string, format: uuid, description: "Whose act changed it: the secretary, or the signatory whose approval completed an officer's change." }
+        byName: { type: string }
+        at: { type: string, format: date-time }
+        oldNumberTold:
+          type: string
+          enum: [accepted, refused, not_reached, unknown, no_sender, waiting]
+          description: |
+            What came of the SMS to the OLD number. accepted: the SMS provider
+            took it. refused, not_reached, unknown: the old phone was NOT told,
+            and someone should look twice. no_sender: this server sends no SMS.
+            waiting: not sent yet (the platform is alerted if it stays so).
+
+    PhoneChangeList:
+      type: object
+      additionalProperties: false
+      required: [changes]
+      properties:
+        changes: { type: array, items: { $ref: '#/components/schemas/PhoneChange' } }
+
+    RaiseOfficerRequest:
+      type: object
+      required: [kind, memberId, reason, pinProofId]
+      properties:
+        kind: { type: string, enum: [pin_reset, phone_change] }
+        memberId: { type: string, format: uuid, description: "The officer's member record in this society." }
+        reason: { type: string }
+        newPhone: { type: string, description: "phone_change only: the new number." }
+        memberPresent: { type: boolean, description: "phone_change only, and must be true: the officer is present." }
+        pinProofId: { type: string, format: uuid, description: "The caller's own proof, minted for signatory_reset_request or signatory_phone_request." }
+
+    OfficerApproval:
+      type: object
+      additionalProperties: false
+      required: [byUserId, byName, reason, at]
+      properties:
+        byUserId: { type: string, format: uuid }
+        byName: { type: string }
+        reason: { type: string }
+        at: { type: string, format: date-time }
+
+    OfficerRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, kind, memberId, memberName, reason, raisedByUserId, raisedByName, at, expiresAt, state, approvals]
+      properties:
+        requestId: { type: string, format: uuid }
+        kind: { type: string, enum: [pin_reset, phone_change] }
+        memberId: { type: string, format: uuid }
+        memberName: { type: string }
+        reason: { type: string }
+        newPhone: { type: string }
+        raisedByUserId: { type: string, format: uuid }
+        raisedByName: { type: string }
+        at: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: "Approvals count only until then (48 hours)." }
+        state: { type: string, enum: [waiting, done, expired], description: "done: two other signatories approved, and it took effect." }
+        approvals: { type: array, items: { $ref: '#/components/schemas/OfficerApproval' } }
+        phoneChange: { $ref: '#/components/schemas/PhoneChange' }
+
+    OfficerRequestList:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests: { type: array, items: { $ref: '#/components/schemas/OfficerRequest' } }
+
+    ApproveOfficerRequest:
+      type: object
+      required: [reason, pinProofId]
+      properties:
+        reason: { type: string, description: "Why this signatory approves, in their own words; recorded as written." }
+        pinProofId: { type: string, format: uuid, description: "The caller's own proof, minted for signatory_approval." }
+
+    Bank:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code: { type: string, description: "VFD's code for the bank: what bankCode takes." }
+        name: { type: string }
+
+    BankList:
+      type: object
+      additionalProperties: false
+      required: [takenAt, banks]
+      properties:
+        takenAt: { type: string, format: date-time, description: "When this list was taken from VFD." }
+        banks: { type: array, items: { $ref: '#/components/schemas/Bank' } }
+
     PinProofRequest:
       type: object
       required: [pin, act]
@@ -4375,6 +4500,252 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+
+  /societies/{societyId}/members/{memberId}/pin-reset:
+    post:
+      operationId: resetMemberPin
+      x-argon-built: true
+      summary: The secretary resets an ordinary member's forgotten PIN, on their own PIN, with a reason
+      description: |
+        0045 (2026-11-28). The member's PIN, every session and every trusted
+        device end with this act. The member then sets a new PIN through the
+        enrolment path: issue them an enrolment code (POST
+        /societies/{societyId}/members/{memberId}/enrolment-codes), which only
+        a person with no PIN can redeem. Never the secretary's own. An
+        officer's PIN (anyone holding a post) is not reset here: two other
+        signatories approve it (POST /societies/{societyId}/officer-requests).
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetMemberPin' }
+      responses:
+        '201':
+          description: Reset. The member signs in again only with an enrolment code.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PinReset' }
+        '400':
+          description: "bad_request."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '403':
+          description: "step_up_required (no valid proof for member_reset, the caller's own, unspent); not_permitted (not the society's current secretary); conflict_of_interest (the secretary's own PIN)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of, or a member record with no person."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '409':
+          description: "officer_needs_two (the member holds a post: two other signatories approve, POST /societies/{societyId}/officer-requests)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '422':
+          description: "reason_required."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+
+  /societies/{societyId}/members/{memberId}/phone:
+    put:
+      operationId: changeMemberPhone
+      x-argon-built: true
+      summary: The secretary changes a member's phone number, with the member present, on their own PIN; the OLD number is told
+      description: |
+        0045 (2026-11-28). A number is how a member signs in, so changing it
+        takes over the account; the one person who would notice holds the old
+        phone. The change writes a notice to the OLD number naming who made
+        it, and this call sends it by SMS after the change is made and says
+        what came of it (oldNumberTold). An old phone that could not be told
+        is recorded and shown, never skipped. Never the secretary's own. An
+        officer's number: POST /societies/{societyId}/officer-requests.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeMemberPhone' }
+      responses:
+        '200':
+          description: Changed, and what came of telling the old number.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhoneChange' }
+        '400':
+          description: "bad_request; phone_invalid (not a Nigerian number)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '403':
+          description: "step_up_required (no valid proof for phone_change, the caller's own, unspent); not_permitted (not the society's current secretary); conflict_of_interest (the secretary's own number)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '409':
+          description: "officer_needs_two (the member holds a post); same_number (that is already their number)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '422':
+          description: "reason_required; member_present_required (memberPresent must be true)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+
+  /societies/{societyId}/members/{memberId}/phone-changes:
+    get:
+      operationId: listPhoneChanges
+      x-argon-built: true
+      summary: A member's phone changes, newest first, with whether the old number was told, for the society's officers
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The changes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhoneChangeList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+
+  /societies/{societyId}/officer-requests:
+    post:
+      operationId: raiseOfficerRequest
+      x-argon-built: true
+      summary: A current officer asks for an officer's PIN reset or number change, which two other signatories approve
+      description: |
+        D-15, 0045 (2026-11-28). For anyone holding a post, signing or not: an
+        officer's PIN opens more than their own savings. Two OTHER current
+        signatories then approve, each on their own PIN, each with a reason,
+        within 48 hours; the second approval makes it take effect. Nobody asks
+        for their own. A number change says the officer is present.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RaiseOfficerRequest' }
+      responses:
+        '201':
+          description: Raised, waiting for two approvals.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OfficerRequest' }
+        '400':
+          description: "bad_request; phone_invalid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '403':
+          description: "step_up_required; not_permitted (not a current officer of the society; the auditor is not); conflict_of_interest (the caller's own)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such society or member, or one the caller is not an officer of."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '409':
+          description: "not_an_officer (the member holds no post: the secretary does this alone)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '422':
+          description: "reason_required; member_present_required; new_phone_required."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    get:
+      operationId: listOfficerRequests
+      x-argon-built: true
+      summary: The society's officer requests from the last week, newest first, with their approvals, for its officers
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OfficerRequestList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such society, or one the caller is not an officer of."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+
+  /societies/{societyId}/officer-requests/{requestId}/approvals:
+    post:
+      operationId: approveOfficerRequest
+      x-argon-built: true
+      summary: A current signatory approves an officer request, on their own PIN, with their own reason
+      description: |
+        The second approval by a different signatory makes it take effect: the
+        PIN, sessions and devices end (the officer then enrols with a code
+        issued in two halves), or the number changes and the old one is told
+        (phoneChange says what came of it). Never the officer concerned.
+      security: [{ session: [] }]
+      parameters:
+        - { name: societyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveOfficerRequest' }
+      responses:
+        '201':
+          description: Approved. The request as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OfficerRequest' }
+        '400':
+          description: "bad_request."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '403':
+          description: "step_up_required; not_permitted (no current signing post in the society); conflict_of_interest (the officer concerned)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '404':
+          description: "No such request in this society, or one the caller is not an officer of."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '409':
+          description: "already_approved (this signatory approved it); expired (48 hours passed); already_done."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '422':
+          description: "reason_required."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+
+  /banks:
+    get:
+      operationId: listBanks
+      x-argon-built: true
+      summary: The banks a member's account may be at, as VFD lists them, for choosing a bank code
+      description: |
+        VFD's own list (GET /bank at VFD), taken by the wallet worker once a
+        day and kept: never a list written here, which drifts. VFD's own bank
+        (090110) is left out: a payout there would never leave the pool (0041).
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: The list, and when it was taken.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BankList' }
+        '401':
+          description: "No session, or one that is not valid."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+        '503':
+          description: "banks_unavailable: no list has been taken from VFD yet."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
 
   /societies/{societyId}/members/{memberId}/email:
     put:

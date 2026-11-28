@@ -33,6 +33,8 @@
 //	proxy_unsigned         calls to the relay sent unsigned
 //	proxy_skew_unsaid      the relay's clock drifting, and nobody told
 //	token_and_key          a client built with both VFD's token and the relay's key
+//	banks_any_status       VFD's bank list taken under a status that is not 00
+//	banks_blank_kept       a bank with no name, or a code twice, kept
 //	history_plus_space     history asked with its dates' space as + (VFD reads %20)
 //	history_utc            history asked in UTC, not VFD's own time (an hour of deposits unseen)
 //	history_page_ignored   history always asked for page 0 (the pages after the first never read)
@@ -475,6 +477,43 @@ func (r *refVFD) Pool(ctx context.Context) (vfd.Pool, error) {
 			out = vfd.Pool{Outcome: vfd.Refused, Code: e.Status}
 		default:
 			out = vfd.Pool{Outcome: vfd.Accepted, Code: e.Status, Party: vfd.Party{AccountNo: d.AccountNo, Bank: vfd.IntraBank, Name: d.Client, ClientID: d.ClientID, AccountID: d.AccountID}}
+		}
+	}
+	return out, nil
+}
+
+func (r *refVFD) Banks(ctx context.Context) (vfd.BankList, error) {
+	a := r.call(ctx, "bank list", http.MethodGet, "/bank", nil, nil)
+	out := vfd.BankList{Outcome: a.outcome}
+	if a.outcome == "" {
+		e, ok := r.read(a)
+		var d struct {
+			Bank []struct {
+				Code string `json:"code"`
+				Name string `json:"name"`
+			} `json:"bank"`
+		}
+		dataOK := ok && len(e.Data) > 0 && json.Unmarshal(e.Data, &d) == nil
+		switch {
+		case !ok:
+			out = vfd.BankList{Outcome: vfd.Unknown}
+		case a.status >= 400 || (e.Status != "00" && r.brk != "banks_any_status") || !dataOK:
+			out = vfd.BankList{Outcome: vfd.Refused, Code: e.Status}
+		default:
+			out = vfd.BankList{Outcome: vfd.Accepted, Code: e.Status}
+			seen := map[string]bool{}
+			for _, b := range d.Bank {
+				code, name := strings.TrimSpace(b.Code), strings.TrimSpace(b.Name)
+				if (code == "" || name == "" || seen[code]) && r.brk != "banks_blank_kept" {
+					out.Skipped++
+					continue
+				}
+				seen[code] = true
+				out.Banks = append(out.Banks, vfd.Bank{Code: code, Name: name})
+			}
+			if len(out.Banks) == 0 {
+				out = vfd.BankList{Outcome: vfd.Refused, Code: e.Status, Skipped: out.Skipped}
+			}
 		}
 	}
 	return out, nil

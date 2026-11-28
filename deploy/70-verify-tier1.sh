@@ -731,6 +731,17 @@ probe req P101 argon_app '42501.*permission denied for table period_close_decisi
 probe req P102 argon_app '42501.*permission denied for table period_closes' "app moves a close's date"   "UPDATE period_closes SET through = '2000-01-01' WHERE false;"
 probe ctl K74 argon_app '' "control: the app reads closes and their decisions"   "SELECT count(*) FROM period_closes; SELECT count(*) FROM period_close_decisions; SELECT society_closed_through($S);"
 fi
+# 0045: the old number is told; the database writes the notice, the app only what came of it, once.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.phone_change_notices') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P103 argon_app '42501.*permission denied for table phone_change_notices' "app writes a notice to an old number itself (or one to the wrong phone)"   "INSERT INTO phone_change_notices (member_id, old_phone, new_phone, act_id) VALUES ($U1, '+2348000000000', '+2348000000001', $U1);"
+probe req P104 argon_app '42501.*permission denied for table phone_change_notice_sends' "app rewrites an old phone not reached as told"   "UPDATE phone_change_notice_sends SET outcome = 'accepted' WHERE false;"
+probe ctl K75 argon_app '' "control: the app reads the notices and what came of them"   "SELECT count(*) FROM phone_change_notices; SELECT count(*) FROM phone_change_notice_sends; SELECT member_present FROM credential_acts LIMIT 1;"
+fi
+# 0046: the banks are VFD's list, taken by the wallet; the app reads the newest.
+if [[ $(pg_as argon_app "$db" -At -c "SELECT (to_regclass('public.vfd_bank_lists') IS NOT NULL)::int" </dev/null) == 1 ]]; then
+probe req P105 argon_app '42501.*permission denied for table vfd_bank_lists' "app writes a bank list of its own"   "INSERT INTO vfd_bank_lists (bank_count) VALUES (1);"
+probe ctl K76 argon_app '' "control: the app reads the newest banks"   "SELECT count(*) FROM vfd_banks_current;"
+fi
 probe ctl K15 argon_app '' "control: app checks a session and reads an act's id (what its handlers need)" \
   "SELECT session_valid(repeat('a', 64)); SELECT id, kind, actor_user_id, at FROM credential_acts LIMIT 1;"
 # Finding 14's privilege half: the status is derived (0007), and the app has no

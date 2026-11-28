@@ -32,6 +32,9 @@ type Deps struct {
 	// Email: the sender of officers' enrolment codes (0034). nil: off, and
 	// issuing by email answers 503 email_unavailable; the slip still works.
 	Email email.Sender
+	// SMS: the sender that tells a changed number's OLD phone (0045). nil:
+	// none, and each such notice is recorded as no_sender, never skipped.
+	SMS auth.SMS
 }
 
 type server struct {
@@ -41,6 +44,7 @@ type server struct {
 	csrfKey []byte
 	webhook Webhook
 	email   email.Sender
+	sms     auth.SMS
 	// appOrigin: the app's address, for the link in an enrolment email (the
 	// first allowed origin; "" when none).
 	appOrigin string
@@ -63,7 +67,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	if len(d.CSRFKey) == 0 {
 		return nil, errors.New("api: Deps.CSRFKey is required")
 	}
-	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey, webhook: d.VFDWebhook, email: d.Email}
+	s := &server{db: d.DB, log: d.Log, auth: d.Auth, csrfKey: d.CSRFKey, webhook: d.VFDWebhook, email: d.Email, sms: d.SMS}
 	if len(d.AllowedOrigins) > 0 {
 		s.appOrigin = d.AllowedOrigins[0]
 	}

@@ -47,6 +47,7 @@ var refAllowed = map[string]bool{
 	"GET /transactions":         true, // ask about a transfer
 	"GET /account/enquiry":      true, // the pool's details
 	"GET /account/transactions": true, // an account's history
+	"GET /bank":                 true, // VFD's list of banks (0046, 2026-11-28)
 }
 
 // refBodyCap: the most of a request or an answer read (VFD's are a few hundred bytes).
@@ -121,7 +122,7 @@ func (p *refRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	path, query := r.URL.EscapedPath(), r.URL.RawQuery
 	if !refAllowed[r.Method+" "+path] && p.brk != "any_path" {
-		p.refuse(w, r, body, start, id, http.StatusForbidden, "not_allowed", "this refRelay passes the cooperative's five VFD calls and nothing else")
+		p.refuse(w, r, body, start, id, http.StatusForbidden, "not_allowed", "this refRelay passes the cooperative's six VFD calls and nothing else")
 		return
 	}
 	ts, err := strconv.ParseInt(r.Header.Get(vfdsign.HeaderTime), 10, 64)

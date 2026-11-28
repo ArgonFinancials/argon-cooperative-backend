@@ -150,6 +150,13 @@ BREAKS = [
 		}
 '''),
  ('name_unchecked_at_send', '''	if !refSameName(look.Party.Name, recorded) {''', '''	if !refSameName(look.Party.Name, recorded) && w.brk != "name_unchecked_at_send" && w.brk != "no_enquiry" {'''),
+ ('banks_never_taken', """	if fresh {
+		return 0, nil
+	}""", """	if fresh || w.brk == "banks_never_taken" {
+		return 0, nil
+	}"""),
+ ('banks_taken_every_time', """SELECT EXISTS (SELECT 1 FROM vfd_bank_lists WHERE taken_at > now() - make_interval(secs => $1))`, w.cfg.BanksEvery.Seconds()).Scan(&fresh)""",
+  """SELECT EXISTS (SELECT 1 FROM vfd_bank_lists WHERE taken_at > now() - make_interval(secs => $1)) AND NOT $2`, w.cfg.BanksEvery.Seconds(), w.brk == "banks_taken_every_time").Scan(&fresh)"""),
  ('rematch_skipped', '''	if err := w.cfg.DB.QueryRow(ctx, `SELECT contribution_rematch()`).Scan(&r.Rematched); err != nil {''',
   '''	if w.brk == "rematch_skipped" {
 		return r, w.sweep(ctx, &r)
@@ -198,6 +205,8 @@ hdr = '''//go:build tier1
 //	sweep_could_not_as_matched  a history VFD did not give recorded as nothing missing
 //	sweep_believed              a deposit in the history credited without VFD's requery
 //	rematch_skipped             claims a race missed never matched
+//	banks_never_taken           VFD's list of banks never taken
+//	banks_taken_every_time      VFD's list taken on every tick, not once a day
 //	bank_unchecked              a member's bank details never checked with VFD (0040)
 //	bank_refused_unrecorded     VFD's no-such-account not recorded
 //	bank_silence_as_not_found   VFD's silence recorded as no such account

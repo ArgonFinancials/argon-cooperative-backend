@@ -97,6 +97,8 @@ if grep -q '^VFD_PROXY_KEY=.' /etc/argon/wallet.env 2>/dev/null; then
   relay=$(sed -n 's/^VFD_BASE_URL=//p' /etc/argon/wallet.env | head -1)
   bash "$DEPLOY_DIR/67-check-vfd-relay-clock.sh" --url "$relay" || vfd_failed=1
 fi
+# A changed number's OLD phone not told (68, 0045): its own check, its own alert.
+bash "$DEPLOY_DIR/68-check-phone-notices.sh" --db "$ARGON_DB" || vfd_failed=1
 
 if ((${#problems[@]})); then
   printf '%s\n' "${problems[@]}" | sed 's/^/  !! /' >&2

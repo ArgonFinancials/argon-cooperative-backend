@@ -141,6 +141,11 @@ func main() {
 			log.Warn("sign-in runs with the REFUSING SMS sender (ARGON_SMS=refusing): new devices are routed to an officer")
 		}
 		deps.Auth = svc
+		// A changed number's OLD phone is told through the same sender (0045).
+		// Refusing: none, and each notice is recorded as no_sender.
+		if cfg.SMS == "termii" {
+			deps.SMS = sms
+		}
 	}
 	h, err := api.NewServer(deps)
 	if err != nil {

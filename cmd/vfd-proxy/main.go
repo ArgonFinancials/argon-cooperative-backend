@@ -4,7 +4,7 @@
 // admits 54.85.168.60 only and serves the relay's own name and certificate.
 //
 // THE COOPERATIVE NO LONGER HOLDS THE VFD TOKEN: it is in this service's own
-// env file alone. Someone who takes over the cooperative's server gets five
+// env file alone. Someone who takes over the cooperative's server gets six
 // calls, from one address, and nothing portable.
 //
 // Its settings come from its own env file (root-only, read by systemd); it

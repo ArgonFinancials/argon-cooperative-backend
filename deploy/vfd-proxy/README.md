@@ -11,11 +11,12 @@ little to anyone who steals it:
 
 - It works only from the cooperative's one address (54.85.168.60), because the
   security group and nginx both refuse every other address.
-- It opens only five calls (listed below), not the whole of VFD.
+- It opens only six calls (listed below), not the whole of VFD. Five of them
+  read; one sends a transfer.
 - It is useless anywhere else. It is not VFD's credential, and VFD has never
   seen it.
 
-**Someone who takes the cooperative's server gets five calls from one address,
+**Someone who takes the cooperative's server gets six calls from one address,
 and nothing they can take away and use.**
 
 Compare the other option: asking VFD to whitelist a second address. That would
@@ -30,7 +31,7 @@ It runs on the wallet's server, the one address VFD accepts. It carries the
 cooperative's VFD calls there, adds VFD's token, and sends back VFD's answer
 **byte for byte**: the same status, content type and body.
 
-It passes these five calls and nothing else:
+It passes these six calls and nothing else:
 
 | Call | What the cooperative uses it for |
 |---|---|
@@ -39,6 +40,7 @@ It passes these five calls and nothing else:
 | `GET /transactions` | ask what became of a transfer |
 | `GET /account/enquiry` | the pool account's details |
 | `GET /account/transactions` | an account's history |
+| `GET /bank` | VFD's list of banks, for a member choosing their bank (added 2026-11-28) |
 
 **It never interprets, retries or decides.** Every rule about what a VFD answer
 means stays in the cooperative's code (`internal/vfd`), tested and with
@@ -62,7 +64,7 @@ carry an `X-Argon-Proxy` header:
 | 401 | `bad_signature` | Unsigned, or signed with a key it does not hold, or the body changed after signing. |
 | 401 | `stale` | Signed more than 60 seconds from the relay's clock. |
 | 401 | `replayed` | The same signed call was already made. |
-| 403 | `not_allowed` | Not one of the five calls. |
+| 403 | `not_allowed` | Not one of the six calls. |
 | 502 | `vfd_unreachable` | VFD could not be reached. Nothing was sent. |
 | 504 | `vfd_timeout` | VFD took the call and did not answer in time. **It may have acted.** |
 
